@@ -1,34 +1,85 @@
 {
   "expo": {
+    "scheme": "routertv",
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000",
+          "image": "./src/assets/images/dark_mode_logo.png"
+        }
+      ],
       [
         "@react-native-tvos/config-tv",
         {
-          "androidTVBanner": "./assets/images/icon-400x240.png",
+          "androidTVBanner": "./src/assets/tv_icons/icon-400x240.png",
           "appleTVImages": {
-            "icon": "./assets/images/icon-1280x768.png",
-            "iconSmall": "./assets/images/icon-400x240.png",
-            "iconSmall2x": "./assets/images/icon-800x480.png",
-            "topShelf": "./assets/images/icon-1920x720.png",
-            "topShelf2x": "./assets/images/icon-3840x1440.png",
-            "topShelfWide": "./assets/images/icon-2320x720.png",
-            "topShelfWide2x": "./assets/images/icon-4640x1440.png"
+            "icon": "./src/assets/tv_icons/icon-1280x768.png",
+            "iconSmall": "./src/assets/tv_icons/icon-400x240.png",
+            "iconSmall2x": "./src/assets/tv_icons/icon-800x480.png",
+            "topShelf": "./src/assets/tv_icons/icon-1920x720.png",
+            "topShelf2x": "./src/assets/tv_icons/icon-3840x1440.png",
+            "topShelfWide": "./src/assets/tv_icons/icon-2320x720.png",
+            "topShelfWide2x": "./src/assets/tv_icons/icon-4640x1440.png"
           }
         }
-      ]
+      ],
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": false,
+          "supportsPictureInPicture": false,
+          "enableHardwareAcceleration": true
+        }
+      ],
+      "expo-router",
+      "expo-font",
+      "expo-secure-store",
+      "react-native-video",
+      "expo-web-browser",
+      "expo-build-properties",
+      "./enableLargeHeap"
     ],
     "android": {
       "splash": {
-        "image": "./assets/images/icon-1920x720.png"
-      }
+        "image": "./src/assets/images/splash.png"
+      },
+      "package": "com.anonymous.nextjsstreamtvmobile",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "routertv"
+            }
+          ]
+        }
+      ]
     },
     "ios": {
       "splash": {
-        "image": "./assets/images/icon-1920x720.png"
-      }
+        "image": "./src/assets/images/splash.png"
+      },
+      "bundleIdentifier": "com.anonymous.nextjsstreamtvmobile"
+    },
+    "experiments": {
+      "typedRoutes": true
     },
     "newArchEnabled": true,
     "name": "nextjs-stream-tv-mobile",
-    "slug": "nextjs-stream-tv-mobile"
+    "slug": "nextjs-stream-tv-mobile",
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "1b18aa08-5b67-4fc6-a352-da5c9b4ce4a1"
+      }
+    }
   }
 }
