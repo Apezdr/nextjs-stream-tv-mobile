@@ -32,9 +32,11 @@ export interface ContentItemData {
   title: string;
   description?: string;
   thumbnailUrl?: string;
+  thumbnailBlurhash?: string; // for episodes
   showId: string;
-  seasonId: string;
-  episodeId: string;
+  // Use raw numbers from API instead of formatted strings
+  seasonNumber?: number;
+  episodeNumber?: number;
   // Additional fields for the video player
   mediaType?: "movie" | "tv";
   videoLink?: string;
@@ -47,8 +49,8 @@ interface ContentItemProps {
   item: ContentItemData;
   onSelect: (
     showId: string,
-    seasonId: string,
-    episodeId: string,
+    seasonNumber: number | undefined,
+    episodeNumber: number | undefined,
     mediaType: "movie" | "tv",
   ) => void;
   size?: "small" | "medium" | "large";
@@ -83,23 +85,21 @@ const ContentItem = ({
     return { itemWidth, itemHeight };
   }, [size]);
 
-  // Memoize thumbnail URL
-  const thumbnailUrl = useMemo(
-    () =>
-      item.thumbnailUrl ||
-      "https://www.dummyimg.in/placeholder?width=180&height=300&text=No%20Image",
-    [item.thumbnailUrl],
-  );
-
   // Memoize press handler
   const handlePress = useCallback(() => {
     onSelect(
       item.showId,
-      item.seasonId,
-      item.episodeId,
+      item.seasonNumber,
+      item.episodeNumber,
       item.mediaType || "movie",
     );
-  }, [onSelect, item.showId, item.seasonId, item.episodeId, item.mediaType]);
+  }, [
+    onSelect,
+    item.showId,
+    item.seasonNumber,
+    item.episodeNumber,
+    item.mediaType,
+  ]);
 
   // Focus handler
   const handleFocus = useCallback(() => {
@@ -119,8 +119,13 @@ const ContentItem = ({
       hasTVPreferredFocus={hasTVPreferredFocus && Platform.isTV}
     >
       <Image
-        source={{ uri: thumbnailUrl }}
+        source={{ uri: item.thumbnailUrl }}
         style={styles.thumbnail}
+        placeholder={{
+          uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
+        }}
+        placeholderContentFit="cover"
+        transition={200}
         contentFit="cover"
       />
 

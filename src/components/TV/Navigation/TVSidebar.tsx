@@ -9,34 +9,21 @@ import React, {
 import {
   View,
   StyleSheet,
-  Dimensions,
   BackHandler,
   TVFocusGuideView,
   Alert,
 } from "react-native";
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  interpolate,
-  Easing,
-  runOnUI,
-} from "react-native-reanimated";
 
+import {
+  AnimatedSidebar,
+  AnimatedSidebarRef,
+} from "@/src/components/TV/Navigation/AnimatedSidebar";
 import SidebarItem from "@/src/components/TV/Navigation/SidebarItem";
 import SidebarOverlay from "@/src/components/TV/Navigation/SidebarOverlay";
+import { EXPANDED_WIDTH } from "@/src/constants/SidebarConstants";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
+import { useSidebarState } from "@/src/hooks/useSidebarState";
 import { useAuth } from "@/src/providers/AuthProvider";
-
-// Get screen dimensions - memoized to avoid recalculation
-const SCREEN_DIMENSIONS = Dimensions.get("window");
-
-// Define sidebar widths - exported for use in other components
-export const MINIMIZED_WIDTH = 60;
-export const EXPANDED_WIDTH = SCREEN_DIMENSIONS.width * (2 / 6); // 2/6 of screen width as requested
-
-// Pre-calculate values to prevent worklet capture overhead
-const SCREEN_WIDTH_FRACTION = SCREEN_DIMENSIONS.width * (2 / 6);
 
 // Navigation items - moved outside component to prevent recreation
 const NAVIGATION_ITEMS = [
@@ -68,68 +55,35 @@ const SIGN_OUT_ALERT_CONFIG = {
   options: { cancelable: true },
 } as const;
 
-const TVSidebar: React.FC = () => {
-  // Use TV app state context
-  const {
-    sidebarState,
-    setSidebarState,
-    closeSidebar,
-    isSidebarVisible,
-    currentMode,
-  } = useTVAppState();
+interface TVSidebarProps {
+  shouldRegisterBackButtonHandler?: boolean;
+}
+
+const TVSidebar: React.FC<TVSidebarProps> = ({
+  shouldRegisterBackButtonHandler = false,
+}) => {
+  // Use local sidebar state management instead of global context
+  const { sidebarState, setSidebarState, closeSidebar, isSidebarVisible } =
+    useSidebarState();
+
+  // Use TV app state context only for mode checking
+  const { currentMode } = useTVAppState();
 
   // Use auth context for sign out functionality
   const { signOut } = useAuth();
 
-  // Sidebar should only be shown in browse mode
-  const canShowSidebar = currentMode === "browse";
-
-  // Animation values using React Native Reanimated
-  const sidebarProgress = useSharedValue(0); // 0 = closed, 0.5 = minimized, 1 = expanded
-  const textOpacity = useSharedValue(0);
+  // Sidebar should be hidden only on media-info and watch pages
+  const canShowSidebar =
+    currentMode !== "media-info" && currentMode !== "watch";
 
   // State for tracking focused item
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
 
-  // Reference to the sidebar container for tracking focus
-  const sidebarRef = useRef(null);
+  // State for tracking if sidebar has focus
+  const [sidebarHasFocus, setSidebarHasFocus] = useState<boolean>(false);
 
-  // Memoized animation configurations to prevent recreation
-  const animationConfig = useMemo(
-    () => ({
-      progress: {
-        duration: 200,
-        easing: Easing.out(Easing.cubic),
-      },
-      opacity: {
-        duration: 150,
-        easing: Easing.inOut(Easing.ease),
-      },
-    }),
-    [],
-  );
-
-  // Optimized animation function that runs on UI thread
-  const animateToState = useCallback(
-    (state: typeof sidebarState) => {
-      "worklet";
-      const targetProgress =
-        state === "closed" ? 0 : state === "minimized" ? 0.5 : 1;
-      const targetOpacity = state === "expanded" ? 1 : 0;
-
-      sidebarProgress.value = withTiming(
-        targetProgress,
-        animationConfig.progress,
-      );
-      textOpacity.value = withTiming(targetOpacity, animationConfig.opacity);
-    },
-    [sidebarProgress, textOpacity, animationConfig],
-  );
-
-  // Handle sidebar animation based on state
-  useEffect(() => {
-    runOnUI(animateToState)(sidebarState);
-  }, [sidebarState, animateToState]);
+  // Reference to the animated sidebar for imperative control
+  const animatedSidebarRef = useRef<AnimatedSidebarRef>(null);
 
   // Handle focus management when sidebar state changes
   useEffect(() => {
@@ -140,29 +94,46 @@ const TVSidebar: React.FC = () => {
     }
   }, [sidebarState, focusedItemId]);
 
+  // Sync local state with animated sidebar
+  useEffect(() => {
+    animatedSidebarRef.current?.animateToState(sidebarState);
+  }, [sidebarState]);
+
   // Memoized back button handler to prevent recreation
   const handleBackButton = useCallback(() => {
-    if (isSidebarVisible) {
+    // Only handle back button if we're in browse mode and sidebar is actually visible
+    if (canShowSidebar && isSidebarVisible) {
       if (sidebarState === "expanded") {
         setSidebarState("minimized");
         return true;
       }
+      // Don't close sidebar on back button - just toggle between minimized and expanded
       if (sidebarState === "minimized") {
-        setSidebarState("closed");
+        setSidebarState("expanded");
         return true;
       }
     }
     return false;
-  }, [sidebarState, isSidebarVisible, setSidebarState]);
+  }, [canShowSidebar, sidebarState, isSidebarVisible, setSidebarState]);
 
-  // Handle TV navigation with back button
+  // Handle TV navigation with back button - controlled by parent component
   useEffect(() => {
-    const subscription = BackHandler.addEventListener(
-      "hardwareBackPress",
-      handleBackButton,
-    );
-    return () => subscription.remove();
-  }, [handleBackButton]);
+    // Only register back button handler when explicitly allowed by parent and sidebar is visible
+    if (shouldRegisterBackButtonHandler && canShowSidebar && isSidebarVisible) {
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        handleBackButton,
+      );
+      return () => subscription.remove();
+    }
+    // If not allowed to register or sidebar is not visible, don't register any handler
+    return undefined;
+  }, [
+    shouldRegisterBackButtonHandler,
+    canShowSidebar,
+    isSidebarVisible,
+    handleBackButton,
+  ]);
 
   // Confirmation dialog for sign out - optimized with memoized config
   const showSignOutConfirmation = useCallback(() => {
@@ -201,7 +172,7 @@ const TVSidebar: React.FC = () => {
         // Handle sign out separately
         if (itemId === "signout") {
           showSignOutConfirmation();
-          return; // Don't minimize sidebar for sign out confirmation
+          return; // Don't change sidebar state for sign out confirmation
         }
 
         // Get route from mapping - more performant than switch statement
@@ -216,7 +187,7 @@ const TVSidebar: React.FC = () => {
         // Navigate to the route
         router.push(route as Href);
 
-        // Minimize sidebar after successful navigation
+        // Minimize sidebar after successful navigation (keep it visible but collapsed)
         setSidebarState("minimized");
       } catch (error) {
         console.error(
@@ -224,20 +195,16 @@ const TVSidebar: React.FC = () => {
           error,
         );
 
-        // Still manage sidebar state even if navigation fails
-        if (sidebarState === "expanded") {
-          setSidebarState("minimized");
-        } else {
-          setSidebarState("expanded");
-        }
+        // Don't change sidebar state if navigation fails
       }
     },
-    [sidebarState, setSidebarState, showSignOutConfirmation],
+    [setSidebarState, showSignOutConfirmation],
   );
 
   const handleItemFocus = useCallback(
     (itemId: string) => {
       setFocusedItemId(itemId);
+      setSidebarHasFocus(true);
       if (sidebarState === "minimized") {
         setSidebarState("expanded");
       }
@@ -245,13 +212,64 @@ const TVSidebar: React.FC = () => {
     [sidebarState, setSidebarState],
   );
 
+  // Reference to track blur timeout and current state
+  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentStateRef = useRef({ sidebarHasFocus, sidebarState });
+
+  // Update ref when state changes
+  useEffect(() => {
+    currentStateRef.current = { sidebarHasFocus, sidebarState };
+  }, [sidebarHasFocus, sidebarState]);
+
+  // Handle focus leaving sidebar items
+  const handleItemBlur = useCallback(() => {
+    // Mark that sidebar no longer has focus
+    setSidebarHasFocus(false);
+
+    // Clear any existing timeout
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+    }
+
+    // Set a timeout to check if focus has truly left the sidebar
+    blurTimeoutRef.current = setTimeout(() => {
+      // Check current state from ref to avoid stale closure
+      const { sidebarHasFocus: currentHasFocus, sidebarState: currentState } =
+        currentStateRef.current;
+
+      // If sidebar still doesn't have focus and we're expanded, minimize it
+      if (!currentHasFocus && currentState === "expanded") {
+        setSidebarState("minimized");
+        setFocusedItemId(null);
+      }
+    }, 300); // Longer delay to ensure focus has settled
+  }, [setSidebarState]);
+
+  // Clear timeout when focus returns to any sidebar item
+  useEffect(() => {
+    if (sidebarHasFocus && blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+      blurTimeoutRef.current = null;
+    }
+  }, [sidebarHasFocus]);
+
+  // Clear timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Memoized item handlers factory to prevent inline function creation
   const createItemHandlers = useCallback(
     (itemId: string) => ({
       onPress: () => handleItemPress(itemId),
       onFocus: () => handleItemFocus(itemId),
+      onBlur: handleItemBlur,
     }),
-    [handleItemPress, handleItemFocus],
+    [handleItemPress, handleItemFocus, handleItemBlur],
   );
 
   // Memoized navigation items to prevent recreation on each render
@@ -265,39 +283,14 @@ const TVSidebar: React.FC = () => {
             icon={item.icon}
             label={item.label}
             isFocused={focusedItemId === item.id}
-            textOpacity={textOpacity}
             onPress={handlers.onPress}
             onFocus={handlers.onFocus}
+            onBlur={handlers.onBlur}
           />
         );
       }),
-    [createItemHandlers, focusedItemId, textOpacity],
+    [createItemHandlers, focusedItemId],
   );
-
-  // Animated styles using React Native Reanimated with optimized constants
-  const sidebarAnimatedStyle = useAnimatedStyle(() => {
-    "worklet";
-    // Use inline constants to prevent worklet capture overhead
-    const MINIMIZED = 60;
-    const EXPANDED = SCREEN_WIDTH_FRACTION;
-
-    const width = interpolate(
-      sidebarProgress.value,
-      [0, 0.5, 1],
-      [0, MINIMIZED, EXPANDED],
-    );
-
-    const translateX = interpolate(
-      sidebarProgress.value,
-      [0, 0.5, 1],
-      [-MINIMIZED, 0, 0],
-    );
-
-    return {
-      width,
-      transform: [{ translateX }],
-    };
-  }, [sidebarProgress]);
 
   // Don't render anything if video is in fullscreen mode
   if (!canShowSidebar) {
@@ -313,24 +306,21 @@ const TVSidebar: React.FC = () => {
         onPress={closeSidebar}
       />
 
-      {/* Sidebar with proper focus containment */}
+      {/* Animated Sidebar with constrained focus guide */}
       <TVFocusGuideView
-        style={styles.sidebarFocusGuide}
+        style={[styles.sidebarFocusGuide, { width: EXPANDED_WIDTH }]}
         trapFocusUp={true}
         trapFocusDown={true}
         trapFocusLeft={true}
         trapFocusRight={false} // Allow right navigation to exit sidebar
-        autoFocus={false} // auto focus breaks focus containment
+        autoFocus={false}
       >
-        <Animated.View
-          ref={sidebarRef}
-          style={[styles.sidebar, sidebarAnimatedStyle]}
-        >
+        <AnimatedSidebar ref={animatedSidebarRef}>
           <View style={styles.container}>
             {/* Navigation items - optimized rendering with memoization */}
             <View style={styles.navigationContainer}>{navigationItems}</View>
           </View>
-        </Animated.View>
+        </AnimatedSidebar>
       </TVFocusGuideView>
     </>
   );
@@ -345,27 +335,13 @@ const styles = StyleSheet.create({
   navigationContainer: {
     flex: 1,
   },
-  sidebar: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    bottom: 0,
-    backgroundColor: "rgba(20, 20, 20, 0.98)", // Slightly more opaque for better visibility without shadows
-    overflow: "hidden",
-    elevation: 5, // Add elevation for Android
-    shadowColor: "#000", // Add shadow for iOS
-    shadowOffset: { width: 2, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 4,
-  },
   sidebarFocusGuide: {
     bottom: 0,
     left: 0,
     pointerEvents: "box-none",
     position: "absolute",
-    right: 0,
     top: 0,
-    zIndex: 1000, // Allow touches to pass through to underlying content
+    zIndex: 1,
   },
 });
 

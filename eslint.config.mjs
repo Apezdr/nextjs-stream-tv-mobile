@@ -164,9 +164,9 @@ export default [
     },
   },
 
-  // Expo/Metro specific configuration
+  // Expo/Metro specific configuration for JS files
   {
-    files: ["metro.config.js", "babel.config.js", "expo.json", "app.json"],
+    files: ["metro.config.js", "babel.config.js"],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -175,6 +175,11 @@ export default [
     rules: {
       "@typescript-eslint/no-var-requires": "off",
     },
+  },
+
+  // Ignore JSON configuration files
+  {
+    ignores: ["expo.json", "app.json", "package.json", "tsconfig.json"],
   },
 
   // Test files configuration

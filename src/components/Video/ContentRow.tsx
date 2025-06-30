@@ -9,6 +9,7 @@ import {
   Dimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  TVFocusGuideView,
 } from "react-native";
 
 import ContentItem, {
@@ -32,8 +33,8 @@ interface ContentRowProps {
   items: ContentItemData[];
   onSelectContent: (
     showId: string,
-    seasonId: string,
-    episodeId: string,
+    seasonNumber: number | undefined,
+    episodeNumber: number | undefined,
     mediaType: "movie" | "tv",
   ) => void;
   itemSize?: "small" | "medium" | "large";
@@ -243,33 +244,35 @@ const ContentRow = ({
         )}
       </View>
 
-      <FlatList
-        data={items}
-        renderItem={renderItem}
-        keyExtractor={keyExtractor}
-        horizontal
-        showsHorizontalScrollIndicator={Platform.isTV}
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        fadingEdgeLength={50}
-        // More conservative performance settings
-        initialNumToRender={Platform.isTV ? 10 : 8}
-        maxToRenderPerBatch={Platform.isTV ? 15 : 8}
-        windowSize={Platform.isTV ? 15 : 8}
-        updateCellsBatchingPeriod={Platform.isTV ? 16 : 50}
-        // Scroll behavior optimization
-        scrollEventThrottle={16}
-        decelerationRate="fast"
-        removeClippedSubviews={Platform.isTV}
-        getItemLayout={getItemLayout}
-        // Disable paging for TV to allow smooth scrolling
-        pagingEnabled={!Platform.isTV}
-        // Ultra-aggressive infinite scrolling
-        onEndReached={handleEndReached}
-        onEndReachedThreshold={loadMoreThreshold}
-        onScroll={handleScroll}
-        ListFooterComponent={renderFooter}
-      />
+      <TVFocusGuideView autoFocus trapFocusRight>
+        <FlatList
+          data={items}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          horizontal
+          showsHorizontalScrollIndicator={Platform.isTV}
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          fadingEdgeLength={50}
+          // More conservative performance settings
+          initialNumToRender={Platform.isTV ? 10 : 8}
+          maxToRenderPerBatch={Platform.isTV ? 15 : 8}
+          windowSize={Platform.isTV ? 15 : 8}
+          updateCellsBatchingPeriod={Platform.isTV ? 16 : 50}
+          // Scroll behavior optimization
+          scrollEventThrottle={16}
+          decelerationRate="fast"
+          removeClippedSubviews={Platform.isTV}
+          getItemLayout={getItemLayout}
+          // Disable paging for TV to allow smooth scrolling
+          pagingEnabled={!Platform.isTV}
+          // Ultra-aggressive infinite scrolling
+          onEndReached={handleEndReached}
+          onEndReachedThreshold={loadMoreThreshold}
+          onScroll={handleScroll}
+          ListFooterComponent={renderFooter}
+        />
+      </TVFocusGuideView>
     </View>
   );
 };

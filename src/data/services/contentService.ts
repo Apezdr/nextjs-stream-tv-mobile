@@ -17,6 +17,7 @@ import {
   BannerResponse,
   ScreensaverResponse,
   SyncValidationUpdateRequest,
+  TVDeviceMediaResponse,
 } from "@/src/data/types/content.types";
 
 export const contentService = {
@@ -90,6 +91,38 @@ export const contentService = {
   getMediaDetails: async (
     params: MediaParams,
   ): Promise<MediaDetailsResponse> => {
+    const {
+      mediaType,
+      mediaTitle,
+      mediaId,
+      season,
+      episode,
+      card,
+      isTVdevice,
+    } = params;
+
+    const queryParams = buildQueryParams({
+      mediaType,
+      mediaTitle,
+      mediaId,
+      season,
+      episode,
+      card,
+      isTVdevice,
+    });
+
+    // Use regular get method - React Query will handle caching
+    return enhancedApiClient.get<MediaDetailsResponse>(
+      `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
+    );
+  },
+
+  /**
+   * Fetch enhanced media details for TV devices
+   */
+  getTVMediaDetails: async (
+    params: Omit<MediaParams, "isTVdevice">,
+  ): Promise<TVDeviceMediaResponse> => {
     const { mediaType, mediaTitle, mediaId, season, episode, card } = params;
 
     const queryParams = buildQueryParams({
@@ -99,10 +132,29 @@ export const contentService = {
       season,
       episode,
       card,
+      isTVdevice: true,
     });
 
     // Use regular get method - React Query will handle caching
-    return enhancedApiClient.get<MediaDetailsResponse>(
+    return enhancedApiClient.get<TVDeviceMediaResponse>(
+      `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
+    );
+  },
+
+  /**
+   * Fetch root show data to get available seasons (TV shows only)
+   */
+  getRootShowData: async (
+    mediaId: string,
+    mediaType: "tv",
+  ): Promise<TVDeviceMediaResponse> => {
+    const queryParams = buildQueryParams({
+      mediaType,
+      mediaId,
+      isTVdevice: true,
+    });
+
+    return enhancedApiClient.get<TVDeviceMediaResponse>(
       `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
     );
   },
@@ -184,8 +236,15 @@ export const contentService = {
    * Fetch banner media for landing page
    */
   getBanner: async (): Promise<BannerResponse> => {
+    // Add isTVdevice=true parameter to expose clipVideoURL field
+    const queryParams = buildQueryParams({
+      isTVdevice: true,
+    });
+
     // Use regular get method - React Query will handle caching
-    return enhancedApiClient.get<BannerResponse>(API_ENDPOINTS.CONTENT.BANNER);
+    return enhancedApiClient.get<BannerResponse>(
+      `${API_ENDPOINTS.CONTENT.BANNER}${queryParams}`,
+    );
   },
 
   /**

@@ -19,7 +19,7 @@ import { QueryProvider } from "@/src/providers/QueryProvider";
 SplashScreen.preventAutoHideAsync();
 
 // Inner component that uses the auth context
-function StackNavigator({ isTV = Platform.isTV, theme = DefaultTheme }) {
+function StackNavigator({ isTV = Platform.isTV }) {
   const { user, ready } = useAuth();
 
   // Determine if user is logged in based on auth context
@@ -77,7 +77,7 @@ export default function RootLayout() {
     <QueryProvider>
       <AuthProvider>
         <ThemeProvider value={theme}>
-          <StackNavigator isTV={isTV} theme={theme} />
+          <StackNavigator isTV={isTV} />
         </ThemeProvider>
       </AuthProvider>
     </QueryProvider>

@@ -15,6 +15,7 @@ import {
   EpisodePickerResponse,
   EpisodePickerParams,
   BannerResponse,
+  TVDeviceMediaResponse,
 } from "@/src/data/types/content.types";
 
 // Debounce utility for app state changes
@@ -566,4 +567,396 @@ export function useRecommendations(limit: number = 30) {
     sortOrder: "desc",
     limit,
   });
+}
+
+// Hook for fetching enhanced TV media details with optimized season switching
+export function useTVMediaDetails(
+  params: Omit<MediaParams, "isTVdevice"> | null,
+) {
+  const [data, setData] = useState<TVDeviceMediaResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Destructure params to avoid object reference issues
+  const mediaType = params?.mediaType;
+  const mediaId = params?.mediaId;
+  const season = params?.season;
+  const episode = params?.episode;
+
+  // Cache for static data that doesn't change between seasons
+  const [cachedStaticData, setCachedStaticData] = useState<{
+    id: string;
+    title: string;
+    type: string;
+    posterURL: string;
+    backdrop: string;
+    posterBlurhash: string;
+    backdropBlurhash: string;
+    logo?: string;
+    airDate?: string; // Optional air date for TV shows
+    availableSeasons: number[];
+    totalSeasons: number;
+    navigation: TVDeviceMediaResponse["navigation"];
+  } | null>(null);
+
+  // Fetch initial data (includes metadata, navigation, and first season episodes)
+  const fetchInitialData = useCallback(
+    async (isBackgroundRefresh: boolean = false) => {
+      if (!params) return;
+
+      try {
+        if (!isBackgroundRefresh) {
+          setIsLoading(true);
+        } else {
+          setIsRefreshing(true);
+        }
+
+        setError(null);
+
+        const result = await contentService.getTVMediaDetails({
+          mediaType: params.mediaType,
+          mediaId: params.mediaId,
+          season: params.season,
+          episode: params.episode,
+        });
+
+        // Cache the static data and navigation
+        setCachedStaticData({
+          id: result.id,
+          title: result.title,
+          type: result.type,
+          posterURL: result.posterURL,
+          backdrop: result.backdrop,
+          posterBlurhash: result.posterBlurhash,
+          backdropBlurhash: result.backdropBlurhash,
+          logo: result.logo,
+          airDate: result.airDate, // Optional air date for TV shows
+          availableSeasons: result.availableSeasons,
+          totalSeasons: result.totalSeasons,
+          navigation: result.navigation,
+        });
+
+        setData(result);
+      } catch (err) {
+        if (!isBackgroundRefresh) {
+          const errorMessage =
+            err instanceof Error ? err.message : "Unknown error";
+          setError(errorMessage);
+          console.error("TV media details fetch error:", err);
+        } else {
+          console.warn("Background TV media details refresh failed:", err);
+        }
+      } finally {
+        if (!isBackgroundRefresh) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [mediaType, mediaId, season, episode],
+  );
+
+  // Fetch only episodes for a specific season (optimized for season switching)
+  const fetchSeasonEpisodes = useCallback(
+    async (targetSeason: number) => {
+      if (!cachedStaticData || !params) return;
+
+      try {
+        setIsLoadingEpisodes(true);
+        setError(null);
+
+        const result = await contentService.getTVMediaDetails({
+          mediaType: params.mediaType,
+          mediaId: params.mediaId,
+          season: targetSeason,
+          episode: params.episode,
+        });
+
+        // Merge cached static data with fresh metadata, episodes, and season-specific data
+        setData({
+          ...cachedStaticData,
+          metadata: result.metadata, // Use fresh metadata (includes season-specific overview)
+          airDate: result.airDate, // Use fresh airDate (season-specific)
+          seasonNumber: result.seasonNumber,
+          episodes: result.episodes,
+        });
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Unknown error";
+        setError(errorMessage);
+        console.error("Season episodes fetch error:", err);
+      } finally {
+        setIsLoadingEpisodes(false);
+      }
+    },
+    [cachedStaticData, params],
+  );
+
+  // Initial data load
+  useEffect(() => {
+    if (params && params.mediaType && params.mediaId && !cachedStaticData) {
+      fetchInitialData();
+    }
+  }, [params, cachedStaticData, fetchInitialData]);
+
+  // Handle season changes - only fetch episodes if static data is already cached
+  useEffect(() => {
+    if (
+      cachedStaticData &&
+      params?.season &&
+      data &&
+      params.season !== data.seasonNumber
+    ) {
+      console.log(
+        `[useTVMediaDetails] Season changed to ${params.season}, fetching episodes and fresh metadata`,
+      );
+      fetchSeasonEpisodes(params.season);
+    }
+  }, [params?.season, cachedStaticData, data, fetchSeasonEpisodes]);
+
+  // Add app focus handler for background refresh
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      // When app comes to foreground and we already have data, do a background refresh
+      if (
+        nextAppState === "active" &&
+        data &&
+        params?.mediaType &&
+        params?.mediaId
+      ) {
+        console.log(
+          `[useTVMediaDetails] App focused, refreshing data in background for ${params.mediaType}:${params.mediaId}`,
+        );
+        fetchInitialData(true);
+      }
+    };
+
+    // Subscribe to app state changes
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+
+    // Clean up subscription on unmount
+    return () => {
+      subscription.remove();
+    };
+  }, [data, fetchInitialData, params]);
+
+  const refetch = useCallback(() => {
+    // Use background refresh if we already have data to avoid loading state
+    if (data) {
+      fetchInitialData(true);
+    } else {
+      fetchInitialData(false);
+    }
+  }, [fetchInitialData, data]);
+
+  return {
+    data,
+    isLoading,
+    isRefreshing,
+    isLoadingEpisodes, // New state for episode-only loading
+    error,
+    refetch,
+  };
+}
+
+/**
+ * Hook to fetch available seasons for a TV show
+ * Used to determine which season to navigate to when selecting a show from browse
+ */
+export function useRootShowData(mediaId: string, enabled: boolean = true) {
+  const [data, setData] = useState<TVDeviceMediaResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset state when mediaId changes to prevent stale data
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    setIsLoading(true);
+    setIsRefreshing(false);
+  }, [mediaId]);
+
+  const fetchData = useCallback(
+    async (isBackgroundRefresh: boolean = false) => {
+      if (!mediaId) return;
+
+      try {
+        if (!isBackgroundRefresh) {
+          setIsLoading(true);
+        } else {
+          setIsRefreshing(true);
+        }
+
+        setError(null);
+
+        console.log(
+          `[useRootShowData] Fetching root show data for mediaId: ${mediaId}`,
+        );
+        const result = await contentService.getRootShowData(mediaId, "tv");
+        console.log(`[useRootShowData] Received data for mediaId ${mediaId}:`, {
+          title: result.title,
+          availableSeasons: result.availableSeasons,
+          totalSeasons: result.totalSeasons,
+        });
+        setData(result);
+      } catch (err) {
+        if (!isBackgroundRefresh) {
+          const errorMessage =
+            err instanceof Error ? err.message : "Unknown error";
+          setError(errorMessage);
+          console.error(
+            `Root show data fetch error for mediaId ${mediaId}:`,
+            err,
+          );
+        } else {
+          console.warn(
+            `Background root show data refresh failed for mediaId ${mediaId}:`,
+            err,
+          );
+        }
+      } finally {
+        if (!isBackgroundRefresh) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [mediaId],
+  );
+
+  useEffect(() => {
+    if (enabled && mediaId) {
+      fetchData();
+    }
+  }, [enabled, mediaId, fetchData]);
+
+  const refetch = useCallback(() => {
+    if (data) {
+      fetchData(true);
+    } else {
+      fetchData(false);
+    }
+  }, [fetchData, data]);
+
+  return {
+    data,
+    isLoading,
+    isRefreshing,
+    error,
+    refetch,
+  };
+}
+
+/**
+ * Hook to fetch movie details for TV devices
+ * Uses TV-optimized API but excludes season/episode parameters
+ */
+export function useMovieDetails(
+  params: { mediaType: "movie"; mediaId: string } | null,
+) {
+  const [data, setData] = useState<TVDeviceMediaResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Destructure params to avoid object reference issues
+  const mediaType = params?.mediaType;
+  const mediaId = params?.mediaId;
+
+  const fetchData = useCallback(
+    async (isBackgroundRefresh: boolean = false) => {
+      if (!mediaType || !mediaId) return;
+
+      try {
+        if (!isBackgroundRefresh) {
+          setIsLoading(true);
+        } else {
+          setIsRefreshing(true);
+        }
+
+        setError(null);
+
+        // Use getTVMediaDetails but WITHOUT season/episode parameters for movies
+        const result = await contentService.getTVMediaDetails({
+          mediaType: mediaType,
+          mediaId: mediaId,
+          // Explicitly exclude season/episode for movies
+        });
+
+        setData(result);
+      } catch (err) {
+        if (!isBackgroundRefresh) {
+          const errorMessage =
+            err instanceof Error ? err.message : "Unknown error";
+          setError(errorMessage);
+          console.error("Movie details fetch error:", err);
+        } else {
+          console.warn("Background movie details refresh failed:", err);
+        }
+      } finally {
+        if (!isBackgroundRefresh) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [mediaType, mediaId],
+  );
+
+  // Initial data load
+  useEffect(() => {
+    if (mediaType && mediaId) {
+      fetchData();
+    }
+  }, [mediaType, mediaId, fetchData]);
+
+  // Add app focus handler for background refresh
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      // When app comes to foreground and we already have data, do a background refresh
+      if (nextAppState === "active" && data && mediaId) {
+        console.log(
+          `[useMovieDetails] App focused, refreshing data in background for movie:${mediaId}`,
+        );
+        fetchData(true);
+      }
+    };
+
+    // Subscribe to app state changes
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+
+    // Clean up subscription on unmount
+    return () => {
+      subscription.remove();
+    };
+  }, [data, fetchData, mediaId]);
+
+  const refetch = useCallback(() => {
+    // Use background refresh if we already have data to avoid loading state
+    if (data) {
+      fetchData(true);
+    } else {
+      fetchData(false);
+    }
+  }, [fetchData, data]);
+
+  return {
+    data,
+    isLoading,
+    isRefreshing,
+    error,
+    refetch,
+  };
 }

@@ -37,7 +37,7 @@ interface ScreensaverContextType {
 const ScreensaverContext = createContext<ScreensaverContextType | null>(null);
 
 // Configuration constants
-const SCREENSAVER_TIMEOUT = 10_000;
+const SCREENSAVER_TIMEOUT = 120_000; // 2 minutes
 const SCREENSAVER_REFRESH_INTERVAL = 15_000;
 const ERROR_RESET_TIMEOUT = 30_000; // Reset error state after 30 seconds
 
@@ -68,7 +68,7 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
   });
 
   // Get state from contexts
-  const { currentMode } = useTVAppState();
+  const { currentMode, setMode } = useTVAppState();
   const { isRemoteActive } = useRemoteActivity();
 
   // Clear all timers utility
@@ -154,6 +154,12 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
     console.log("[ScreensaverContext] Activating screensaver");
     setIsScreensaverActive(true);
 
+    // Set mode to screensaver when activating
+    if (currentMode !== "screensaver") {
+      console.log("[ScreensaverContext] Setting mode to screensaver");
+      setMode("screensaver");
+    }
+
     // Load initial content
     loadScreensaverContent();
 
@@ -190,12 +196,24 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
 
       timersRef.current.delayedRefresh = null;
     }, SCREENSAVER_REFRESH_INTERVAL);
-  }, [isScreensaverActive, loadScreensaverContent, opacity]);
+  }, [
+    isScreensaverActive,
+    loadScreensaverContent,
+    opacity,
+    currentMode,
+    setMode,
+  ]);
 
   const hideScreensaver = useCallback(() => {
     if (!isScreensaverActive) return;
 
     console.log("[ScreensaverContext] Deactivating screensaver");
+
+    // Return to browse mode when hiding screensaver
+    if (currentMode === "screensaver") {
+      console.log("[ScreensaverContext] Returning to browse mode");
+      setMode("browse");
+    }
 
     // Animate out
     Animated.timing(opacity, {
@@ -217,7 +235,7 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
       clearTimeout(timersRef.current.delayedRefresh);
       timersRef.current.delayedRefresh = null;
     }
-  }, [isScreensaverActive, opacity]);
+  }, [isScreensaverActive, opacity, currentMode, setMode]);
 
   // Optimized video playing state setter
   const setVideoPlayingState = useCallback(

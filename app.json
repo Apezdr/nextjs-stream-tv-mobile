@@ -42,7 +42,7 @@
     ],
     "android": {
       "splash": {
-        "image": "./src/assets/images/splash.png"
+        "image": "./src/assets/splash.png"
       },
       "package": "com.anonymous.nextjsstreamtvmobile",
       "intentFilters": [
@@ -63,7 +63,7 @@
     },
     "ios": {
       "splash": {
-        "image": "./src/assets/images/splash.png"
+        "image": "./src/assets/splash.png"
       },
       "bundleIdentifier": "com.anonymous.nextjsstreamtvmobile"
     },

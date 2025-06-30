@@ -6,7 +6,10 @@
 export interface MediaItem {
   id: string;
   title: string;
-  posterURL: string;
+  posterURL?: string;
+  posterBlurhash?: string; // data:image/png;base64, encoded blurhash for poster
+  thumbnail?: string; // Thumbnail URL (optional, for episodes)
+  thumbnailBlurhash?: string; // data:image/png;base64, encoded blurhash for thumbnail
   type: "movie" | "tv";
   backdrop: string;
   lastWatchedDate: string;
@@ -52,6 +55,57 @@ export interface EpisodePickerParams {
   season: number;
 }
 
+// Enhanced TV Device Response Types
+export interface TVDeviceEpisode {
+  episodeNumber: number;
+  title: string;
+  thumbnail: string;
+  thumbnailBlurhash: string;
+  duration: number;
+  description: string;
+  videoURL: string;
+  hdr: string;
+  dimensions: string;
+}
+
+export interface TVDeviceMetadata {
+  overview: string;
+  genres: Array<{
+    id: number;
+    name: string;
+  }>;
+  rating: number;
+  releaseDate: string;
+  trailer_url: string;
+}
+
+export interface TVDeviceNavigation {
+  seasons: {
+    current: number;
+    total: number;
+    hasPrevious: boolean;
+    hasNext: boolean;
+  };
+}
+
+export interface TVDeviceMediaResponse {
+  id: string;
+  title: string;
+  type: string;
+  posterURL: string;
+  backdrop: string;
+  posterBlurhash: string;
+  backdropBlurhash: string; // data:image/png;base64, encoded blurhash for backdrop
+  metadata: TVDeviceMetadata;
+  availableSeasons: number[];
+  totalSeasons: number;
+  logo?: string; // Logo URL (typically for TV shows)
+  seasonNumber: number;
+  episodes: TVDeviceEpisode[];
+  navigation: TVDeviceNavigation;
+  airDate?: string; // Air date for TV shows
+}
+
 // Media details response (from /media endpoint)
 export interface MediaDetailsResponse {
   id?: string;
@@ -70,7 +124,42 @@ export interface MediaDetailsResponse {
   seasonNumber?: number; // For TV shows
   lastWatchedDate?: string; // When the content was last watched
   overview: string; // Overview of the content
-
+  metadata?: {
+    overview?: string; // Overview of the content
+    rating?: string; // Content rating (e.g., "PG-13")
+    release_date?: string; // Release date
+    genres?: [
+      {
+        id: number; // Genre ID
+        name: string; // Genre name
+      },
+    ];
+    [key: string]: unknown; // Additional metadata fields
+  };
+  mediaQuality?: {
+    format?: string; // Video format (e.g., "8-bit SDR (BT.709)", "HDR10")
+    bitDepth?: number; // Bit depth (e.g., 8, 10)
+    colorSpace?: string; // Color space (e.g., "YUV")
+    transferCharacteristics?: string; // Transfer characteristics (e.g., "BT.709")
+    isHDR?: boolean; // Whether the content is HDR
+    viewingExperience?: {
+      enhancedColor?: boolean; // Whether the content has enhanced color
+      highDynamicRange?: boolean; // Whether the content has high dynamic range
+      dolbyVision?: boolean; // Whether the content supports Dolby Vision
+      hdr10Plus?: boolean; // Whether the content supports HDR10+
+      standardHDR?: boolean; // Whether the content is standard HDR
+    };
+    [key: string]: unknown; // Additional media quality fields
+  };
+  cast?: [
+    {
+      character?: string; // Character name
+      id?: number; // Actor ID
+      name?: string; // Actor name
+      profile_path?: string; // Actor profile image URL
+      [key: string]: unknown; // Additional cast fields
+    },
+  ];
   // Additional fields that might be returned by the API
   [key: string]: unknown;
 }
@@ -83,6 +172,7 @@ export interface MediaParams {
   season?: number;
   episode?: number;
   card?: boolean;
+  isTVdevice?: boolean; // New parameter for enhanced TV responses
 }
 
 // Content count response
@@ -125,10 +215,27 @@ export interface ChapterParams {
   episode?: number; // Required for TV
 }
 
-// Banner response (for landing page)
-export interface BannerResponse {
-  // This would need to be defined based on the actual API response
-  [key: string]: unknown;
+// Banner response (for landing page) - array of banner items
+export type BannerResponse = BannerItem[];
+
+export interface BannerItem {
+  title: string;
+  type: string;
+  backdrop: string;
+  backdropBlurhash: string;
+  logo: string;
+  id: string;
+  clipVideoURL?: string; // Optional video clip URL for enhanced banner experience
+  metadata: {
+    trailer_url: string;
+    overview: string;
+    genres: Array<{
+      id: number;
+      name: string;
+    }>;
+    vote_average: number;
+    release_date: string;
+  };
 }
 
 // Contrast analysis for screensaver

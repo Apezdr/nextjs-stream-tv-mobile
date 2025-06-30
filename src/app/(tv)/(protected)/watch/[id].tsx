@@ -1,6 +1,6 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useVideoPlayer, VideoView } from "expo-video";
+import { BufferOptions, useVideoPlayer, VideoView } from "expo-video";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { View, StyleSheet, Text, BackHandler, Pressable } from "react-native";
 
@@ -12,6 +12,7 @@ import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { setWatchMode, tvQueryHelpers } from "@/src/data/query/queryClient";
 import { contentService } from "@/src/data/services/contentService";
+import { MediaDetailsResponse } from "@/src/data/types/content.types";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -27,7 +28,7 @@ function useContentLoader(params: {
   episode?: string;
 }) {
   const [videoURL, setVideoURL] = useState<string | null>(null);
-  const [videoData, setVideoData] = useState<any>(null);
+  const [videoData, setVideoData] = useState<MediaDetailsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [contentError, setContentError] = useState<string | null>(null);
 
@@ -44,10 +45,9 @@ function useContentLoader(params: {
         const md = await contentService.getMediaDetails({
           mediaType: params.type,
           mediaId: params.id,
+          // Parse season and episode as numbers directly from route params
           season: parseNumericParam(params.season),
-          episode: params.episode
-            ? parseNumericParam(params.episode.match(/\d+/)?.[0])
-            : undefined,
+          episode: parseNumericParam(params.episode),
         });
 
         if (!cancelled) {
@@ -96,10 +96,25 @@ export default function WatchPage() {
   const { videoURL, videoData, loading, contentError } =
     useContentLoader(params);
 
+  // Buffer Options
+  const bufferOptions: BufferOptions = {
+    // Conservative forward buffer - balance smoothness vs memory
+    preferredForwardBufferDuration: 15, // 15 seconds = ~116 MB (vs 60s = 463 MB)
+
+    // iOS: Let system manage stalling intelligently
+    waitsToMinimizeStalling: true,
+
+    // Android: Memory-conscious settings
+    minBufferForPlayback: 3, // Just 3 seconds minimum = ~23 MB
+    maxBufferBytes: 134217728, // 128 MB hard limit (vs 0 = unlimited)
+    prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
+  };
+
   // Create player
   const player = useVideoPlayer(videoURL, (p) => {
     p.timeUpdateEventInterval = 1;
     p.loop = false;
+    p.bufferOptions = bufferOptions;
     p.play();
   });
 
@@ -144,16 +159,6 @@ export default function WatchPage() {
     };
   }, [setMode]);
 
-  // Back handler
-  useEffect(() => {
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      setMode("browse");
-      router.back();
-      return true;
-    });
-    return () => sub.remove();
-  }, [router, setMode]);
-
   // Screensaver sync
   useEffect(() => {
     const sub = player.addListener("playingChange", ({ isPlaying }) => {
@@ -168,17 +173,36 @@ export default function WatchPage() {
     router.back();
   }, [resetActivityTimer, setMode, router]);
 
+  // Back handler
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      handleExit();
+      return true;
+    });
+    return () => sub.remove();
+  }, [handleExit]);
+
   const videoInfo = useMemo(
     () =>
       videoData
         ? {
             type: videoData.type,
-            title: videoData.title,
-            description: videoData.metadata.overview,
+            title: videoData.title || "",
+            description: videoData.metadata?.overview,
             logo: videoData.logo,
-            captionURLs: videoData.captionURLs,
+            captionURLs: videoData.captionURLs as
+              | Record<
+                  string,
+                  {
+                    srcLang: string;
+                    url: string;
+                    lastModified: string;
+                    sourceServerId: string;
+                  }
+                >
+              | undefined,
             backdrop: videoData.backdrop,
-            showTitle: videoData.showTitle,
+            showTitle: videoData.showTitle as string | undefined,
           }
         : undefined,
     [videoData],

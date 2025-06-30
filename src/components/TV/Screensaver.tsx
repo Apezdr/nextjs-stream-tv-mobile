@@ -51,7 +51,8 @@ export const Screensaver: React.FC = () => {
   } = useScreensaver();
 
   // Use TVAppStateContext to get video playback state
-  const { playerState, currentMode } = useTVAppState();
+  const { playerState, currentMode, setMode } = useTVAppState();
+
   const isPlaying = playerState.isPlaying;
 
   const [displayedContent, setDisplayedContent] =
@@ -574,6 +575,16 @@ export const Screensaver: React.FC = () => {
   }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: dimOpacity.value }));
 
+  // Log mode changes for debugging but don't force mode changes
+  useEffect(() => {
+    console.log("[Screensaver] Mode state:", {
+      isScreensaverActive,
+      isPlaying,
+      currentMode,
+      shouldShow: isScreensaverActive && !isPlaying,
+    });
+  }, [currentMode, isScreensaverActive, isPlaying]);
+
   // Don't render if video is playing, regardless of other conditions
   if (!isScreensaverActive || isPlaying) {
     return null;
@@ -610,7 +621,10 @@ export const Screensaver: React.FC = () => {
         <Reanimated.View style={[styles.backdrop, backdropStyle]}>
           <Image
             source={{ uri: backdrop }}
-            placeholder={{ uri: backdropBlurhash }}
+            placeholder={{
+              uri: `data:image/png;base64,${backdropBlurhash}`,
+            }}
+            placeholderContentFit="cover"
             contentFit="cover"
             transition={500}
             style={StyleSheet.absoluteFillObject}

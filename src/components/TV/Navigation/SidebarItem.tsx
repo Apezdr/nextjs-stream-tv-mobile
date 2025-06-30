@@ -1,10 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { forwardRef, useRef, useImperativeHandle, memo } from "react";
 import { View, StyleSheet, Pressable } from "react-native";
-import Animated, {
-  useAnimatedStyle,
-  SharedValue,
-} from "react-native-reanimated";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+
+import { useSidebarAnimationContext } from "./AnimatedSidebar";
 
 import { Colors } from "@/src/constants/Colors";
 
@@ -13,8 +12,8 @@ interface SidebarItemProps {
   label: string;
   onPress?: () => void;
   onFocus?: () => void;
+  onBlur?: () => void;
   isFocused?: boolean;
-  textOpacity: SharedValue<number>;
 }
 
 interface SidebarItemRef {
@@ -23,11 +22,9 @@ interface SidebarItemRef {
 
 const SidebarItem = memo(
   forwardRef<SidebarItemRef, SidebarItemProps>(
-    (
-      { icon, label, onPress, onFocus, isFocused = false, textOpacity },
-      ref,
-    ) => {
+    ({ icon, label, onPress, onFocus, onBlur, isFocused = false }, ref) => {
       const pressableRef = useRef<View>(null);
+      const { textOpacity } = useSidebarAnimationContext();
 
       // Expose focus method through ref
       useImperativeHandle(ref, () => ({
@@ -49,6 +46,7 @@ const SidebarItem = memo(
             ref={pressableRef}
             onPress={onPress}
             onFocus={onFocus}
+            onBlur={onBlur}
             style={({ focused }) => [
               styles.container,
               (focused || isFocused) && styles.focused,

@@ -15,7 +15,7 @@ import { TextInput } from "react-native";
 import { contentService } from "@/src/data/services/contentService";
 
 // Types for the TV app modes
-export type TVAppMode = "browse" | "watch";
+export type TVAppMode = "browse" | "watch" | "media-info" | "screensaver";
 
 // Player state interface
 export interface VideoPlayerState {
@@ -251,6 +251,9 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
     } else if (mode === "browse") {
       // Open sidebar to minimized when returning to browse mode
       setSidebarState("minimized");
+    } else if (mode === "media-info") {
+      // Keep sidebar closed in media-info mode
+      setSidebarState("closed");
     }
   }, []); // Remove currentMode dependency to prevent unnecessary re-renders
 
