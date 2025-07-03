@@ -1,6 +1,8 @@
 import { Image } from "expo-image";
 import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
 
+import EpisodeProgressBar from "./EpisodeProgressBar";
+
 import { Colors } from "@/src/constants/Colors";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 
@@ -73,6 +75,10 @@ export default function EpisodeList({
               <Text style={styles.episodeOverview} numberOfLines={2}>
                 {episode.description}
               </Text>
+              <EpisodeProgressBar
+                watchHistory={episode.watchHistory}
+                duration={episode.duration}
+              />
               <Text style={styles.episodeDuration}>
                 ({formatDuration(episode.duration)})
               </Text>

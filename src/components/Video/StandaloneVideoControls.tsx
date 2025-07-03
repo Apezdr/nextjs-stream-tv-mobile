@@ -1,4 +1,5 @@
 // src/components/Video/StandaloneVideoControls.tsx
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useEvent } from "expo";
 import { Image } from "expo-image";
 import { VideoPlayer } from "expo-video";
@@ -49,6 +50,7 @@ interface StandaloneVideoControlsProps {
   customButtons?: React.ReactNode;
   overlayMode?: boolean;
   onExitWatchMode?: () => void;
+  onInfoPress?: () => void;
   onPlayPrev?: () => void;
   onPlayNext?: () => void;
   showPrevNext?: boolean;
@@ -69,6 +71,7 @@ const StandaloneVideoControls = memo(
     customButtons,
     overlayMode = false,
     onExitWatchMode,
+    onInfoPress,
     onPlayPrev,
     onPlayNext,
     showPrevNext = true,
@@ -157,12 +160,20 @@ const StandaloneVideoControls = memo(
         if (player.playing) {
           player.pause();
         } else {
+          // Check if we're at the end of the media (within 2 seconds of duration)
+          const isAtEnd = duration > 0 && currentTime >= duration - 2;
+
+          if (isAtEnd) {
+            // Restart from the beginning
+            player.currentTime = 0;
+          }
+
           player.play();
         }
       } catch (error) {
         console.warn("🎬 StandaloneVideoControls: Error toggling play:", error);
       }
-    }, [player]);
+    }, [player, currentTime, duration]);
 
     const handleSeek = useCallback(
       (time: number) => {
@@ -245,6 +256,26 @@ const StandaloneVideoControls = memo(
                     focusable={true}
                   >
                     <Text style={styles.controlButtonText}>← Back</Text>
+                  </Pressable>
+                </TVFocusGuideView>
+              )}
+              {onInfoPress && (
+                <TVFocusGuideView>
+                  <Pressable
+                    style={({ focused, pressed }) => [
+                      styles.controlButton,
+                      styles.infoButton,
+                      focused && styles.controlButtonFocused,
+                      pressed && styles.controlButtonPressed,
+                    ]}
+                    onPress={handleButtonPress(onInfoPress)}
+                    focusable={true}
+                  >
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={24}
+                      color="rgba(255, 255, 255, 0.69)"
+                    />
                   </Pressable>
                 </TVFocusGuideView>
               )}
@@ -466,6 +497,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  infoButton: {
+    minWidth: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+
   logo: {
     flex: 1,
     height: undefined,
@@ -542,6 +579,7 @@ const styles = StyleSheet.create({
   topLeftSection: {
     alignItems: "center",
     flexDirection: "row",
+    gap: 10,
   },
 
   topRightSection: {

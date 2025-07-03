@@ -7,7 +7,6 @@ import {
   ScrollView,
   Text,
   ActivityIndicator,
-  TVEventHandler,
   InteractionManager,
   DeviceEventEmitter,
 } from "react-native";
@@ -62,18 +61,6 @@ export default function TVHomePage() {
     }
   }, [currentMode, setMode]);
 
-  // Refs for stepped scrolling
-  const scrollViewRef = useRef<ScrollView>(null);
-  const currentScrollIndexRef = useRef(0);
-  const contentSectionsRef = useRef<number[]>([]);
-  const isScrollingRef = useRef(false);
-
-  // Step size for scrolling (height of one content section)
-  const SCROLL_STEP_SIZE = 320; // Approximate height of banner + one content row
-
-  // State only for visual focus indicators
-  const [focusedSectionIndex, setFocusedSectionIndex] = useState(0);
-
   // Calculate dynamic left margin based on sidebar state
   const getContentMarginLeft = useCallback(() => {
     switch (sidebarState) {
@@ -114,12 +101,44 @@ export default function TVHomePage() {
     limit: 50,
   });
 
-  // Focus-aware background prefetching optimization
+  // Debounce refresh to prevent excessive API calls
+  const lastRefreshRef = useRef<number>(0);
+  const REFRESH_DEBOUNCE_MS = 5000; // Only allow refresh every 5 seconds
+
+  // Focus-aware background prefetching optimization and data refresh
   useFocusEffect(
     useCallback(() => {
       console.log(
-        "[TVHomePage] Screen focused - optimizing background loading",
+        "[TVHomePage] Screen focused - optimizing background loading and refreshing data",
       );
+
+      const now = Date.now();
+      const timeSinceLastRefresh = now - lastRefreshRef.current;
+
+      // Refresh data if enough time has passed and we have existing data
+      if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
+        if (recentlyWatched.data && recentlyWatched.refetch) {
+          console.log(
+            "[TVHomePage] Refreshing recently watched data (debounced)",
+          );
+          lastRefreshRef.current = now;
+          recentlyWatched.refetch();
+        }
+        if (recentlyAdded.data && recentlyAdded.refetch) {
+          console.log(
+            "[TVHomePage] Refreshing recently added data (debounced)",
+          );
+          recentlyAdded.refetch();
+        }
+        if (tvShows.data && tvShows.refetch) {
+          console.log("[TVHomePage] Refreshing TV shows data (debounced)");
+          tvShows.refetch();
+        }
+        if (movies.data && movies.refetch) {
+          console.log("[TVHomePage] Refreshing movies data (debounced)");
+          movies.refetch();
+        }
+      }
 
       // Start background prefetching after screen transitions complete
       const backgroundLoadTask = InteractionManager.runAfterInteractions(() => {
@@ -161,24 +180,80 @@ export default function TVHomePage() {
         backgroundLoadTask.cancel();
       };
     }, [
+      recentlyWatched.data,
+      recentlyWatched.refetch,
       recentlyWatched.prefetchBulk,
       recentlyWatched.hasNextPage,
       recentlyWatched.isFetching,
-      recentlyWatched.data,
+      recentlyAdded.data,
+      recentlyAdded.refetch,
       recentlyAdded.prefetchBulk,
       recentlyAdded.hasNextPage,
       recentlyAdded.isFetching,
-      recentlyAdded.data,
+      movies.data,
+      movies.refetch,
       movies.prefetchBulk,
       movies.hasNextPage,
       movies.isFetching,
-      movies.data,
+      tvShows.data,
+      tvShows.refetch,
       tvShows.prefetchBulk,
       tvShows.hasNextPage,
       tvShows.isFetching,
-      tvShows.data,
     ]),
   );
+
+  // Periodic refresh every 10 seconds when screen is focused
+  useEffect(() => {
+    const PERIODIC_REFRESH_INTERVAL = 10000; // 10 seconds
+    let intervalId: NodeJS.Timeout;
+
+    const startPeriodicRefresh = () => {
+      intervalId = setInterval(() => {
+        const now = Date.now();
+        const timeSinceLastRefresh = now - lastRefreshRef.current;
+
+        // Only refresh if enough time has passed since last manual refresh
+        if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
+          console.log("[TVHomePage] Periodic refresh triggered");
+          lastRefreshRef.current = now;
+
+          // Refresh all data sources
+          if (recentlyWatched.data && recentlyWatched.refetch) {
+            recentlyWatched.refetch();
+          }
+          if (recentlyAdded.data && recentlyAdded.refetch) {
+            recentlyAdded.refetch();
+          }
+          if (tvShows.data && tvShows.refetch) {
+            tvShows.refetch();
+          }
+          if (movies.data && movies.refetch) {
+            movies.refetch();
+          }
+        }
+      }, PERIODIC_REFRESH_INTERVAL);
+    };
+
+    // Start periodic refresh
+    startPeriodicRefresh();
+
+    // Cleanup interval on unmount
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [
+    recentlyWatched.data,
+    recentlyWatched.refetch,
+    recentlyAdded.data,
+    recentlyAdded.refetch,
+    tvShows.data,
+    tvShows.refetch,
+    movies.data,
+    movies.refetch,
+  ]);
 
   // Shared transformation function to reduce code duplication
   const transformMediaItems = useCallback((items: MediaItem[]) => {
@@ -369,219 +444,30 @@ export default function TVHomePage() {
     [router],
   );
 
-  // Handle TV remote navigation for stepped scrolling
-  useEffect(() => {
-    const handleTVEvent = (evt: any) => {
-      if (evt && (evt.eventType === "up" || evt.eventType === "down")) {
-        // Prevent rapid clicking from stalling the scroll
-        if (isScrollingRef.current) return true;
-
-        const direction = evt.eventType === "up" ? -1 : 1;
-        handleSteppedScroll(direction);
-        return true; // Prevent default scrolling
-      }
-      return false;
-    };
-
-    const subscription = TVEventHandler.addListener(handleTVEvent);
-
-    return () => {
-      subscription?.remove();
-    };
-  }, []);
-
-  // Calculate content section positions and create section mapping
-  const sectionMapping = useMemo(() => {
-    const mapping: { [key: string]: number } = {};
-    let sectionIndex = 0;
-
-    // Banner is always section 0
-    mapping.banner = sectionIndex++;
-
-    // Add sections based on available content
-    if (transformedRecentlyWatched.length > 0) {
-      mapping.recentlyWatched = sectionIndex++;
-    }
-    if (transformedRecentlyAdded.length > 0) {
-      mapping.recentlyAdded = sectionIndex++;
-    }
-    if (transformedTVShows.length > 0) {
-      mapping.tvShows = sectionIndex++;
-    }
-    if (transformedMovies.length > 0) {
-      mapping.movies = sectionIndex++;
-    }
-
-    return mapping;
-  }, [
-    transformedRecentlyWatched.length,
-    transformedRecentlyAdded.length,
-    transformedTVShows.length,
-    transformedMovies.length,
-  ]);
-
-  // Calculate content section positions using refs
-  useEffect(() => {
-    const sections: number[] = [0]; // Start with banner at top
-    let currentPosition = SCROLL_STEP_SIZE;
-
-    // Add positions for each content section that has data
-    if (transformedRecentlyWatched.length > 0) {
-      sections.push(currentPosition);
-      currentPosition += SCROLL_STEP_SIZE;
-    }
-    if (transformedRecentlyAdded.length > 0) {
-      sections.push(currentPosition);
-      currentPosition += SCROLL_STEP_SIZE;
-    }
-    if (transformedTVShows.length > 0) {
-      sections.push(currentPosition);
-      currentPosition += SCROLL_STEP_SIZE;
-    }
-    if (transformedMovies.length > 0) {
-      sections.push(currentPosition);
-      currentPosition += SCROLL_STEP_SIZE;
-    }
-
-    contentSectionsRef.current = sections;
-  }, [
-    transformedRecentlyWatched.length,
-    transformedRecentlyAdded.length,
-    transformedTVShows.length,
-    transformedMovies.length,
-  ]);
-
-  // Handle stepped scrolling using refs for smooth performance
-  const handleSteppedScroll = useCallback((direction: number) => {
-    if (
-      !scrollViewRef.current ||
-      contentSectionsRef.current.length === 0 ||
-      isScrollingRef.current
-    ) {
-      return;
-    }
-
-    const newIndex = Math.max(
-      0,
-      Math.min(
-        contentSectionsRef.current.length - 1,
-        currentScrollIndexRef.current + direction,
-      ),
-    );
-
-    if (newIndex !== currentScrollIndexRef.current) {
-      isScrollingRef.current = true;
-      currentScrollIndexRef.current = newIndex;
-
-      // Update visual focus immediately
-      setFocusedSectionIndex(newIndex);
-
-      const targetY = contentSectionsRef.current[newIndex];
-
-      scrollViewRef.current.scrollTo({
-        y: targetY,
-        animated: true,
-      });
-
-      // Reset scrolling state after animation completes
-      setTimeout(() => {
-        isScrollingRef.current = false;
-      }, 300);
-    }
-  }, []);
-
-  // Manual scroll handlers for testing/fallback
-  const scrollToSection = useCallback((sectionIndex: number) => {
-    if (
-      !scrollViewRef.current ||
-      !contentSectionsRef.current[sectionIndex] ||
-      isScrollingRef.current
-    ) {
-      return;
-    }
-
-    isScrollingRef.current = true;
-    currentScrollIndexRef.current = sectionIndex;
-    setFocusedSectionIndex(sectionIndex);
-
-    scrollViewRef.current.scrollTo({
-      y: contentSectionsRef.current[sectionIndex],
-      animated: true,
-    });
-
-    setTimeout(() => {
-      isScrollingRef.current = false;
-    }, 300);
-  }, []);
-
   return (
     <View style={styles.container}>
       {/* Content browser with stepped scrolling */}
       <ScrollView
-        ref={scrollViewRef}
         style={[styles.contentBrowser, { marginLeft: getContentMarginLeft() }]}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
-        onMomentumScrollEnd={(event) => {
-          // Snap to nearest section when manual scrolling ends
-          const scrollY = event.nativeEvent.contentOffset.y;
-          const nearestIndex = contentSectionsRef.current.reduce(
-            (closest, sectionY, index) => {
-              return Math.abs(sectionY - scrollY) <
-                Math.abs(contentSectionsRef.current[closest] - scrollY)
-                ? index
-                : closest;
-            },
-            0,
-          );
-
-          if (
-            nearestIndex !== currentScrollIndexRef.current &&
-            !isScrollingRef.current
-          ) {
-            currentScrollIndexRef.current = nearestIndex;
-            setFocusedSectionIndex(nearestIndex);
-            scrollViewRef.current?.scrollTo({
-              y: contentSectionsRef.current[nearestIndex],
-              animated: true,
-            });
-          }
-        }}
       >
         {/* Video preview banner */}
         <TVBanner />
 
         {/* Recently Watched Section */}
         {recentlyWatched.isLoading ? (
-          <View
-            style={[
-              styles.loadingSection,
-              focusedSectionIndex === sectionMapping.recentlyWatched &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.loadingSection}>
             <Text style={styles.sectionTitle}>Continue Watching</Text>
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : recentlyWatched.error ? (
-          <View
-            style={[
-              styles.errorSection,
-              focusedSectionIndex === sectionMapping.recentlyWatched &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.errorSection}>
             <Text style={styles.sectionTitle}>Continue Watching</Text>
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedRecentlyWatched.length ? (
-          <View
-            style={[
-              styles.sectionContainer,
-              focusedSectionIndex === sectionMapping.recentlyWatched &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.sectionContainer}>
             <ContentRow
               title="Continue Watching"
               items={transformedRecentlyWatched}
@@ -606,35 +492,17 @@ export default function TVHomePage() {
 
         {/* Recently Added Section */}
         {recentlyAdded.isLoading ? (
-          <View
-            style={[
-              styles.loadingSection,
-              focusedSectionIndex === sectionMapping.recentlyAdded &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.loadingSection}>
             <Text style={styles.sectionTitle}>Recently Added</Text>
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : recentlyAdded.error ? (
-          <View
-            style={[
-              styles.errorSection,
-              focusedSectionIndex === sectionMapping.recentlyAdded &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.errorSection}>
             <Text style={styles.sectionTitle}>Recently Added</Text>
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedRecentlyAdded.length ? (
-          <View
-            style={[
-              styles.sectionContainer,
-              focusedSectionIndex === sectionMapping.recentlyAdded &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.sectionContainer}>
             <ContentRow
               title="Recently Added"
               items={transformedRecentlyAdded}
@@ -659,35 +527,17 @@ export default function TVHomePage() {
 
         {/* TV Shows Section */}
         {tvShows.isLoading ? (
-          <View
-            style={[
-              styles.loadingSection,
-              focusedSectionIndex === sectionMapping.tvShows &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.loadingSection}>
             <Text style={styles.sectionTitle}>TV Shows</Text>
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : tvShows.error ? (
-          <View
-            style={[
-              styles.errorSection,
-              focusedSectionIndex === sectionMapping.tvShows &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.errorSection}>
             <Text style={styles.sectionTitle}>TV Shows</Text>
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedTVShows.length ? (
-          <View
-            style={[
-              styles.sectionContainer,
-              focusedSectionIndex === sectionMapping.tvShows &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.sectionContainer}>
             <ContentRow
               title="TV Shows"
               items={transformedTVShows}
@@ -710,35 +560,17 @@ export default function TVHomePage() {
 
         {/* Movies Section */}
         {movies.isLoading ? (
-          <View
-            style={[
-              styles.loadingSection,
-              focusedSectionIndex === sectionMapping.movies &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.loadingSection}>
             <Text style={styles.sectionTitle}>Movies</Text>
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : movies.error ? (
-          <View
-            style={[
-              styles.errorSection,
-              focusedSectionIndex === sectionMapping.movies &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.errorSection}>
             <Text style={styles.sectionTitle}>Movies</Text>
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedMovies.length ? (
-          <View
-            style={[
-              styles.sectionContainer,
-              focusedSectionIndex === sectionMapping.movies &&
-                styles.focusedSection,
-            ]}
-          >
+          <View style={styles.sectionContainer}>
             <ContentRow
               title="Movies"
               items={transformedMovies}
@@ -787,14 +619,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: "center",
   },
-  focusedSection: {
-    borderLeftWidth: 4,
-    borderLeftColor: "#E50914",
-    paddingLeft: 16,
-    marginLeft: -20,
-    backgroundColor: "rgba(229, 9, 20, 0.1)", // Subtle red background
-    borderRadius: 8,
-  },
   loadingSection: {
     alignItems: "center",
     marginBottom: 20,
@@ -802,8 +626,8 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   sectionContainer: {
-    minHeight: 280, // Consistent section height for stepped scrolling
     marginBottom: 20,
+    minHeight: 280, // Consistent section height for stepped scrolling
     paddingVertical: 10,
   },
   sectionTitle: {

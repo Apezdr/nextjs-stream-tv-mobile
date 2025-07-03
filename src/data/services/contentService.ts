@@ -20,6 +20,19 @@ import {
   TVDeviceMediaResponse,
 } from "@/src/data/types/content.types";
 
+// Types for playback tracking
+export interface PlaybackUpdateRequest {
+  videoId: string;
+  playbackTime: number;
+  mediaMetadata: {
+    mediaType: "tv" | "movie";
+    mediaId: string;
+    showId?: string;
+    seasonNumber?: number;
+    episodeNumber?: number;
+  };
+}
+
 export const contentService = {
   /**
    * Fetch a horizontal content list
@@ -99,6 +112,7 @@ export const contentService = {
       episode,
       card,
       isTVdevice,
+      includeWatchHistory,
     } = params;
 
     const queryParams = buildQueryParams({
@@ -109,6 +123,7 @@ export const contentService = {
       episode,
       card,
       isTVdevice,
+      includeWatchHistory,
     });
 
     // Use regular get method - React Query will handle caching
@@ -123,7 +138,15 @@ export const contentService = {
   getTVMediaDetails: async (
     params: Omit<MediaParams, "isTVdevice">,
   ): Promise<TVDeviceMediaResponse> => {
-    const { mediaType, mediaTitle, mediaId, season, episode, card } = params;
+    const {
+      mediaType,
+      mediaTitle,
+      mediaId,
+      season,
+      episode,
+      card,
+      includeWatchHistory,
+    } = params;
 
     const queryParams = buildQueryParams({
       mediaType,
@@ -133,6 +156,7 @@ export const contentService = {
       episode,
       card,
       isTVdevice: true,
+      includeWatchHistory,
     });
 
     // Use regular get method - React Query will handle caching
@@ -287,5 +311,14 @@ export const contentService = {
     params: SyncValidationUpdateRequest,
   ): Promise<void> => {
     await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.SYNC_VALIDATION, params);
+  },
+
+  /**
+   * Update playback progress for a video
+   */
+  updatePlaybackProgress: async (
+    data: PlaybackUpdateRequest,
+  ): Promise<void> => {
+    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.UPDATE_PLAYBACK, data);
   },
 };

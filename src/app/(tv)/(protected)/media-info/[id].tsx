@@ -1,5 +1,5 @@
 import { Image, ImageBackground } from "expo-image";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
   useState,
@@ -22,6 +22,7 @@ import EpisodesSkeleton from "@/src/components/TV/MediaInfo/EpisodesSkeleton";
 import ExpandableOverview from "@/src/components/TV/MediaInfo/ExpandableOverview";
 import MediaInfoSkeleton from "@/src/components/TV/MediaInfo/MediaInfoSkeleton";
 import SeasonPicker from "@/src/components/TV/MediaInfo/SeasonPicker";
+import WatchProgressBar from "@/src/components/TV/MediaInfo/WatchProgressBar";
 import { Colors } from "@/src/constants/Colors";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import {
@@ -78,7 +79,40 @@ export default function MediaInfoPage() {
     params.type === "movie" ? movieData.isLoading : tvData.isLoading;
   const isLoadingEpisodes =
     params.type === "movie" ? false : tvData.isLoadingEpisodes;
+  const isRefreshing =
+    params.type === "movie" ? movieData.isRefreshing : tvData.isRefreshing;
   const error = params.type === "movie" ? movieData.error : tvData.error;
+
+  // Debounce refresh to prevent excessive API calls
+  const lastRefreshRef = useRef<number>(0);
+  const REFRESH_DEBOUNCE_MS = 5000; // Only allow refresh every 5 seconds
+
+  // Refresh data when screen comes into focus, but debounced
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      const timeSinceLastRefresh = now - lastRefreshRef.current;
+
+      // Only refresh if enough time has passed and we have data
+      if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
+        if (params.type === "movie" && movieData.data && movieData.refetch) {
+          console.log("[MediaInfo] Refreshing movie data (debounced)");
+          lastRefreshRef.current = now;
+          movieData.refetch();
+        } else if (params.type === "tv" && tvData.data && tvData.refetch) {
+          console.log("[MediaInfo] Refreshing TV data (debounced)");
+          lastRefreshRef.current = now;
+          tvData.refetch();
+        }
+      }
+    }, [
+      params.type,
+      movieData.data,
+      movieData.refetch,
+      tvData.data,
+      tvData.refetch,
+    ]),
+  );
 
   const handlePlayEpisode = useCallback(
     (episode: TVDeviceEpisode) => {
@@ -257,9 +291,16 @@ export default function MediaInfoPage() {
 
           {/* Right Column - Episodes List */}
           <View style={styles.rightColumn}>
-            <Text style={styles.episodesTitle}>
-              Season {selectedSeason} Episodes
-            </Text>
+            <View style={styles.episodesTitleContainer}>
+              <Text style={styles.episodesTitle}>
+                Season {selectedSeason} Episodes
+              </Text>
+              {isRefreshing && (
+                <View style={styles.refreshIndicator}>
+                  <Text style={styles.refreshText}>Updating...</Text>
+                </View>
+              )}
+            </View>
             <TVFocusGuideView
               autoFocus
               trapFocusUp
@@ -329,6 +370,19 @@ export default function MediaInfoPage() {
               <View style={styles.ratingBox}>
                 <Text style={styles.ratingBoxText}>R</Text>
               </View>
+            </View>
+
+            {/* Watch Progress Bar */}
+            <View style={styles.watchProgressContainer}>
+              <WatchProgressBar
+                watchHistory={mediaInfo.watchHistory}
+                duration={mediaInfo?.duration}
+              />
+              {isRefreshing && (
+                <View style={styles.refreshIndicator}>
+                  <Text style={styles.refreshText}>Updating...</Text>
+                </View>
+              )}
             </View>
 
             {/* Overview */}
@@ -466,11 +520,16 @@ const styles = StyleSheet.create({
   },
 
   // Right column styles
+  episodesTitleContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
   episodesTitle: {
     color: Colors.dark.whiteText,
     fontSize: 24,
     fontWeight: "bold",
-    marginBottom: 20,
   },
 
   // Movie layout styles
@@ -504,5 +563,22 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 18,
     fontWeight: "bold",
+  },
+  watchProgressContainer: {
+    position: "relative",
+  },
+  refreshIndicator: {
+    position: "absolute",
+    top: -20,
+    right: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  refreshText: {
+    color: "#CCCCCC",
+    fontSize: 12,
+    fontStyle: "italic",
   },
 });

@@ -1,7 +1,7 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, useVideoPlayer, VideoView } from "expo-video";
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { View, StyleSheet, Text, BackHandler, Pressable } from "react-native";
 
 import StandaloneVideoControls from "@/src/components/Video/StandaloneVideoControls";
@@ -11,7 +11,10 @@ import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { setWatchMode, tvQueryHelpers } from "@/src/data/query/queryClient";
-import { contentService } from "@/src/data/services/contentService";
+import {
+  contentService,
+  PlaybackUpdateRequest,
+} from "@/src/data/services/contentService";
 import { MediaDetailsResponse } from "@/src/data/types/content.types";
 
 function parseNumericParam(value: string | undefined): number | undefined {
@@ -48,6 +51,8 @@ function useContentLoader(params: {
           // Parse season and episode as numbers directly from route params
           season: parseNumericParam(params.season),
           episode: parseNumericParam(params.episode),
+          // Include watch history for resume functionality
+          includeWatchHistory: true,
         });
 
         if (!cancelled) {
@@ -76,6 +81,278 @@ function useContentLoader(params: {
     loading,
     contentError,
   };
+}
+
+// Custom hook for playback tracking with improved memory leak prevention
+function usePlaybackTracking(
+  player: any,
+  videoData: MediaDetailsResponse | null,
+  videoURL: string | null,
+  params: {
+    id: string;
+    type: "tv" | "movie";
+    season?: string;
+    episode?: string;
+  },
+) {
+  const lastUpdateTimeRef = useRef<number>(0);
+  const updateIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const listenersRef = useRef<{ remove: () => void }[]>([]);
+  const isMountedRef = useRef(true);
+  const pendingUpdateRef = useRef<Promise<void> | null>(null);
+
+  // Helper function to check if player is still valid
+  const isPlayerValid = useCallback((player: any): boolean => {
+    if (!player) return false;
+
+    try {
+      // Try to access a property to check if the native object is still valid
+      const _ = player.currentTime;
+      return true;
+    } catch (error) {
+      // If accessing the property throws, the native object has been released
+      return false;
+    }
+  }, []);
+
+  const sendPlaybackUpdate = useCallback(
+    async (currentTime: number) => {
+      if (
+        !isMountedRef.current ||
+        !videoData ||
+        !videoURL ||
+        currentTime <= 0
+      ) {
+        return;
+      }
+
+      try {
+        const playbackData: PlaybackUpdateRequest = {
+          videoId: videoURL,
+          playbackTime: currentTime,
+          mediaMetadata: {
+            mediaType: videoData.type || params.type,
+            mediaId: videoData.id || params.id,
+            ...(params.type === "tv" && {
+              showId: params.id,
+              seasonNumber:
+                videoData.seasonNumber || parseNumericParam(params.season),
+              episodeNumber:
+                videoData.episodeNumber || parseNumericParam(params.episode),
+            }),
+          },
+        };
+
+        console.log(
+          `[PlaybackTracking] Sending update for ${playbackData.mediaMetadata.mediaType} ${playbackData.mediaMetadata.mediaId} at ${currentTime}s`,
+        );
+
+        // Store the promise to handle cleanup
+        const updatePromise =
+          contentService.updatePlaybackProgress(playbackData);
+        pendingUpdateRef.current = updatePromise;
+
+        await updatePromise;
+
+        // Clear the pending update if it's still the same one
+        if (pendingUpdateRef.current === updatePromise) {
+          pendingUpdateRef.current = null;
+        }
+
+        if (isMountedRef.current) {
+          console.log(`[PlaybackTracking] Updated progress: ${currentTime}s`);
+        }
+      } catch (error) {
+        if (isMountedRef.current) {
+          console.error("[PlaybackTracking] Failed to update progress:", error);
+        }
+      }
+    },
+    [videoData, videoURL, params],
+  );
+
+  // Cleanup function to remove all listeners
+  const cleanupListeners = useCallback(() => {
+    listenersRef.current.forEach((listener) => {
+      try {
+        listener.remove();
+      } catch (error) {
+        console.error("[PlaybackTracking] Error removing listener:", error);
+      }
+    });
+    listenersRef.current = [];
+  }, []);
+
+  // Cleanup function to clear interval
+  const cleanupInterval = useCallback(() => {
+    if (updateIntervalRef.current) {
+      clearInterval(updateIntervalRef.current);
+      updateIntervalRef.current = null;
+    }
+  }, []);
+
+  // Main effect for setting up tracking
+  useEffect(() => {
+    if (!player || !videoURL || !videoData || !isPlayerValid(player)) return;
+
+    isMountedRef.current = true;
+
+    // Clear any existing listeners and intervals
+    cleanupListeners();
+    cleanupInterval();
+
+    let initTimeoutId: NodeJS.Timeout;
+
+    const setupTracking = () => {
+      if (!isMountedRef.current || !player || !isPlayerValid(player)) return;
+
+      try {
+        const handleTimeUpdate = () => {
+          if (!isMountedRef.current || !player || !isPlayerValid(player))
+            return;
+
+          try {
+            const currentTime = player.currentTime;
+            if (typeof currentTime !== "number") return;
+
+            const timeSinceLastUpdate = currentTime - lastUpdateTimeRef.current;
+
+            // Update if 30 seconds have passed or if there's a significant jump (seeking)
+            if (
+              timeSinceLastUpdate >= 30 ||
+              Math.abs(timeSinceLastUpdate) > 10
+            ) {
+              lastUpdateTimeRef.current = currentTime;
+              sendPlaybackUpdate(currentTime);
+            }
+          } catch (error) {
+            console.error(
+              "[PlaybackTracking] Player released during time update:",
+              error,
+            );
+            // Player has been released, clean up
+            cleanupInterval();
+            cleanupListeners();
+          }
+        };
+
+        const handlePlayingChange = ({ isPlaying }: { isPlaying: boolean }) => {
+          if (!isMountedRef.current || !player || !isPlayerValid(player))
+            return;
+
+          try {
+            if (!isPlaying) {
+              const currentTime = player.currentTime;
+              if (typeof currentTime === "number" && currentTime > 0) {
+                lastUpdateTimeRef.current = currentTime;
+                sendPlaybackUpdate(currentTime);
+              }
+            }
+          } catch (error) {
+            console.error(
+              "[PlaybackTracking] Player released during playing change:",
+              error,
+            );
+            // Player has been released, clean up
+            cleanupInterval();
+            cleanupListeners();
+          }
+        };
+
+        // Set up periodic updates
+        updateIntervalRef.current = setInterval(() => {
+          if (!isMountedRef.current || !player || !isPlayerValid(player)) {
+            cleanupInterval();
+            return;
+          }
+
+          try {
+            const isPlaying = player.playing;
+            if (isPlaying) {
+              handleTimeUpdate();
+            }
+          } catch (error) {
+            console.error(
+              "[PlaybackTracking] Player released during interval update:",
+              error,
+            );
+            // Player has been released, clean up immediately
+            cleanupInterval();
+            cleanupListeners();
+          }
+        }, 30000);
+
+        // Set up event listeners
+        try {
+          const timeUpdateListener = player.addListener(
+            "timeUpdate",
+            handleTimeUpdate,
+          );
+          const playingChangeListener = player.addListener(
+            "playingChange",
+            handlePlayingChange,
+          );
+
+          // Store listeners for cleanup
+          listenersRef.current.push(timeUpdateListener, playingChangeListener);
+        } catch (error) {
+          console.error(
+            "[PlaybackTracking] Error setting up listeners:",
+            error,
+          );
+        }
+      } catch (error) {
+        console.error("[PlaybackTracking] Error in setupTracking:", error);
+      }
+    };
+
+    // Small delay to ensure player is fully initialized
+    initTimeoutId = setTimeout(setupTracking, 100);
+
+    return () => {
+      clearTimeout(initTimeoutId);
+      cleanupListeners();
+      cleanupInterval();
+    };
+  }, [
+    player,
+    videoURL,
+    videoData,
+    sendPlaybackUpdate,
+    cleanupListeners,
+    cleanupInterval,
+    isPlayerValid,
+  ]);
+
+  // Cleanup effect when component unmounts
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+
+      // Clean up everything
+      cleanupListeners();
+      cleanupInterval();
+
+      // Send final update if there's a valid current time
+      try {
+        if (player && isPlayerValid(player)) {
+          const currentTime = player.currentTime;
+          if (typeof currentTime === "number" && currentTime > 0) {
+            // Don't await this - fire and forget on unmount
+            sendPlaybackUpdate(currentTime);
+          }
+        }
+      } catch (error) {
+        console.error("[PlaybackTracking] Error in final update:", error);
+      }
+    };
+  }, [
+    player,
+    sendPlaybackUpdate,
+    cleanupListeners,
+    cleanupInterval,
+    isPlayerValid,
+  ]);
 }
 
 export default function WatchPage() {
@@ -110,11 +387,23 @@ export default function WatchPage() {
     prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
   };
 
-  // Create player
+  // Create player with resume functionality
   const player = useVideoPlayer(videoURL, (p) => {
     p.timeUpdateEventInterval = 1;
     p.loop = false;
     p.bufferOptions = bufferOptions;
+
+    // Check if we have watch history and should resume
+    const watchHistory = videoData?.watchHistory;
+    if (watchHistory && watchHistory.playbackTime > 0) {
+      // Resume from saved position (with a small buffer to account for seeking precision)
+      const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
+      console.log(
+        `[WatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
+      );
+      p.currentTime = resumeTime;
+    }
+
     p.play();
   });
 
@@ -125,6 +414,9 @@ export default function WatchPage() {
     preferredLanguages: ["en"],
     fallbackTimeoutMs: 5000,
   });
+
+  // Enable playback tracking
+  usePlaybackTracking(player, videoData, videoURL, params);
 
   // Combine content and audio errors
   const finalError = contentError || audioError;
@@ -168,10 +460,34 @@ export default function WatchPage() {
   }, [player, setVideoPlayingState]);
 
   const handleExit = useCallback(() => {
+    setVideoPlayingState(false);
     resetActivityTimer();
     setMode("browse");
     router.back();
   }, [resetActivityTimer, setMode, router]);
+
+  const handleInfoPress = useCallback(() => {
+    setVideoPlayingState(false);
+    resetActivityTimer();
+
+    // Use dismissTo to navigate back to the media-info page if it exists in the stack,
+    // or create a new one if it doesn't
+    router.dismissTo({
+      pathname: "/media-info/[id]",
+      params: {
+        id: params.id,
+        type: params.type,
+        ...(params.season && { season: params.season }),
+      },
+    });
+  }, [
+    resetActivityTimer,
+    router,
+    params.id,
+    params.type,
+    params.season,
+    setVideoPlayingState,
+  ]);
 
   // Back handler
   useEffect(() => {
@@ -275,6 +591,7 @@ export default function WatchPage() {
         videoInfo={videoInfo}
         overlayMode
         onExitWatchMode={handleExit}
+        onInfoPress={handleInfoPress}
         showCaptionControls={!!videoInfo?.captionURLs}
       />
     </View>

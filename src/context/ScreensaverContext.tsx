@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import React, {
   createContext,
   useContext,
@@ -70,6 +71,7 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
   // Get state from contexts
   const { currentMode, setMode } = useTVAppState();
   const { isRemoteActive } = useRemoteActivity();
+  const router = useRouter();
 
   // Clear all timers utility
   const clearAllTimers = useCallback(() => {
@@ -151,24 +153,18 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
   const showScreensaver = useCallback(() => {
     if (isScreensaverActive) return;
 
-    console.log("[ScreensaverContext] Activating screensaver");
+    console.log(
+      "[ScreensaverContext] Activating screensaver - navigating to screen",
+    );
     setIsScreensaverActive(true);
 
-    // Set mode to screensaver when activating
-    if (currentMode !== "screensaver") {
-      console.log("[ScreensaverContext] Setting mode to screensaver");
-      setMode("screensaver");
-    }
+    // Navigate to screensaver screen with dangerouslySingular to prevent duplicates
+    router.push("/(tv)/(protected)/screensaver", {
+      dangerouslySingular: true,
+    });
 
     // Load initial content
     loadScreensaverContent();
-
-    // Animate in
-    Animated.timing(opacity, {
-      toValue: 1,
-      duration: 1_000,
-      useNativeDriver: true,
-    }).start();
 
     // Clear existing refresh timers
     if (timersRef.current.refresh) {
@@ -196,34 +192,16 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
 
       timersRef.current.delayedRefresh = null;
     }, SCREENSAVER_REFRESH_INTERVAL);
-  }, [
-    isScreensaverActive,
-    loadScreensaverContent,
-    opacity,
-    currentMode,
-    setMode,
-  ]);
+  }, [isScreensaverActive, loadScreensaverContent, router]);
 
   const hideScreensaver = useCallback(() => {
     if (!isScreensaverActive) return;
 
     console.log("[ScreensaverContext] Deactivating screensaver");
 
-    // Return to browse mode when hiding screensaver
-    if (currentMode === "screensaver") {
-      console.log("[ScreensaverContext] Returning to browse mode");
-      setMode("browse");
-    }
-
-    // Animate out
-    Animated.timing(opacity, {
-      toValue: 0,
-      duration: 1_000,
-      useNativeDriver: true,
-    }).start(() => {
-      setIsScreensaverActive(false);
-      setScreensaverContent(null); // Clear content when hidden
-    });
+    // Set state to inactive
+    setIsScreensaverActive(false);
+    setScreensaverContent(null); // Clear content when hidden
 
     // Stop refresh timers
     if (timersRef.current.refresh) {
@@ -235,7 +213,7 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
       clearTimeout(timersRef.current.delayedRefresh);
       timersRef.current.delayedRefresh = null;
     }
-  }, [isScreensaverActive, opacity, currentMode, setMode]);
+  }, [isScreensaverActive]);
 
   // Optimized video playing state setter
   const setVideoPlayingState = useCallback(
@@ -289,21 +267,30 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
       timerRefs.screensaver = null;
     }
 
-    // Clear refresh interval if user becomes active
-    if (isUserActive && timerRefs.refresh) {
+    // Only clear refresh interval if user becomes active AND we're not in screensaver mode
+    // This allows content refresh to continue during screensaver interaction
+    if (isUserActive && timerRefs.refresh && currentMode !== "screensaver") {
       console.log(
-        "[ScreensaverContext] Clearing content refresh due to user activity",
+        "[ScreensaverContext] Clearing content refresh due to user activity outside screensaver",
       );
       clearInterval(timerRefs.refresh);
       timerRefs.refresh = null;
     }
 
     if (isUserActive) {
-      // Activity detected - hide screensaver immediately
-      console.log(
-        "[ScreensaverContext] User activity detected, hiding screensaver",
-      );
-      hideScreensaver();
+      // Only hide screensaver if we're not currently in screensaver mode
+      // This allows navigation within the screensaver screen
+      if (currentMode !== "screensaver") {
+        // Activity detected - hide screensaver immediately
+        console.log(
+          "[ScreensaverContext] User activity detected, hiding screensaver",
+        );
+        hideScreensaver();
+      } else {
+        console.log(
+          "[ScreensaverContext] User activity detected but in screensaver mode, allowing interaction while keeping refresh active",
+        );
+      }
     } else if (!isScreensaverActive) {
       // No activity and screensaver not active - set timeout
       console.log(

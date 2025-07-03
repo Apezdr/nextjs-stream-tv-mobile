@@ -2,13 +2,9 @@
 import { Redirect, Stack } from "expo-router";
 import { View, StyleSheet } from "react-native";
 
-import { Screensaver } from "@/src/components/TV/Screensaver";
 import { ServerStatusNotification } from "@/src/components/TV/ServerStatusNotification";
 import { RemoteActivityProvider } from "@/src/context/RemoteActivityContext";
-import {
-  ScreensaverProvider,
-  ScreensaverErrorBoundary,
-} from "@/src/context/ScreensaverContext";
+import { ScreensaverProvider } from "@/src/context/ScreensaverContext";
 import {
   TVAppStateProvider,
   useTVAppState,
@@ -30,6 +26,16 @@ function TVContent() {
       }}
     >
       <Stack.Screen name="(protected)/index" />
+      <Stack.Screen
+        name="(protected)/screensaver"
+        dangerouslySingular={true}
+        options={{
+          headerShown: false,
+          gestureEnabled: false,
+          animation: "fade",
+          presentation: "fullScreenModal",
+        }}
+      />
     </Stack>
   );
 }
@@ -56,9 +62,6 @@ export default function TVLayout() {
         <ScreensaverProvider>
           <View style={styles.container}>
             <TVContent />
-            <ScreensaverErrorBoundary fallback={null}>
-              <Screensaver />
-            </ScreensaverErrorBoundary>
             <ServerStatusNotification />
           </View>
         </ScreensaverProvider>

@@ -1,6 +1,6 @@
 import { Slot, useFocusEffect } from "expo-router";
 import React, { useEffect, useState, useCallback } from "react";
-import { View, StyleSheet, TVFocusGuideView } from "react-native";
+import { View, StyleSheet } from "react-native";
 
 import { TVSidebar } from "@/src/components/TV/Navigation";
 import { useTVAppState } from "@/src/context/TVAppStateContext";

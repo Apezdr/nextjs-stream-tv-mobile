@@ -620,6 +620,7 @@ export function useTVMediaDetails(
           mediaId: params.mediaId,
           season: params.season,
           episode: params.episode,
+          includeWatchHistory: true,
         });
 
         // Cache the static data and navigation
@@ -673,6 +674,7 @@ export function useTVMediaDetails(
           mediaId: params.mediaId,
           season: targetSeason,
           episode: params.episode,
+          includeWatchHistory: true,
         });
 
         // Merge cached static data with fresh metadata, episodes, and season-specific data
@@ -889,6 +891,7 @@ export function useMovieDetails(
           mediaType: mediaType,
           mediaId: mediaId,
           // Explicitly exclude season/episode for movies
+          includeWatchHistory: true,
         });
 
         setData(result);

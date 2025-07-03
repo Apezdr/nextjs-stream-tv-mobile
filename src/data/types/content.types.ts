@@ -2,6 +2,14 @@
  * Type definitions for content based on the actual API structure
  */
 
+// Watch history data structure
+export interface WatchHistory {
+  playbackTime: number;
+  lastWatched: string;
+  isWatched: boolean;
+  normalizedVideoId: string;
+}
+
 // Core media item as returned by the API
 export interface MediaItem {
   id: string;
@@ -18,6 +26,7 @@ export interface MediaItem {
   logo?: string; // Logo URL (typically for TV shows)
   episodeNumber?: number; // For TV shows
   seasonNumber?: number; // For TV shows
+  watchHistory?: WatchHistory; // Optional watch history data
 }
 
 // Response from horizontal-list endpoint
@@ -40,6 +49,7 @@ export interface HorizontalListParams {
   sortOrder?: "asc" | "desc";
   page?: number;
   limit?: number;
+  includeWatchHistory?: boolean; // Optional parameter to include watch history
 }
 
 // Episode picker response structure
@@ -66,6 +76,7 @@ export interface TVDeviceEpisode {
   videoURL: string;
   hdr: string;
   dimensions: string;
+  watchHistory?: WatchHistory; // Optional watch history data for episodes
 }
 
 export interface TVDeviceMetadata {
@@ -104,6 +115,8 @@ export interface TVDeviceMediaResponse {
   episodes: TVDeviceEpisode[];
   navigation: TVDeviceNavigation;
   airDate?: string; // Air date for TV shows
+  duration?: number; // Duration in seconds (for movies or episodes)
+  watchHistory?: WatchHistory; // Optional watch history data
 }
 
 // Media details response (from /media endpoint)
@@ -124,6 +137,7 @@ export interface MediaDetailsResponse {
   seasonNumber?: number; // For TV shows
   lastWatchedDate?: string; // When the content was last watched
   overview: string; // Overview of the content
+  watchHistory?: WatchHistory; // Optional watch history data
   metadata?: {
     overview?: string; // Overview of the content
     rating?: string; // Content rating (e.g., "PG-13")
@@ -173,6 +187,7 @@ export interface MediaParams {
   episode?: number;
   card?: boolean;
   isTVdevice?: boolean; // New parameter for enhanced TV responses
+  includeWatchHistory?: boolean; // Optional parameter to include watch history
 }
 
 // Content count response
@@ -279,6 +294,8 @@ export interface AnimationPlacement {
 
 // Screensaver response
 export interface ScreensaverResponse {
+  _id: string; // Always available unique identifier
+  type: "movie" | "tv"; // Always available content type
   title: string;
   logo?: string;
   backdrop: string;
