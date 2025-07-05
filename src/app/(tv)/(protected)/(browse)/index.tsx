@@ -1,4 +1,4 @@
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
@@ -29,6 +29,7 @@ import { MediaItem } from "@/src/data/types/content.types";
 export default function TVHomePage() {
   const { currentMode, setMode } = useTVAppState();
   const router = useRouter();
+  const isFocused = useIsFocused();
 
   // State for tracking sidebar state changes via custom events
   const [sidebarState, setSidebarState] = useState<
@@ -108,6 +109,14 @@ export default function TVHomePage() {
   // Focus-aware background prefetching optimization and data refresh
   useFocusEffect(
     useCallback(() => {
+      // Only execute refresh and prefetch operations if screen is actually focused
+      if (!isFocused) {
+        console.log(
+          "[TVHomePage] Screen not focused - skipping refresh and prefetch operations",
+        );
+        return;
+      }
+
       console.log(
         "[TVHomePage] Screen focused - optimizing background loading and refreshing data",
       );
@@ -144,6 +153,14 @@ export default function TVHomePage() {
       const backgroundLoadTask = InteractionManager.runAfterInteractions(() => {
         // Delay background loading to not interfere with initial render and navigation
         setTimeout(() => {
+          // Double-check focus state before prefetching
+          if (!isFocused) {
+            console.log(
+              "[TVHomePage] Screen lost focus during prefetch delay - canceling prefetch",
+            );
+            return;
+          }
+
           console.log(
             "[TVHomePage] Starting focus-aware background prefetching",
           );
@@ -180,6 +197,7 @@ export default function TVHomePage() {
         backgroundLoadTask.cancel();
       };
     }, [
+      isFocused,
       recentlyWatched.data,
       recentlyWatched.refetch,
       recentlyWatched.prefetchBulk,
@@ -210,6 +228,14 @@ export default function TVHomePage() {
 
     const startPeriodicRefresh = () => {
       intervalId = setInterval(() => {
+        // Only refresh if screen is currently focused
+        if (!isFocused) {
+          console.log(
+            "[TVHomePage] Periodic refresh skipped - screen not focused",
+          );
+          return;
+        }
+
         const now = Date.now();
         const timeSinceLastRefresh = now - lastRefreshRef.current;
 
@@ -235,16 +261,25 @@ export default function TVHomePage() {
       }, PERIODIC_REFRESH_INTERVAL);
     };
 
-    // Start periodic refresh
-    startPeriodicRefresh();
+    // Only start periodic refresh if screen is focused
+    if (isFocused) {
+      console.log("[TVHomePage] Starting periodic refresh - screen is focused");
+      startPeriodicRefresh();
+    } else {
+      console.log(
+        "[TVHomePage] Skipping periodic refresh - screen not focused",
+      );
+    }
 
-    // Cleanup interval on unmount
+    // Cleanup interval on unmount or focus change
     return () => {
       if (intervalId) {
+        console.log("[TVHomePage] Clearing periodic refresh interval");
         clearInterval(intervalId);
       }
     };
   }, [
+    isFocused,
     recentlyWatched.data,
     recentlyWatched.refetch,
     recentlyAdded.data,
