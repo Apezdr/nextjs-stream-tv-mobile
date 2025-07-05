@@ -21,10 +21,12 @@ import CaptionControls, {
   SubtitleBackgroundOption,
   SUBTITLE_BACKGROUND_OPTIONS,
 } from "./CaptionControls";
+import EpisodeCarousel from "./EpisodeCarousel";
 import SeekBar from "./SeekBar";
 import SubtitlePlayer from "./SubtitlePlayer";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
+import { TVDeviceEpisode } from "@/src/data/types/content.types";
 
 interface StandaloneVideoControlsProps {
   player: VideoPlayer; // expo-video player instance
@@ -61,6 +63,11 @@ interface StandaloneVideoControlsProps {
   onAudioTrackSelect?: (trackId: string) => void;
   audioTracks?: Array<{ id: string; label: string }>;
   selectedAudioTrack?: string;
+  // New props for episode carousel
+  episodes?: TVDeviceEpisode[];
+  currentEpisodeNumber?: number;
+  onEpisodeSelect?: (episode: TVDeviceEpisode) => void;
+  isLoadingEpisodes?: boolean;
 }
 
 // Self-contained video controls that get time data directly from player
@@ -82,6 +89,10 @@ const StandaloneVideoControls = memo(
     // onAudioTrackSelect,
     // audioTracks,
     // selectedAudioTrack,
+    episodes,
+    currentEpisodeNumber,
+    onEpisodeSelect,
+    isLoadingEpisodes = false,
   }: StandaloneVideoControlsProps) => {
     // Get enhanced remote activity state from context
     const {
@@ -231,7 +242,7 @@ const StandaloneVideoControls = memo(
       : styles.controls;
 
     return (
-      <TVFocusGuideView autoFocus style={styles.flex1}>
+      <View style={styles.flex1}>
         <SubtitlePlayer
           currentTime={currentTime}
           captionURLs={videoInfo?.captionURLs}
@@ -240,12 +251,13 @@ const StandaloneVideoControls = memo(
           selectedSubtitleBackground={selectedSubtitleBackground}
         />
         <Animated.View style={[controlsContainerStyle, { opacity: fadeAnim }]}>
-          {/* 1. Top Section */}
-          <View style={styles.topSection}>
-            <View style={styles.topLeftSection}>
-              {customButtons}
-              {onExitWatchMode && (
-                <TVFocusGuideView trapFocusLeft>
+          {/* Main Focus Guide for all controls */}
+          <TVFocusGuideView autoFocus style={styles.mainControlsContainer}>
+            {/* 1. Top Section */}
+            <View style={styles.topSection}>
+              <View style={styles.topLeftSection}>
+                {customButtons}
+                {onExitWatchMode && (
                   <Pressable
                     style={({ focused, pressed }) => [
                       styles.controlButton,
@@ -257,10 +269,8 @@ const StandaloneVideoControls = memo(
                   >
                     <Text style={styles.controlButtonText}>← Back</Text>
                   </Pressable>
-                </TVFocusGuideView>
-              )}
-              {onInfoPress && (
-                <TVFocusGuideView>
+                )}
+                {onInfoPress && (
                   <Pressable
                     style={({ focused, pressed }) => [
                       styles.controlButton,
@@ -277,29 +287,28 @@ const StandaloneVideoControls = memo(
                       color="rgba(255, 255, 255, 0.69)"
                     />
                   </Pressable>
-                </TVFocusGuideView>
-              )}
-            </View>
-            <View style={styles.topRightSection}>
-              {/* Future: Content rating, quality indicators, etc. */}
-            </View>
-          </View>
-
-          {/* 2. Middle Section - Primary Controls */}
-          <View style={styles.middleSection}>
-            <View style={styles.logoContainer}>
-              {overlayMode && videoInfo?.logo ? (
-                <Image
-                  source={{ uri: videoInfo.logo }}
-                  style={styles.logo}
-                  priority={"high"}
-                />
-              ) : videoInfo?.showTitle ? (
-                <Text style={styles.videoTitle}>{videoInfo.showTitle}</Text>
-              ) : null}
+                )}
+              </View>
+              <View style={styles.topRightSection}>
+                {/* Future: Content rating, quality indicators, etc. */}
+              </View>
             </View>
 
-            {/* <TVFocusGuideView autoFocus>
+            {/* 2. Middle Section - Primary Controls */}
+            <View style={styles.middleSection}>
+              <View style={styles.logoContainer}>
+                {overlayMode && videoInfo?.logo ? (
+                  <Image
+                    source={{ uri: videoInfo.logo }}
+                    style={styles.logo}
+                    priority={"high"}
+                  />
+                ) : videoInfo?.showTitle ? (
+                  <Text style={styles.videoTitle}>{videoInfo.showTitle}</Text>
+                ) : null}
+              </View>
+
+              {/* <TVFocusGuideView autoFocus>
             <View style={styles.primaryControls}>
               <Pressable 
                 style={({ focused, pressed }) => [
@@ -355,82 +364,76 @@ const StandaloneVideoControls = memo(
               </Pressable>
             </View>
           </TVFocusGuideView> */}
-          </View>
+            </View>
 
-          {/* 3. Bottom Info Section */}
-          <View style={styles.bottomSection}>
-            {overlayMode && videoInfo && (
-              <View style={styles.videoInfoSection}>
-                {videoInfo.type === "tv" ||
-                (videoInfo.type === "movie" && !videoInfo.logo) ? (
-                  <Text style={styles.videoTitle}>{videoInfo.title}</Text>
-                ) : null}
-                {videoInfo.description && (
-                  <Text style={styles.videoDescription}>
-                    {videoInfo.description}
-                  </Text>
+            {/* 3. Bottom Info Section */}
+            <View style={styles.bottomSection}>
+              {overlayMode && videoInfo && (
+                <View style={styles.videoInfoSection}>
+                  {videoInfo.type === "tv" ||
+                  (videoInfo.type === "movie" && !videoInfo.logo) ? (
+                    <Text style={styles.videoTitle}>{videoInfo.title}</Text>
+                  ) : null}
+                  {videoInfo.description && (
+                    <Text style={styles.videoDescription}>
+                      {videoInfo.description}
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              <View style={styles.navigationSection}>
+                {showPrevNext && (
+                  <>
+                    {onPlayPrev && (
+                      <Pressable
+                        style={({ focused, pressed }) => [
+                          styles.controlButton,
+                          focused && styles.controlButtonFocused,
+                          pressed && styles.controlButtonPressed,
+                        ]}
+                        onPress={handleButtonPress(onPlayPrev)}
+                        focusable={true}
+                      >
+                        <Text style={styles.controlButtonText}>Previous</Text>
+                      </Pressable>
+                    )}
+
+                    {onPlayNext && (
+                      <Pressable
+                        style={({ focused, pressed }) => [
+                          styles.controlButton,
+                          focused && styles.controlButtonFocused,
+                          pressed && styles.controlButtonPressed,
+                        ]}
+                        onPress={handleButtonPress(onPlayNext)}
+                        focusable={true}
+                      >
+                        <Text style={styles.controlButtonText}>Next</Text>
+                      </Pressable>
+                    )}
+                  </>
                 )}
               </View>
-            )}
-
-            <View style={styles.navigationSection}>
-              {showPrevNext && (
-                <>
-                  {onPlayPrev && (
-                    <Pressable
-                      style={({ focused, pressed }) => [
-                        styles.controlButton,
-                        focused && styles.controlButtonFocused,
-                        pressed && styles.controlButtonPressed,
-                      ]}
-                      onPress={handleButtonPress(onPlayPrev)}
-                      isTVSelectable
-                    >
-                      <Text style={styles.controlButtonText}>Previous</Text>
-                    </Pressable>
-                  )}
-
-                  {onPlayNext && (
-                    <Pressable
-                      style={({ focused, pressed }) => [
-                        styles.controlButton,
-                        focused && styles.controlButtonFocused,
-                        pressed && styles.controlButtonPressed,
-                      ]}
-                      onPress={handleButtonPress(onPlayNext)}
-                      isTVSelectable
-                    >
-                      <Text style={styles.controlButtonText}>Next</Text>
-                    </Pressable>
-                  )}
-                </>
-              )}
             </View>
-          </View>
 
-          {/* 4. Seek Bar Section */}
-          <View style={styles.seekBarSection}>
-            {duration > 0 && (
-              <>
-                <SeekBar
-                  currentTime={currentTime}
-                  duration={duration}
-                  onSeek={handleSeek}
-                  onSeekBy={handleSeekBy}
-                  onTogglePlay={handleTogglePlay}
-                  isPlaying={isPlaying}
-                  onStartSeeking={startContinuousActivity}
-                  onStopSeeking={stopContinuousActivity}
-                />
-                {/* Caption Controls */}
-                {showCaptionControls && (
-                  <TVFocusGuideView
-                    autoFocus
-                    trapFocusLeft
-                    trapFocusRight
-                    trapFocusDown
-                    focusable={true}
-                  >
+            {/* 4. Seek Bar Section */}
+            <View style={styles.seekBarSection}>
+              {duration > 0 && (
+                <>
+                  <SeekBar
+                    currentTime={currentTime}
+                    duration={duration}
+                    onSeek={handleSeek}
+                    onSeekBy={handleSeekBy}
+                    onTogglePlay={handleTogglePlay}
+                    isPlaying={isPlaying}
+                    onStartSeeking={startContinuousActivity}
+                    onStopSeeking={stopContinuousActivity}
+                  />
+
+                  {/* Caption Controls */}
+                  {showCaptionControls && (
                     <CaptionControls
                       captionURLs={videoInfo?.captionURLs}
                       selectedCaptionLanguage={selectedCaptionLanguage}
@@ -440,14 +443,37 @@ const StandaloneVideoControls = memo(
                       selectedSubtitleBackground={selectedSubtitleBackground}
                       onSubtitleBackgroundChange={setSelectedSubtitleBackground}
                       onActivityReset={resetActivityTimer}
+                      shouldAllowFocusDown={
+                        videoInfo?.type !== "tv" &&
+                        (!episodes || episodes.length === 0)
+                      } // Allow focus to move down to the next control
                     />
-                  </TVFocusGuideView>
-                )}
-              </>
-            )}
-          </View>
+                  )}
+
+                  {/* 5. Episode Carousel Section - Part of main focus flow */}
+                  {videoInfo?.type === "tv" &&
+                    episodes &&
+                    episodes.length > 0 && (
+                      <View style={styles.episodeCarouselInFlow}>
+                        <EpisodeCarousel
+                          episodes={episodes}
+                          currentEpisodeNumber={currentEpisodeNumber || 1}
+                          onEpisodeSelect={(episode) => {
+                            resetActivityTimer();
+                            if (onEpisodeSelect) {
+                              onEpisodeSelect(episode);
+                            }
+                          }}
+                          isLoading={isLoadingEpisodes}
+                        />
+                      </View>
+                    )}
+                </>
+              )}
+            </View>
+          </TVFocusGuideView>
         </Animated.View>
-      </TVFocusGuideView>
+      </View>
     );
   },
 );
@@ -493,6 +519,17 @@ const styles = StyleSheet.create({
     width: "100%",
   },
 
+  episodeCarouselInFlow: {
+    width: "100%",
+  },
+
+  episodeCarouselSection: {
+    bottom: -115,
+    left: 0,
+    position: "absolute",
+    width: "100%",
+  },
+
   flex1: {
     flex: 1,
   },
@@ -518,6 +555,11 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: "27%",
     width: 200,
+  },
+
+  mainControlsContainer: {
+    flex: 1,
+    width: "100%",
   },
 
   middleSection: {

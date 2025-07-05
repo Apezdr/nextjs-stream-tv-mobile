@@ -1,7 +1,14 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, useVideoPlayer, VideoView } from "expo-video";
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import {
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+  useTransition,
+} from "react";
 import { View, StyleSheet, Text, BackHandler, Pressable } from "react-native";
 
 import StandaloneVideoControls from "@/src/components/Video/StandaloneVideoControls";
@@ -15,7 +22,10 @@ import {
   contentService,
   PlaybackUpdateRequest,
 } from "@/src/data/services/contentService";
-import { MediaDetailsResponse } from "@/src/data/types/content.types";
+import {
+  MediaDetailsResponse,
+  TVDeviceEpisode,
+} from "@/src/data/types/content.types";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -373,6 +383,18 @@ export default function WatchPage() {
   const { videoURL, videoData, loading, contentError } =
     useContentLoader(params);
 
+  // Episode carousel state and management
+  const [episodes, setEpisodes] = useState<TVDeviceEpisode[]>([]);
+  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  const episodeRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Current episode and season from params
+  const currentEpisodeNumber = params.episode
+    ? parseInt(params.episode, 10)
+    : undefined;
+  const currentSeasonNumber = params.season ? parseInt(params.season, 10) : 1;
+
   // Buffer Options
   const bufferOptions: BufferOptions = {
     // Conservative forward buffer - balance smoothness vs memory
@@ -417,6 +439,91 @@ export default function WatchPage() {
 
   // Enable playback tracking
   usePlaybackTracking(player, videoData, videoURL, params);
+
+  // Function to fetch episode data using the preferred API pattern
+  const fetchEpisodeData = useCallback(async () => {
+    if (params.type !== "tv" || !params.id) return;
+
+    try {
+      setIsLoadingEpisodes(true);
+
+      console.log(
+        "[WatchPage] Fetching episode data for season",
+        currentSeasonNumber,
+      );
+      const result = await contentService.getTVMediaDetails({
+        mediaType: params.type,
+        mediaId: params.id,
+        season: currentSeasonNumber,
+        includeWatchHistory: true,
+      });
+
+      if (result && result.episodes) {
+        console.log("[WatchPage] Loaded", result.episodes.length, "episodes");
+        setEpisodes(result.episodes);
+      }
+    } catch (error) {
+      console.error("[WatchPage] Error fetching episode data:", error);
+    } finally {
+      setIsLoadingEpisodes(false);
+    }
+  }, [params.type, params.id, currentSeasonNumber]);
+
+  // Lazily fetch episode data after the video starts playing
+  useEffect(() => {
+    if (videoURL && player && params.type === "tv") {
+      // Start a transition to avoid blocking the main thread
+      startTransition(() => {
+        console.log("[WatchPage] Lazily fetching episode data");
+        fetchEpisodeData();
+      });
+    }
+  }, [videoURL, player, params.type, fetchEpisodeData]);
+
+  // Periodically refresh episode data while playing (every 5 minutes)
+  useEffect(() => {
+    if (params.type !== "tv" || !videoURL || !player) return;
+
+    // Set up a refresh interval
+    episodeRefreshTimerRef.current = setInterval(
+      () => {
+        // Use transition to avoid interfering with playback
+        startTransition(() => {
+          console.log("[WatchPage] Refreshing episode data");
+          fetchEpisodeData();
+        });
+      },
+      5 * 60 * 1000,
+    ); // Every 5 minutes
+
+    return () => {
+      if (episodeRefreshTimerRef.current) {
+        clearInterval(episodeRefreshTimerRef.current);
+        episodeRefreshTimerRef.current = null;
+      }
+    };
+  }, [params.type, videoURL, player, fetchEpisodeData]);
+
+  // Handle episode selection
+  const handleEpisodeSelect = useCallback(
+    (episode: TVDeviceEpisode) => {
+      if (!params.id || !params.type || params.type !== "tv") return;
+
+      console.log("[WatchPage] Switching to episode", episode.episodeNumber);
+
+      // Navigate to the selected episode
+      router.replace({
+        pathname: "/watch/[id]",
+        params: {
+          id: params.id,
+          type: params.type,
+          season: currentSeasonNumber.toString(),
+          episode: episode.episodeNumber.toString(),
+        },
+      });
+    },
+    [params.id, params.type, currentSeasonNumber, router],
+  );
 
   // Combine content and audio errors
   const finalError = contentError || audioError;
@@ -593,6 +700,10 @@ export default function WatchPage() {
         onExitWatchMode={handleExit}
         onInfoPress={handleInfoPress}
         showCaptionControls={!!videoInfo?.captionURLs}
+        episodes={params.type === "tv" ? episodes : undefined}
+        currentEpisodeNumber={currentEpisodeNumber}
+        onEpisodeSelect={handleEpisodeSelect}
+        isLoadingEpisodes={isLoadingEpisodes || isPending}
       />
     </View>
   );

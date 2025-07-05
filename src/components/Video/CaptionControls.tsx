@@ -65,6 +65,7 @@ interface CaptionControlsProps {
   selectedSubtitleBackground?: SubtitleBackgroundOption;
   onSubtitleBackgroundChange?: (background: SubtitleBackgroundOption) => void;
   onActivityReset?: () => void;
+  shouldAllowFocusDown?: boolean; // Whether to allow focus to move down to the next control
 }
 
 // Predefined accessibility-focused subtitle styles
@@ -165,6 +166,7 @@ const CaptionControls = memo(
     selectedSubtitleBackground,
     onSubtitleBackgroundChange,
     onActivityReset,
+    shouldAllowFocusDown = false,
   }: CaptionControlsProps) => {
     const [showMoreOptions, setShowMoreOptions] = useState(false);
     const [showStyleSettings, setShowStyleSettings] = useState(false);
@@ -440,7 +442,12 @@ const CaptionControls = memo(
     };
 
     return (
-      <TVFocusGuideView autoFocus trapFocusLeft trapFocusRight trapFocusDown>
+      <TVFocusGuideView
+        autoFocus
+        trapFocusLeft
+        trapFocusRight
+        trapFocusDown={shouldAllowFocusDown}
+      >
         <View style={styles.captionControlsContainer}>
           <View style={styles.captionControls}>
             <View style={styles.primaryButtons}>
