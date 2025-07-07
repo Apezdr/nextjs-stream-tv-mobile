@@ -71,7 +71,7 @@
       "typedRoutes": true
     },
     "newArchEnabled": true,
-    "name": "nextjs-stream-tv-mobile",
+    "name": "NextJS Stream TV",
     "slug": "nextjs-stream-tv-mobile",
     "extra": {
       "router": {
