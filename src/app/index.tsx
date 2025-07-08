@@ -8,13 +8,6 @@ export default function RootIndex() {
   const isTV = Platform.isTV;
   const { user } = useAuth();
 
-  console.log("Root index - Platform.isTV:", isTV);
-  console.log("Root index - EXPO_TV env:", process.env.EXPO_TV);
-  console.log(
-    "JSON.stringify(process.env, null, 2):",
-    JSON.stringify(process.env, null, 2),
-  );
-
   if (!user) {
     return <Redirect href="/login" withAnchor />;
   }

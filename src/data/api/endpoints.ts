@@ -9,6 +9,11 @@ export const API_ENDPOINTS = {
     CHECK_TOKEN: "/api/auth/check-token",
     USER_STATUS: "/api/auth/user-status",
     NATIVE_SIGNIN: (providerId: string) => `/native-signin/${providerId}`,
+    // QR Code Authentication
+    REGISTER_QR_SESSION: "/api/auth/register-qr-session",
+    QR_SESSION_INFO: "/api/auth/qr-session-info",
+    AUTHENTICATE_QR_SESSION: "/api/auth/authenticate-qr-session",
+    CHECK_QR_TOKEN: "/api/auth/check-qr-token",
   },
 
   // Content-related endpoints

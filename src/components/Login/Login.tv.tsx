@@ -15,10 +15,12 @@ import {
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 
+import splashSvg from "@/src/assets/splash.svg";
 import FocusableButton from "@/src/components/basic/TV/Parts/Button";
 import FocusableTextInput from "@/src/components/basic/TV/Parts/Input";
 import SignOutButton from "@/src/components/Login/Buttons/SignOutButton";
 import { Colors } from "@/src/constants/Colors";
+import { QRSessionResponse } from "@/src/data/types/auth.types";
 import { useAuth } from "@/src/providers/AuthProvider";
 
 interface Provider {
@@ -30,13 +32,26 @@ const RECENT_HOSTS_KEY = "recently_used_hosts";
 const MAX_RECENT_HOSTS = 5;
 
 export default function LoginTV() {
-  const { ready, server, setServer, signInWithProvider, user } = useAuth();
+  const {
+    ready,
+    server,
+    setServer,
+    signInWithProvider,
+    signInWithQRCode,
+    pollQRAuthentication,
+    cancelQRAuthentication,
+    user,
+  } = useAuth();
 
   const [host, setHost] = useState("");
   const [stage, setStage] = useState<"enter" | "choose" | "qr">("enter");
   const [loading, setLoading] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [recentlyUsedHosts, setRecentlyUsedHosts] = useState<string[]>([]);
+  // Used for QR code authentication
+  const [qrSessionId, setQrSessionId] = useState<string | null>(null);
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [qrPolling, setQrPolling] = useState(false);
 
   // ── Load recently used hosts from storage
   const loadRecentlyUsedHosts = useCallback(async () => {
@@ -112,6 +127,76 @@ export default function LoginTV() {
         .catch(() => Alert.alert("Error", "Unable to load providers"));
     }
   }, [stage, server]);
+
+  // ── Handle QR code session setup and polling
+  useEffect(() => {
+    const initializeQRSession = async () => {
+      if (!server || !signInWithQRCode) return;
+
+      try {
+        setLoading(true);
+        const response = (await signInWithQRCode()) as QRSessionResponse;
+        setQrSessionId(response.qrSessionId);
+        // Generate QR code URL pointing to mobile web page
+        const qrUrl = `${server}/qr-auth?qrSessionId=${response.qrSessionId}`;
+        setQrCode(qrUrl);
+        setQrPolling(true);
+      } catch (error) {
+        console.error("Failed to initialize QR session:", error);
+        Alert.alert("Error", "Failed to generate QR code");
+        setStage("choose");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const startPolling = async () => {
+      if (!qrSessionId || !pollQRAuthentication) return;
+
+      try {
+        // The AuthProvider handles the polling internally
+        // When authentication completes, the user state will be updated automatically
+        await pollQRAuthentication(qrSessionId);
+        setQrPolling(false);
+      } catch (error) {
+        console.error("QR polling error:", error);
+        Alert.alert("Error", "QR authentication failed");
+        setStage("choose");
+        setQrPolling(false);
+      }
+    };
+
+    if (stage === "qr" && server && !qrSessionId) {
+      initializeQRSession();
+    } else if (stage === "qr" && qrSessionId && qrPolling) {
+      startPolling();
+    }
+
+    // Cleanup when leaving QR stage
+    if (stage !== "qr") {
+      setQrPolling(false);
+    }
+
+    return () => {
+      // No manual cleanup needed since AuthProvider handles polling internally
+    };
+  }, [
+    stage,
+    server,
+    qrSessionId,
+    qrPolling,
+    signInWithQRCode,
+    pollQRAuthentication,
+  ]);
+
+  // ── Reset QR state when leaving QR stage
+  useEffect(() => {
+    if (stage !== "qr") {
+      setQrSessionId(null);
+      setQrCode(null);
+      setQrPolling(false);
+    }
+  }, [stage]);
 
   // ── 1) still loading your rehydration?
   if (!ready) {
@@ -302,18 +387,119 @@ export default function LoginTV() {
 
   // ── 5) QR pairing screen
   if (stage === "qr") {
-    const pairing = {
-      device: "tvos",
-      host,
-      code: Math.random().toString(36).substring(2, 10),
-    };
+    if (loading) {
+      return (
+        <TVFocusGuideView style={styles.container}>
+          <ActivityIndicator style={styles.centered} />
+          <Text style={styles.instructions}>Generating QR code...</Text>
+          <FocusableButton
+            title="Back"
+            onPress={() => setStage("choose")}
+            style={styles.button}
+            textStyle={styles.buttonText}
+            focusedStyle={styles.buttonFocused}
+          />
+        </TVFocusGuideView>
+      );
+    }
+
+    if (!qrCode) {
+      return (
+        <TVFocusGuideView style={styles.container}>
+          <Text style={styles.instructions}>Failed to generate QR code</Text>
+          <FocusableButton
+            title="Try Again"
+            onPress={() => {
+              setQrSessionId(null);
+              setQrCode(null);
+              setQrPolling(false);
+            }}
+            style={styles.button}
+            textStyle={styles.buttonText}
+            focusedStyle={styles.buttonFocused}
+          />
+          <FocusableButton
+            title="Back"
+            onPress={() => setStage("choose")}
+            style={styles.button}
+            textStyle={styles.buttonText}
+            focusedStyle={styles.buttonFocused}
+          />
+        </TVFocusGuideView>
+      );
+    }
+
     return (
       <TVFocusGuideView style={styles.container}>
-        <Text style={styles.instructions}>Scan to login</Text>
-        <QRCode value={JSON.stringify(pairing)} size={200} />
+        <Text style={styles.instructions}>
+          {qrPolling
+            ? "Scan QR code with your mobile device to approve TV sign-in"
+            : "Scan to login"}
+        </Text>
+        <QRCode
+          value={qrCode}
+          size={200}
+          logoSVG={splashSvg}
+          logoSize={40}
+          logoBorderRadius={15}
+          logoColor={"black"}
+        />
+        {qrPolling && (
+          <Text style={styles.pollingText}>Waiting for authentication...</Text>
+        )}
+        <View style={{ marginBottom: 20, marginTop: 10, width: "80%" }}>
+          <Text
+            style={{
+              color: Colors.dark.inputText,
+              fontSize: 16,
+              marginBottom: 6,
+            }}
+          >
+            How to sign in with QR code:
+          </Text>
+          <Text
+            style={{
+              color: Colors.dark.placeholderText,
+              fontSize: 15,
+              marginBottom: 2,
+            }}
+          >
+            1. Open the camera or QR code scanner app on your mobile device.
+          </Text>
+          <Text
+            style={{
+              color: Colors.dark.placeholderText,
+              fontSize: 15,
+              marginBottom: 2,
+            }}
+          >
+            2. Scan the QR code shown on your TV screen.
+          </Text>
+          <Text
+            style={{
+              color: Colors.dark.placeholderText,
+              fontSize: 15,
+              marginBottom: 2,
+            }}
+          >
+            3. This will open the website on your device, where you can complete
+            the sign-in request for this TV.
+          </Text>
+          <Text style={{ color: Colors.dark.placeholderText, fontSize: 15 }}>
+            4. Once approved, you will be signed in automatically.
+          </Text>
+        </View>
         <FocusableButton
           title="Back"
-          onPress={() => setStage("choose")}
+          onPress={() => {
+            // Cancel QR authentication and stop polling in AuthProvider
+            cancelQRAuthentication();
+            // Reset local state
+            setQrSessionId(null);
+            setQrCode(null);
+            setQrPolling(false);
+            setStage("choose");
+          }}
           style={styles.button}
           textStyle={styles.buttonText}
           focusedStyle={styles.buttonFocused}
@@ -445,4 +631,10 @@ const styles = StyleSheet.create({
     width: 250,
   },
   signedInButton: { backgroundColor: Colors.dark.link, marginBottom: 20 },
+  pollingText: {
+    color: Colors.dark.placeholderText,
+    fontSize: 16,
+    marginTop: 15,
+    textAlign: "center",
+  },
 });

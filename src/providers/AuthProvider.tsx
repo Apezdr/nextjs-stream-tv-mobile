@@ -14,8 +14,15 @@ import { AppState, AppStateStatus, Platform } from "react-native";
 import "react-native-get-random-values"; // Required for UUID generation
 import { v4 as uuidv4 } from "uuid";
 
+import { API_ENDPOINTS } from "@/src/data/api/endpoints";
 import { enhancedApiClient } from "@/src/data/api/enhancedClient";
 import { cacheStore } from "@/src/data/cache/cacheStore";
+import type {
+  QRSessionRequest,
+  QRSessionResponse,
+  QRTokenCheckResponse,
+} from "@/src/data/types/auth.types";
+import { getDeviceInfo, getDeviceType } from "@/src/utils/deviceInfo";
 
 type User = {
   id: string;
@@ -35,6 +42,12 @@ interface AuthContextType {
   setServer: (url: string) => Promise<void>;
   /** once server is set, pick a provider id from /api/auth/providers */
   signInWithProvider: (providerId: string) => Promise<void>;
+  /** QR code authentication flow for TV */
+  signInWithQRCode: () => Promise<QRSessionResponse>;
+  /** Poll for QR authentication completion */
+  pollQRAuthentication: (qrSessionId: string) => Promise<void>;
+  /** Cancel QR authentication and stop polling */
+  cancelQRAuthentication: () => void;
   /** full user profile, or null if logged out */
   user: User | null;
   /** logs you out locally (doesn't hit the server) */
@@ -196,18 +209,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => subscription?.remove();
   }, [user, mobileToken]);
 
-  // 5️⃣ Ensure polling stops when user becomes authenticated
+  // 5️⃣ Ensure polling stops when user becomes authenticated (but not during active auth)
   useEffect(() => {
-    // Check if user is authenticated
-    if (user && mobileToken && sessionId) {
+    // Only stop polling if user is fully authenticated AND we're not currently authenticating
+    if (user && mobileToken && sessionId && !isAuthenticating) {
       if (DEBUG_AUTH) {
-        console.log("[Auth] User authenticated, stopping any active polling");
+        console.log(
+          "[Auth] User authenticated and not currently authenticating, stopping any active polling",
+        );
       }
 
       // User is authenticated, make sure polling is stopped
       stopAuthPolling();
     }
-  }, [user, mobileToken, sessionId]);
+  }, [user, mobileToken, sessionId, isAuthenticating]);
 
   // 6️⃣ Configure API client based on authentication state
   useEffect(() => {
@@ -259,7 +274,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       stopStatusChecking();
       stopAuthPolling();
     };
-  });
+  }, []); // Empty dependency array ensures this only runs on mount/unmount
 
   // Helper to persist auth data
   const persist = async (
@@ -745,6 +760,215 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }
 
+  /** QR Code authentication flow for TV */
+  async function signInWithQRCode(): Promise<QRSessionResponse> {
+    if (!server) throw new Error("Must call setServer first");
+
+    try {
+      // Stop any existing polling before starting a new QR session
+      if (DEBUG_AUTH) {
+        console.log(
+          "[Auth] Stopping any existing polling before starting new QR session",
+        );
+      }
+      stopAuthPolling();
+
+      if (DEBUG_AUTH) {
+        console.log("[Auth] Starting QR code authentication flow");
+      }
+
+      // 1) Get the client ID for this device
+      const clientId: string =
+        (await SecureStore.getItemAsync(CLIENT_ID_KEY)) || generateClientId();
+
+      // 2) Register a QR session with the server
+      if (DEBUG_AUTH) {
+        console.log(
+          `[Auth] Registering QR auth session with client ID: ${clientId}`,
+        );
+      }
+
+      // Get device information
+      const deviceInfo = getDeviceInfo();
+      const deviceType = getDeviceType();
+
+      const qrSessionResp = await fetch(
+        `${server}${API_ENDPOINTS.AUTH.REGISTER_QR_SESSION}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientId,
+            deviceType,
+            host: server.replace("https://", "").replace("http://", ""),
+            deviceInfo,
+          } as QRSessionRequest),
+        },
+      );
+
+      if (!qrSessionResp.ok) {
+        throw new Error(
+          `Failed to register QR auth session: ${qrSessionResp.status}`,
+        );
+      }
+
+      const qrSessionData = (await qrSessionResp.json()) as QRSessionResponse;
+
+      if (DEBUG_AUTH) {
+        console.log(
+          `[Auth] Registered QR session ID: ${qrSessionData.qrSessionId}`,
+        );
+        console.log(
+          `[Auth] QR session expires at: ${new Date(qrSessionData.expiresAt).toLocaleString()}`,
+        );
+      }
+
+      return qrSessionData;
+    } catch (error: unknown) {
+      console.error("[Auth] QR session registration error:", error);
+      throw error;
+    }
+  }
+
+  /** Poll for QR authentication completion */
+  async function pollQRAuthentication(qrSessionId: string): Promise<void> {
+    if (!server) throw new Error("Must call setServer first");
+
+    try {
+      // Stop any existing polling before starting new polling
+      if (DEBUG_AUTH) {
+        console.log(
+          "[Auth] Stopping any existing polling before starting new QR polling",
+        );
+      }
+      stopAuthPolling();
+
+      setIsAuthenticating(true);
+
+      if (DEBUG_AUTH) {
+        console.log(
+          `[Auth] Starting QR authentication polling for session: ${qrSessionId}`,
+        );
+      }
+
+      // Begin polling for authentication completion
+      let authCompleted = false;
+
+      authPollInterval.current = setInterval(async () => {
+        if (authCompleted) return;
+
+        try {
+          if (DEBUG_AUTH) {
+            console.log(`[Auth] Polling for QR token status: ${qrSessionId}`);
+          }
+
+          const checkResp = await fetch(
+            `${server}${API_ENDPOINTS.AUTH.CHECK_QR_TOKEN}?qrSessionId=${qrSessionId}`,
+          );
+
+          if (!checkResp.ok) {
+            if (DEBUG_AUTH) {
+              console.error(
+                `[Auth] QR token check failed: ${checkResp.status}`,
+              );
+            }
+            return; // Continue polling
+          }
+
+          const { status, tokens } =
+            (await checkResp.json()) as QRTokenCheckResponse;
+
+          if (DEBUG_AUTH) {
+            console.log(`[Auth] QR token status: ${status}`);
+          }
+
+          if (status === "expired") {
+            authCompleted = true;
+            stopAuthPolling();
+            setIsAuthenticating(false);
+            throw new Error("QR authentication session expired");
+          }
+
+          if (status === "complete" && tokens) {
+            // Immediately stop polling before anything else
+            if (authPollInterval.current) {
+              clearInterval(authPollInterval.current);
+              authPollInterval.current = null;
+            }
+
+            if (authTimeoutTimer.current) {
+              clearTimeout(authTimeoutTimer.current);
+              authTimeoutTimer.current = null;
+            }
+
+            authCompleted = true;
+
+            // Complete the auth flow with the received tokens
+            const {
+              user: u,
+              mobileSessionToken,
+              sessionId: authSessionId,
+            } = tokens;
+
+            if (DEBUG_AUTH) {
+              console.log(
+                `[Auth] QR authentication completed for user: ${u?.name || "unknown"}`,
+              );
+              console.log(
+                `[Auth] Using session ID for API requests: ${authSessionId}`,
+              );
+            }
+
+            // Store the authentication data
+            setUser(u);
+            setMobileToken(mobileSessionToken);
+            setSessionId(authSessionId);
+            await persist(server, u, mobileSessionToken, authSessionId);
+            setIsAuthenticating(false);
+
+            if (DEBUG_AUTH) {
+              console.log(
+                `[Auth] QR authentication complete, navigating to ${Platform.isTV ? "TV" : "Mobile"} view`,
+              );
+            }
+          }
+        } catch (error: unknown) {
+          if (DEBUG_AUTH) {
+            console.error(`[Auth] Error during QR token check:`, error);
+          }
+          // Don't stop polling on transient errors
+        }
+      }, AUTH_POLL_INTERVAL);
+
+      // Set a timeout to stop polling after a reasonable time
+      authTimeoutTimer.current = setTimeout(() => {
+        if (!authCompleted) {
+          if (DEBUG_AUTH) {
+            console.log(
+              `[Auth] QR authentication timed out after ${AUTH_TIMEOUT / 1000}s`,
+            );
+          }
+          stopAuthPolling();
+          setIsAuthenticating(false);
+        }
+      }, AUTH_TIMEOUT);
+    } catch (error: unknown) {
+      console.error("[Auth] QR authentication polling error:", error);
+      stopAuthPolling();
+      setIsAuthenticating(false);
+      throw error;
+    }
+  }
+
+  /** Cancel QR authentication and stop polling */
+  const cancelQRAuthentication = () => {
+    if (DEBUG_AUTH) {
+      console.log("[Auth] Cancelling QR authentication and stopping polling");
+    }
+    stopAuthPolling();
+    setIsAuthenticating(false);
+  };
+
   /**
    * Attempt to refresh the auth token using the current session ID
    * Returns true if token refresh was successful, false otherwise
@@ -896,6 +1120,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
         server,
         setServer,
         signInWithProvider,
+        signInWithQRCode,
+        pollQRAuthentication,
+        cancelQRAuthentication,
         user,
         signOut,
         refreshUserStatus,

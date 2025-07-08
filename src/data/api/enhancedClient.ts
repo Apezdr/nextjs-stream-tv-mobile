@@ -235,11 +235,12 @@ export class EnhancedApiClient {
           setTimeout(() => reject(new Error("Request timeout")), 5000);
         });
 
+        // Use skipAuth option to avoid authentication issues during server status checks
         const requestPromise = this.request<ServerStatusResponse>(
           API_ENDPOINTS.SYSTEM.STATUS,
           "GET",
           undefined,
-          {}, // No signal needed since we're using Promise.race for timeout
+          { skipAuth: true }, // Skip auth for server status checks
         );
 
         const response = await Promise.race([requestPromise, timeoutPromise]);

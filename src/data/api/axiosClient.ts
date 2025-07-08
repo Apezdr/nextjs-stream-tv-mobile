@@ -3,11 +3,7 @@
  * error handling, and retry logic
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios, {
-  AxiosInstance,
-  AxiosError,
-  InternalAxiosRequestConfig,
-} from "axios";
+import axios, { AxiosInstance, AxiosError } from "axios";
 
 // Define common API error response structure
 interface ApiErrorResponse {
@@ -351,13 +347,15 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       }
 
       // Implement retry logic
-      if (RETRY_CONFIG.retryCondition(error) && !originalRequest?._retry) {
-        const retryCount =
-          (originalRequest as InternalAxiosRequestConfig)._retryCount || 0;
+      if (
+        RETRY_CONFIG.retryCondition(error) &&
+        originalRequest &&
+        !originalRequest._retry
+      ) {
+        const retryCount = originalRequest._retryCount || 0;
 
         if (retryCount < RETRY_CONFIG.retries) {
-          (originalRequest as InternalAxiosRequestConfig)._retryCount =
-            retryCount + 1;
+          originalRequest._retryCount = retryCount + 1;
 
           const delay = RETRY_CONFIG.retryDelay(retryCount);
           if (__DEV__) {
@@ -367,9 +365,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
           }
 
           await new Promise((resolve) => setTimeout(resolve, delay));
-          return originalRequest
-            ? client(originalRequest)
-            : Promise.reject(error);
+          return client(originalRequest);
         }
       }
 
