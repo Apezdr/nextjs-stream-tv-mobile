@@ -26,6 +26,7 @@ interface EpisodeCarouselProps {
   currentEpisodeNumber: number;
   onEpisodeSelect: (episode: TVDeviceEpisode) => void;
   isLoading?: boolean;
+  disabled?: boolean;
 }
 
 const EpisodeCarousel = React.memo(
@@ -34,6 +35,7 @@ const EpisodeCarousel = React.memo(
     currentEpisodeNumber,
     onEpisodeSelect,
     isLoading = false,
+    disabled = false,
   }: EpisodeCarouselProps) {
     const scrollViewRef = useRef<ScrollView>(null);
     const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -202,9 +204,11 @@ const EpisodeCarousel = React.memo(
     // Memoized episode selection handler
     const handleEpisodeSelect = useCallback(
       (episode: TVDeviceEpisode) => {
-        onEpisodeSelect(episode);
+        if (!disabled) {
+          onEpisodeSelect(episode);
+        }
       },
-      [onEpisodeSelect],
+      [onEpisodeSelect, disabled],
     );
 
     // Cleanup timeouts on unmount
@@ -370,12 +374,13 @@ const EpisodeCarousel = React.memo(
                         ? currentEpisodeRef
                         : null
                     }
-                    focusable
+                    focusable={!disabled}
                     style={({ focused }) => [
                       styles.episodeItem,
                       episode.episodeNumber === currentEpisodeNumber &&
                         styles.currentEpisode,
-                      focused && styles.episodeItemFocused,
+                      focused && !disabled && styles.episodeItemFocused,
+                      disabled && styles.episodeItemDisabled,
                     ]}
                     onPress={() => handleEpisodeSelect(episode)}
                     onFocus={handleEpisodeFocus}
@@ -518,6 +523,9 @@ const styles = StyleSheet.create({
   episodeItemFocused: {
     backgroundColor: "rgba(255, 255, 255, 0.15)",
     transform: [{ scale: 1.05 }],
+  },
+  episodeItemDisabled: {
+    opacity: 0.5,
   },
   currentEpisode: {
     borderColor: Colors.dark.tint,

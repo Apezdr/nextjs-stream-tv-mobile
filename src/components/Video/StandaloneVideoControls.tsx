@@ -68,6 +68,9 @@ interface StandaloneVideoControlsProps {
   currentEpisodeNumber?: number;
   onEpisodeSelect?: (episode: TVDeviceEpisode) => void;
   isLoadingEpisodes?: boolean;
+  // Enhanced episode switching props
+  isEpisodeSwitching?: boolean;
+  episodeSwitchError?: string | null;
 }
 
 // Self-contained video controls that get time data directly from player
@@ -93,6 +96,8 @@ const StandaloneVideoControls = memo(
     currentEpisodeNumber,
     onEpisodeSelect,
     isLoadingEpisodes = false,
+    isEpisodeSwitching = false,
+    episodeSwitchError = null,
   }: StandaloneVideoControlsProps) => {
     // Get enhanced remote activity state from context
     const {
@@ -136,6 +141,11 @@ const StandaloneVideoControls = memo(
     // Create animated value for opacity
     const fadeAnim = useRef(new Animated.Value(1)).current;
 
+    // Create animated values for loading dots
+    const dotAnim1 = useRef(new Animated.Value(0.4)).current;
+    const dotAnim2 = useRef(new Animated.Value(0.4)).current;
+    const dotAnim3 = useRef(new Animated.Value(0.4)).current;
+
     // Update animation based on remote activity
     useEffect(() => {
       const shouldShow = isRemoteActive || !isPlaying;
@@ -145,6 +155,49 @@ const StandaloneVideoControls = memo(
         useNativeDriver: true,
       }).start();
     }, [isRemoteActive, isPlaying, fadeAnim]);
+
+    // Animate loading dots when episode switching
+    useEffect(() => {
+      if (isEpisodeSwitching) {
+        const createDotAnimation = (
+          animValue: Animated.Value,
+          delay: number,
+        ) => {
+          return Animated.loop(
+            Animated.sequence([
+              Animated.timing(animValue, {
+                toValue: 1,
+                duration: 600,
+                delay,
+                useNativeDriver: true,
+              }),
+              Animated.timing(animValue, {
+                toValue: 0.4,
+                duration: 600,
+                useNativeDriver: true,
+              }),
+            ]),
+          );
+        };
+
+        const animations = [
+          createDotAnimation(dotAnim1, 0),
+          createDotAnimation(dotAnim2, 200),
+          createDotAnimation(dotAnim3, 400),
+        ];
+
+        Animated.parallel(animations).start();
+
+        return () => {
+          animations.forEach((anim) => anim.stop());
+        };
+      } else {
+        // Reset dots to initial state
+        dotAnim1.setValue(0.4);
+        dotAnim2.setValue(0.4);
+        dotAnim3.setValue(0.4);
+      }
+    }, [isEpisodeSwitching, dotAnim1, dotAnim2, dotAnim3]);
 
     // Set up duration tracking when player status changes
     useEffect(() => {
@@ -417,6 +470,28 @@ const StandaloneVideoControls = memo(
               </View>
             </View>
 
+            {/* Episode Switching Indicator */}
+            {isEpisodeSwitching && (
+              <View style={styles.episodeSwitchingIndicator}>
+                <View style={styles.episodeSwitchingContent}>
+                  <Text style={styles.episodeSwitchingText}>
+                    Switching episode...
+                  </Text>
+                  <View style={styles.loadingDots}>
+                    <Animated.View
+                      style={[styles.dot, { opacity: dotAnim1 }]}
+                    />
+                    <Animated.View
+                      style={[styles.dot, { opacity: dotAnim2 }]}
+                    />
+                    <Animated.View
+                      style={[styles.dot, { opacity: dotAnim3 }]}
+                    />
+                  </View>
+                </View>
+              </View>
+            )}
+
             {/* 4. Seek Bar Section */}
             <View style={styles.seekBarSection}>
               {duration > 0 && (
@@ -465,9 +540,32 @@ const StandaloneVideoControls = memo(
                             }
                           }}
                           isLoading={isLoadingEpisodes}
+                          disabled={isEpisodeSwitching}
                         />
                       </View>
                     )}
+
+                  {/* Episode switching error display */}
+                  {episodeSwitchError && (
+                    <View style={styles.errorContainer}>
+                      <Text style={styles.errorText}>
+                        Episode switch failed: {episodeSwitchError}
+                      </Text>
+                      <Pressable
+                        style={({ focused }) => [
+                          styles.retryButton,
+                          focused && styles.retryButtonFocused,
+                        ]}
+                        onPress={() => {
+                          resetActivityTimer();
+                          // Could implement retry logic here if needed
+                        }}
+                        focusable={true}
+                      >
+                        <Text style={styles.retryButtonText}>Dismiss</Text>
+                      </Pressable>
+                    </View>
+                  )}
                 </>
               )}
             </View>
@@ -666,6 +764,76 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.8)",
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 3,
+  },
+
+  errorContainer: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 0, 0, 0.1)",
+    borderColor: "rgba(255, 0, 0, 0.3)",
+    borderRadius: 8,
+    borderWidth: 1,
+    marginHorizontal: 40,
+    marginTop: 10,
+    padding: 15,
+  },
+
+  errorText: {
+    color: "#FF6B6B",
+    fontSize: 14,
+    marginBottom: 10,
+    textAlign: "center",
+  },
+
+  retryButton: {
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 6,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+  },
+
+  retryButtonFocused: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  },
+
+  retryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
+  episodeSwitchingIndicator: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderRadius: 8,
+    marginHorizontal: 40,
+    marginVertical: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+
+  episodeSwitchingContent: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  episodeSwitchingText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+
+  loadingDots: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 4,
+  },
+
+  dot: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 3,
+    height: 6,
+    width: 6,
   },
 });
 

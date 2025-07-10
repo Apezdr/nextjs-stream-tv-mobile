@@ -34,12 +34,15 @@ function parseNumericParam(value: string | undefined): number | undefined {
 }
 
 // Custom hook to handle content loading logic
-function useContentLoader(params: {
-  id: string;
-  type: "tv" | "movie";
-  season?: string;
-  episode?: string;
-}) {
+function useContentLoader(
+  params: {
+    id: string;
+    type: "tv" | "movie";
+    season?: string;
+    episode?: string;
+  },
+  skipLoading = false,
+) {
   const [videoURL, setVideoURL] = useState<string | null>(null);
   const [videoData, setVideoData] = useState<MediaDetailsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,7 +52,7 @@ function useContentLoader(params: {
     let cancelled = false;
 
     (async () => {
-      if (!params.id || !params.type) return;
+      if (!params.id || !params.type || skipLoading) return;
 
       setLoading(true);
       setContentError(null);
@@ -83,7 +86,7 @@ function useContentLoader(params: {
     return () => {
       cancelled = true;
     };
-  }, [params.id, params.type, params.season, params.episode]);
+  }, [params.id, params.type, params.season, params.episode, skipLoading]);
 
   return {
     videoURL,
@@ -378,14 +381,27 @@ export default function WatchPage() {
   const { setMode } = useTVAppState();
   const { resetActivityTimer } = useRemoteActivity();
   const { setVideoPlayingState } = useScreensaver();
+  const [isEpisodeSwitching, setIsEpisodeSwitching] = useState(false);
+  const isEpisodeSwitchingRef = useRef(false);
 
-  // Content loading (abstracted)
-  const { videoURL, videoData, loading, contentError } =
-    useContentLoader(params);
+  // Content loading (abstracted) - skip loading during episode switching
+  // Use ref to ensure we block loading even during React state update timing issues
+  const { videoURL, videoData, loading, contentError } = useContentLoader(
+    params,
+    isEpisodeSwitching || isEpisodeSwitchingRef.current,
+  );
+
+  // Enhanced episode switching state
+  const [currentEpisodeData, setCurrentEpisodeData] =
+    useState<MediaDetailsResponse | null>(null);
+  const [episodeSwitchError, setEpisodeSwitchError] = useState<string | null>(
+    null,
+  );
 
   // Episode carousel state and management
   const [episodes, setEpisodes] = useState<TVDeviceEpisode[]>([]);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
+  const [hasLoadedEpisodesOnce, setHasLoadedEpisodesOnce] = useState(false);
   const [isPending, startTransition] = useTransition();
   const episodeRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -394,6 +410,12 @@ export default function WatchPage() {
     ? parseInt(params.episode, 10)
     : undefined;
   const currentSeasonNumber = params.season ? parseInt(params.season, 10) : 1;
+
+  // Hybrid data resolution - use episode switching data when available
+  const effectiveVideoData = currentEpisodeData || videoData;
+  const effectiveVideoURL = currentEpisodeData?.videoURL || videoURL;
+  const effectiveEpisodeNumber =
+    currentEpisodeData?.episodeNumber || currentEpisodeNumber;
 
   // Buffer Options
   const bufferOptions: BufferOptions = {
@@ -409,14 +431,14 @@ export default function WatchPage() {
     prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
   };
 
-  // Create player with resume functionality
-  const player = useVideoPlayer(videoURL, (p) => {
+  // Create player with resume functionality using effective data
+  const player = useVideoPlayer(effectiveVideoURL, (p) => {
     p.timeUpdateEventInterval = 1;
     p.loop = false;
     p.bufferOptions = bufferOptions;
 
     // Check if we have watch history and should resume
-    const watchHistory = videoData?.watchHistory;
+    const watchHistory = effectiveVideoData?.watchHistory;
     if (watchHistory && watchHistory.playbackTime > 0) {
       // Resume from saved position (with a small buffer to account for seeking precision)
       const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
@@ -429,23 +451,43 @@ export default function WatchPage() {
     p.play();
   });
 
-  // Handle audio‐codec errors and fallback
+  // Handle audio‐codec errors and fallback using effective data
   const audioError = useAudioFallback({
-    videoURL,
+    videoURL: effectiveVideoURL,
     player,
     preferredLanguages: ["en"],
     fallbackTimeoutMs: 5000,
   });
 
-  // Enable playback tracking
-  usePlaybackTracking(player, videoData, videoURL, params);
+  // Enable playback tracking using effective data
+  usePlaybackTracking(player, effectiveVideoData, effectiveVideoURL, params);
 
   // Function to fetch episode data using the preferred API pattern
   const fetchEpisodeData = useCallback(async () => {
     if (params.type !== "tv" || !params.id) return;
 
+    // Don't fetch episode data during episode switching to prevent skeleton flash
+    if (isEpisodeSwitching || isEpisodeSwitchingRef.current) {
+      console.log(
+        "[WatchPage] Skipping episode data fetch during episode switching",
+      );
+      return;
+    }
+
+    // Smart loading state: Only show skeleton for first load when no episodes exist
+    const isFirstLoad = !hasLoadedEpisodesOnce && episodes.length === 0;
+
     try {
-      setIsLoadingEpisodes(true);
+      if (isFirstLoad) {
+        setIsLoadingEpisodes(true);
+        console.log(
+          "[WatchPage] First load - showing skeleton while fetching episode data",
+        );
+      } else {
+        console.log(
+          "[WatchPage] Background refresh - updating episodes silently",
+        );
+      }
 
       console.log(
         "[WatchPage] Fetching episode data for season",
@@ -461,13 +503,31 @@ export default function WatchPage() {
       if (result && result.episodes) {
         console.log("[WatchPage] Loaded", result.episodes.length, "episodes");
         setEpisodes(result.episodes);
+        setHasLoadedEpisodesOnce(true);
       }
     } catch (error) {
       console.error("[WatchPage] Error fetching episode data:", error);
     } finally {
-      setIsLoadingEpisodes(false);
+      if (isFirstLoad) {
+        setIsLoadingEpisodes(false);
+      }
     }
-  }, [params.type, params.id, currentSeasonNumber]);
+  }, [
+    params.type,
+    params.id,
+    currentSeasonNumber,
+    isEpisodeSwitching,
+    hasLoadedEpisodesOnce,
+    episodes.length,
+  ]);
+
+  // Reset episode loading state when season changes
+  useEffect(() => {
+    if (params.type === "tv") {
+      setHasLoadedEpisodesOnce(false);
+      setEpisodes([]);
+    }
+  }, [currentSeasonNumber, params.type]);
 
   // Lazily fetch episode data after the video starts playing
   useEffect(() => {
@@ -504,29 +564,139 @@ export default function WatchPage() {
     };
   }, [params.type, videoURL, player, fetchEpisodeData]);
 
-  // Handle episode selection
+  // Enhanced episode selection with seamless switching
   const handleEpisodeSelect = useCallback(
-    (episode: TVDeviceEpisode) => {
+    async (episode: TVDeviceEpisode) => {
       if (!params.id || !params.type || params.type !== "tv") return;
 
-      console.log("[WatchPage] Switching to episode", episode.episodeNumber);
+      try {
+        setIsEpisodeSwitching(true);
+        isEpisodeSwitchingRef.current = true;
+        setEpisodeSwitchError(null);
 
-      // Navigate to the selected episode
-      router.replace({
-        pathname: "/watch/[id]",
-        params: {
-          id: params.id,
-          type: params.type,
+        console.log(
+          "[WatchPage] Seamlessly switching to episode",
+          episode.episodeNumber,
+        );
+
+        // Phase 1: Send final playback update for current episode
+        if (player && effectiveVideoData && effectiveVideoURL) {
+          const currentTime = player.currentTime;
+          if (currentTime > 0) {
+            console.log(
+              "[WatchPage] Sending final playback update for current episode",
+            );
+            await contentService.updatePlaybackProgress({
+              videoId: effectiveVideoURL,
+              playbackTime: currentTime,
+              mediaMetadata: {
+                mediaType: effectiveVideoData.type || params.type,
+                mediaId: effectiveVideoData.id || params.id,
+                showId: params.id,
+                seasonNumber:
+                  effectiveVideoData.seasonNumber || currentSeasonNumber,
+                episodeNumber:
+                  effectiveVideoData.episodeNumber || effectiveEpisodeNumber,
+              },
+            });
+          }
+        }
+
+        // Phase 2: Fetch new episode data with watch history
+        console.log("[WatchPage] Fetching new episode data");
+        const newEpisodeData = await contentService.getMediaDetails({
+          mediaType: params.type,
+          mediaId: params.id,
+          season: currentSeasonNumber,
+          episode: episode.episodeNumber,
+          includeWatchHistory: true,
+        });
+
+        if (!newEpisodeData?.videoURL) {
+          throw new Error("No video URL available for selected episode");
+        }
+
+        // Phase 3: Replace video source seamlessly
+        if (player) {
+          console.log("[WatchPage] Replacing video source");
+          await player.replaceAsync({ uri: newEpisodeData.videoURL });
+
+          // Apply resume position from watch history
+          const watchHistory = newEpisodeData.watchHistory;
+          if (watchHistory && watchHistory.playbackTime > 0) {
+            const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
+            console.log(`[WatchPage] Resuming new episode from ${resumeTime}s`);
+            player.currentTime = resumeTime;
+          }
+
+          player.play();
+        }
+
+        // Phase 4: Update state and URL parameters
+        setCurrentEpisodeData(newEpisodeData);
+
+        // Update URL parameters without navigation using setParams
+        router.setParams({
           season: currentSeasonNumber.toString(),
           episode: episode.episodeNumber.toString(),
-        },
-      });
+        });
+
+        // Phase 5: Update episode list to reflect any watch history changes
+        // This ensures the episode carousel shows updated progress/watched status
+        if (newEpisodeData.episodeNumber) {
+          setEpisodes((prevEpisodes) =>
+            prevEpisodes.map((ep) =>
+              ep.episodeNumber === newEpisodeData.episodeNumber
+                ? {
+                    ...ep,
+                    watchHistory: newEpisodeData.watchHistory,
+                  }
+                : ep,
+            ),
+          );
+        }
+
+        console.log("[WatchPage] Episode switch completed successfully");
+      } catch (error) {
+        console.error("[WatchPage] Episode switch failed:", error);
+        setEpisodeSwitchError(
+          error instanceof Error ? error.message : "Failed to switch episode",
+        );
+
+        // Fallback: try updating params for critical failures
+        if (error instanceof Error && error.message.includes("No video URL")) {
+          console.log("[WatchPage] Falling back to param update");
+          router.setParams({
+            season: currentSeasonNumber.toString(),
+            episode: episode.episodeNumber.toString(),
+          });
+        }
+      } finally {
+        // Add a small delay before clearing the switching flags to ensure
+        // the URL parameter change doesn't trigger the content loader
+        setTimeout(() => {
+          setIsEpisodeSwitching(false);
+          isEpisodeSwitchingRef.current = false;
+        }, 150);
+      }
     },
-    [params.id, params.type, currentSeasonNumber, router],
+    [
+      params,
+      player,
+      effectiveVideoData,
+      effectiveVideoURL,
+      effectiveEpisodeNumber,
+      currentSeasonNumber,
+      router,
+    ],
   );
 
-  // Combine content and audio errors
-  const finalError = contentError || audioError;
+  // Combine content, audio, and episode switch errors
+  const finalError = contentError || audioError || episodeSwitchError;
+
+  // Separate initial loading from episode switching
+  // Only show full loading screen for initial page load, not during episode switching
+  const showFullLoading = loading && !currentEpisodeData;
 
   // Tell the app we're in "watch" mode and optimize queries for video playback
   useEffect(() => {
@@ -607,13 +777,13 @@ export default function WatchPage() {
 
   const videoInfo = useMemo(
     () =>
-      videoData
+      effectiveVideoData
         ? {
-            type: videoData.type,
-            title: videoData.title || "",
-            description: videoData.metadata?.overview,
-            logo: videoData.logo,
-            captionURLs: videoData.captionURLs as
+            type: effectiveVideoData.type,
+            title: effectiveVideoData.title || "",
+            description: effectiveVideoData.metadata?.overview,
+            logo: effectiveVideoData.logo,
+            captionURLs: effectiveVideoData.captionURLs as
               | Record<
                   string,
                   {
@@ -624,15 +794,15 @@ export default function WatchPage() {
                   }
                 >
               | undefined,
-            backdrop: videoData.backdrop,
-            showTitle: videoData.showTitle as string | undefined,
+            backdrop: effectiveVideoData.backdrop,
+            showTitle: effectiveVideoData.showTitle as string | undefined,
           }
         : undefined,
-    [videoData],
+    [effectiveVideoData],
   );
 
   // Render
-  if (loading) {
+  if (showFullLoading) {
     return (
       <View style={styles.container}>
         <View style={styles.messageContainer}>
@@ -663,7 +833,7 @@ export default function WatchPage() {
       </View>
     );
   }
-  if (!videoURL || !player) {
+  if (!effectiveVideoURL || !player) {
     return (
       <View style={styles.container}>
         <View style={styles.messageContainer}>
@@ -701,9 +871,11 @@ export default function WatchPage() {
         onInfoPress={handleInfoPress}
         showCaptionControls={!!videoInfo?.captionURLs}
         episodes={params.type === "tv" ? episodes : undefined}
-        currentEpisodeNumber={currentEpisodeNumber}
+        currentEpisodeNumber={effectiveEpisodeNumber}
         onEpisodeSelect={handleEpisodeSelect}
-        isLoadingEpisodes={isLoadingEpisodes || isPending}
+        isLoadingEpisodes={isLoadingEpisodes}
+        isEpisodeSwitching={isEpisodeSwitching}
+        episodeSwitchError={episodeSwitchError}
       />
     </View>
   );
