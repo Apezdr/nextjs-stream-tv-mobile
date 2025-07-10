@@ -1,8 +1,8 @@
-import { Image } from "expo-image";
 import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
 
 import EpisodeProgressBar from "./EpisodeProgressBar";
 
+import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 
@@ -45,7 +45,7 @@ export default function EpisodeList({
           <View style={styles.episodeContent}>
             {/* Thumbnail with episode number overlay */}
             <View style={styles.thumbnailContainer}>
-              <Image
+              <OptimizedImage
                 source={episode.thumbnail}
                 placeholder={{
                   uri: `data:image/png;base64,${episode.thumbnailBlurhash}`,
@@ -54,6 +54,8 @@ export default function EpisodeList({
                 style={styles.thumbnail}
                 contentFit="cover"
                 transition={1000}
+                width={640}
+                quality={85}
               />
               <View style={styles.episodeNumberOverlay}>
                 <Text style={styles.episodeNumberText}>

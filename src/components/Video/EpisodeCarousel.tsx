@@ -1,5 +1,4 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { Image } from "expo-image";
 import * as React from "react";
 import { useRef, useCallback, useTransition, useMemo } from "react";
 import {
@@ -16,6 +15,8 @@ import Animated, {
   withTiming,
   Easing,
 } from "react-native-reanimated";
+
+import OptimizedImage from "../common/OptimizedImage";
 
 import EpisodeProgressBar from "@/src/components/TV/MediaInfo/EpisodeProgressBar";
 import { Colors } from "@/src/constants/Colors";
@@ -387,7 +388,7 @@ const EpisodeCarousel = React.memo(
                     onBlur={handleEpisodeBlur}
                   >
                     <View style={styles.thumbnailContainer}>
-                      <Image
+                      <OptimizedImage
                         source={episode.thumbnail}
                         placeholder={
                           episode.thumbnailBlurhash
@@ -398,6 +399,7 @@ const EpisodeCarousel = React.memo(
                         }
                         style={styles.thumbnail}
                         contentFit="cover"
+                        placeholderContentFit="cover"
                       />
                       <View style={styles.episodeNumberOverlay}>
                         <Text style={styles.episodeNumberText}>

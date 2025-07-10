@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import React, { memo, useCallback, useMemo } from "react";
 import {
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   Dimensions,
 } from "react-native";
 
+import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 
@@ -72,7 +72,7 @@ const ContentItem = ({
         case "small":
           return width / 5;
         case "large":
-          return width / 2;
+          return width / 2.9;
         case "medium":
         default:
           return width / 3.5;
@@ -110,7 +110,7 @@ const ContentItem = ({
     <TouchableOpacity
       style={[
         styles.container,
-        { width: dimensions.itemWidth, height: dimensions.itemHeight },
+        { width: dimensions.itemWidth, height: dimensions.itemHeight + 180 },
       ]}
       onPress={handlePress}
       onFocus={handleFocus}
@@ -118,8 +118,8 @@ const ContentItem = ({
       isTVSelectable={Platform.isTV}
       hasTVPreferredFocus={hasTVPreferredFocus && Platform.isTV}
     >
-      <Image
-        source={{ uri: item.thumbnailUrl }}
+      <OptimizedImage
+        source={item.thumbnailUrl ? { uri: item.thumbnailUrl } : undefined}
         style={styles.thumbnail}
         placeholder={{
           uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
@@ -127,6 +127,8 @@ const ContentItem = ({
         placeholderContentFit="cover"
         transition={200}
         contentFit="cover"
+        width={Math.round(dimensions.itemWidth) + 100}
+        quality={100}
       />
 
       <View style={styles.overlay}>

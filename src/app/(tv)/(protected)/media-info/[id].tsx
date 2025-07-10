@@ -1,4 +1,4 @@
-import { Image, ImageBackground } from "expo-image";
+import { ImageBackground } from "expo-image";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
@@ -17,6 +17,7 @@ import {
   Animated,
 } from "react-native";
 
+import OptimizedImage from "@/src/components/common/OptimizedImage";
 import EpisodeList from "@/src/components/TV/MediaInfo/EpisodeList";
 import EpisodesSkeleton from "@/src/components/TV/MediaInfo/EpisodesSkeleton";
 import ExpandableOverview from "@/src/components/TV/MediaInfo/ExpandableOverview";
@@ -222,11 +223,13 @@ export default function MediaInfoPage() {
             {/* Logo/Title */}
             <View style={styles.logoSection}>
               {mediaInfo.logo ? (
-                <Image
+                <OptimizedImage
                   source={mediaInfo.logo}
                   contentFit="contain"
                   style={{ height: 80, width: "auto" }}
                   priority="high"
+                  width={750}
+                  quality={100}
                 />
               ) : (
                 <Text style={styles.showTitle}>{mediaInfo.title}</Text>
@@ -338,11 +341,13 @@ export default function MediaInfoPage() {
             {/* Logo/Title */}
             <View style={styles.logoSection}>
               {mediaInfo.logo ? (
-                <Image
+                <OptimizedImage
                   source={mediaInfo.logo}
                   contentFit="contain"
                   style={{ height: 80, width: "auto" }}
                   priority="high"
+                  width={750}
+                  quality={100}
                 />
               ) : (
                 <Text style={styles.showTitle}>{mediaInfo.title}</Text>

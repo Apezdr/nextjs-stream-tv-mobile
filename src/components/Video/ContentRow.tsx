@@ -255,12 +255,12 @@ const ContentRow = ({
           contentContainerStyle={styles.scrollContent}
           fadingEdgeLength={50}
           // More conservative performance settings
-          initialNumToRender={Platform.isTV ? 10 : 8}
+          initialNumToRender={Platform.isTV ? 30 : 8}
           maxToRenderPerBatch={Platform.isTV ? 15 : 8}
-          windowSize={Platform.isTV ? 15 : 8}
+          //windowSize={Platform.isTV ? 15 : 8}
           updateCellsBatchingPeriod={Platform.isTV ? 16 : 50}
           // Scroll behavior optimization
-          scrollEventThrottle={16}
+          //scrollEventThrottle={16}
           decelerationRate="fast"
           removeClippedSubviews={Platform.isTV}
           getItemLayout={getItemLayout}
@@ -269,8 +269,10 @@ const ContentRow = ({
           // Ultra-aggressive infinite scrolling
           onEndReached={handleEndReached}
           onEndReachedThreshold={loadMoreThreshold}
-          onScroll={handleScroll}
+          //onScroll={handleScroll}
           ListFooterComponent={renderFooter}
+          //snapToInterval={5}
+          //snapToAlignment="center"
         />
       </TVFocusGuideView>
     </View>

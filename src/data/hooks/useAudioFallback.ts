@@ -110,7 +110,12 @@ export function useAudioFallback({
   // — One effect: subscribe once per player instance —
   useEffect(() => {
     const onStatusChange = ({ status, error: e }: StatusChangeEventPayload) => {
-      if (e?.message.match(/codec|decoder|mediacodec|vorbis/i)) {
+      // Only trigger audio fallback for actual audio codec errors
+      if (
+        e?.message.match(
+          /audio.*codec|audio.*decoder|aac|mp3|vorbis|opus|MediaCodecAudioRenderer/i,
+        )
+      ) {
         clearTimer();
         doFallback();
       } else if (status === "readyToPlay") {

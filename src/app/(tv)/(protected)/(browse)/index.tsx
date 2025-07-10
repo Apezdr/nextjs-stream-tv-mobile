@@ -31,6 +31,14 @@ export default function TVHomePage() {
   const router = useRouter();
   const isFocused = useIsFocused();
 
+  // Conditional logging for performance optimization
+  const DEBUG_HOME_PAGE = __DEV__ && false; // Enable only when needed for debugging
+  const logDebug = useCallback((message: string, data?: any) => {
+    if (DEBUG_HOME_PAGE) {
+      console.log(`[TVHomePage] ${message}`, data);
+    }
+  }, []);
+
   // State for tracking sidebar state changes via custom events
   const [sidebarState, setSidebarState] = useState<
     "closed" | "minimized" | "expanded"
@@ -106,19 +114,50 @@ export default function TVHomePage() {
   const lastRefreshRef = useRef<number>(0);
   const REFRESH_DEBOUNCE_MS = 5000; // Only allow refresh every 5 seconds
 
+  // Create stable callback references to reduce dependency churn
+  const refreshCallbacks = useMemo(
+    () => ({
+      recentlyWatched: recentlyWatched.refetch,
+      recentlyAdded: recentlyAdded.refetch,
+      tvShows: tvShows.refetch,
+      movies: movies.refetch,
+    }),
+    [
+      recentlyWatched.refetch,
+      recentlyAdded.refetch,
+      tvShows.refetch,
+      movies.refetch,
+    ],
+  );
+
+  const prefetchCallbacks = useMemo(
+    () => ({
+      recentlyWatched: recentlyWatched.prefetchBulk,
+      recentlyAdded: recentlyAdded.prefetchBulk,
+      tvShows: tvShows.prefetchBulk,
+      movies: movies.prefetchBulk,
+    }),
+    [
+      recentlyWatched.prefetchBulk,
+      recentlyAdded.prefetchBulk,
+      tvShows.prefetchBulk,
+      movies.prefetchBulk,
+    ],
+  );
+
   // Focus-aware background prefetching optimization and data refresh
   useFocusEffect(
     useCallback(() => {
       // Only execute refresh and prefetch operations if screen is actually focused
       if (!isFocused) {
-        console.log(
-          "[TVHomePage] Screen not focused - skipping refresh and prefetch operations",
+        logDebug(
+          "Screen not focused - skipping refresh and prefetch operations",
         );
         return;
       }
 
-      console.log(
-        "[TVHomePage] Screen focused - optimizing background loading and refreshing data",
+      logDebug(
+        "Screen focused - optimizing background loading and refreshing data",
       );
 
       const now = Date.now();
@@ -126,26 +165,22 @@ export default function TVHomePage() {
 
       // Refresh data if enough time has passed and we have existing data
       if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
-        if (recentlyWatched.data && recentlyWatched.refetch) {
-          console.log(
-            "[TVHomePage] Refreshing recently watched data (debounced)",
-          );
+        if (recentlyWatched.data && refreshCallbacks.recentlyWatched) {
+          logDebug("Refreshing recently watched data (debounced)");
           lastRefreshRef.current = now;
-          recentlyWatched.refetch();
+          refreshCallbacks.recentlyWatched();
         }
-        if (recentlyAdded.data && recentlyAdded.refetch) {
-          console.log(
-            "[TVHomePage] Refreshing recently added data (debounced)",
-          );
-          recentlyAdded.refetch();
+        if (recentlyAdded.data && refreshCallbacks.recentlyAdded) {
+          logDebug("Refreshing recently added data (debounced)");
+          refreshCallbacks.recentlyAdded();
         }
-        if (tvShows.data && tvShows.refetch) {
-          console.log("[TVHomePage] Refreshing TV shows data (debounced)");
-          tvShows.refetch();
+        if (tvShows.data && refreshCallbacks.tvShows) {
+          logDebug("Refreshing TV shows data (debounced)");
+          refreshCallbacks.tvShows();
         }
-        if (movies.data && movies.refetch) {
-          console.log("[TVHomePage] Refreshing movies data (debounced)");
-          movies.refetch();
+        if (movies.data && refreshCallbacks.movies) {
+          logDebug("Refreshing movies data (debounced)");
+          refreshCallbacks.movies();
         }
       }
 
@@ -155,15 +190,13 @@ export default function TVHomePage() {
         setTimeout(() => {
           // Double-check focus state before prefetching
           if (!isFocused) {
-            console.log(
-              "[TVHomePage] Screen lost focus during prefetch delay - canceling prefetch",
+            logDebug(
+              "Screen lost focus during prefetch delay - canceling prefetch",
             );
             return;
           }
 
-          console.log(
-            "[TVHomePage] Starting focus-aware background prefetching",
-          );
+          logDebug("Starting focus-aware background prefetching");
 
           // Only prefetch if we have data and next pages available
           if (
@@ -171,53 +204,45 @@ export default function TVHomePage() {
             !recentlyWatched.isFetching &&
             recentlyWatched.data
           ) {
-            recentlyWatched.prefetchBulk(2); // Reduced from 3 to 2 for better performance
+            prefetchCallbacks.recentlyWatched(2); // Reduced from 3 to 2 for better performance
           }
           if (
             recentlyAdded.hasNextPage &&
             !recentlyAdded.isFetching &&
             recentlyAdded.data
           ) {
-            recentlyAdded.prefetchBulk(2);
+            prefetchCallbacks.recentlyAdded(2);
           }
           if (tvShows.hasNextPage && !tvShows.isFetching && tvShows.data) {
-            tvShows.prefetchBulk(2);
+            prefetchCallbacks.tvShows(2);
           }
           if (movies.hasNextPage && !movies.isFetching && movies.data) {
-            movies.prefetchBulk(2);
+            prefetchCallbacks.movies(2);
           }
         }, 2000); // Reduced delay from 3s to 2s
       });
 
       // Cleanup function
       return () => {
-        console.log(
-          "[TVHomePage] Screen unfocused - canceling background operations",
-        );
+        logDebug("Screen unfocused - canceling background operations");
         backgroundLoadTask.cancel();
       };
     }, [
       isFocused,
       recentlyWatched.data,
-      recentlyWatched.refetch,
-      recentlyWatched.prefetchBulk,
       recentlyWatched.hasNextPage,
       recentlyWatched.isFetching,
       recentlyAdded.data,
-      recentlyAdded.refetch,
-      recentlyAdded.prefetchBulk,
       recentlyAdded.hasNextPage,
       recentlyAdded.isFetching,
-      movies.data,
-      movies.refetch,
-      movies.prefetchBulk,
-      movies.hasNextPage,
-      movies.isFetching,
       tvShows.data,
-      tvShows.refetch,
-      tvShows.prefetchBulk,
       tvShows.hasNextPage,
       tvShows.isFetching,
+      movies.data,
+      movies.hasNextPage,
+      movies.isFetching,
+      refreshCallbacks,
+      prefetchCallbacks,
     ]),
   );
 
@@ -230,9 +255,7 @@ export default function TVHomePage() {
       intervalId = setInterval(() => {
         // Only refresh if screen is currently focused
         if (!isFocused) {
-          console.log(
-            "[TVHomePage] Periodic refresh skipped - screen not focused",
-          );
+          logDebug("Periodic refresh skipped - screen not focused");
           return;
         }
 
@@ -241,7 +264,7 @@ export default function TVHomePage() {
 
         // Only refresh if enough time has passed since last manual refresh
         if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
-          console.log("[TVHomePage] Periodic refresh triggered");
+          logDebug("Periodic refresh triggered");
           lastRefreshRef.current = now;
 
           // Refresh all data sources
@@ -263,18 +286,16 @@ export default function TVHomePage() {
 
     // Only start periodic refresh if screen is focused
     if (isFocused) {
-      console.log("[TVHomePage] Starting periodic refresh - screen is focused");
+      logDebug("Starting periodic refresh - screen is focused");
       startPeriodicRefresh();
     } else {
-      console.log(
-        "[TVHomePage] Skipping periodic refresh - screen not focused",
-      );
+      logDebug("Skipping periodic refresh - screen not focused");
     }
 
     // Cleanup interval on unmount or focus change
     return () => {
       if (intervalId) {
-        console.log("[TVHomePage] Clearing periodic refresh interval");
+        logDebug("Clearing periodic refresh interval");
         clearInterval(intervalId);
       }
     };
@@ -379,7 +400,7 @@ export default function TVHomePage() {
       const firstAvailableSeason =
         availableSeasons.length > 0 ? Math.min(...availableSeasons) : 1;
 
-      console.log("Navigating to TV show with first available season:", {
+      logDebug("Navigating to TV show with first available season:", {
         id: showId,
         type: mediaType,
         season: firstAvailableSeason,
@@ -406,7 +427,7 @@ export default function TVHomePage() {
     if (pendingTVNavigation && rootShowError && !isLoadingRootShow) {
       const { showId, mediaType } = pendingTVNavigation;
 
-      console.warn(
+      logDebug(
         "Failed to fetch root show data, falling back to season 1:",
         rootShowError,
       );
@@ -436,7 +457,7 @@ export default function TVHomePage() {
       // Smart navigation logic based on content type
       if (mediaType === "tv" && seasonNumber && episodeNumber) {
         // Specific episode - go directly to watch (Continue Watching scenario)
-        console.log("Navigating to specific episode:", {
+        logDebug("Navigating to specific episode:", {
           id: showId,
           type: mediaType,
           season: seasonNumber,
@@ -454,7 +475,7 @@ export default function TVHomePage() {
         });
       } else if (mediaType === "tv") {
         // TV show without specific episode - query available seasons first
-        console.log("Querying available seasons for TV show:", {
+        logDebug("Querying available seasons for TV show:", {
           id: showId,
           type: mediaType,
         });
@@ -462,7 +483,7 @@ export default function TVHomePage() {
         setPendingTVNavigation({ showId, mediaType });
       } else {
         // Movie - go directly to media info page
-        console.log("Navigating to movie media info:", {
+        logDebug("Navigating to movie media info:", {
           id: showId,
           type: mediaType,
         });
@@ -507,7 +528,7 @@ export default function TVHomePage() {
               title="Continue Watching"
               items={transformedRecentlyWatched}
               onSelectContent={handleSelectContent}
-              itemSize="medium"
+              itemSize="large"
               refreshing={recentlyWatched.isRefetching}
               hasNextPage={recentlyWatched.hasNextPage}
               isFetchingNextPage={recentlyWatched.isFetchingNextPage}

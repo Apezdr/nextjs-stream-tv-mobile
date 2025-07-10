@@ -17,6 +17,7 @@ import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
+import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
 import { setWatchMode, tvQueryHelpers } from "@/src/data/query/queryClient";
 import {
   contentService,
@@ -459,6 +460,11 @@ export default function WatchPage() {
     fallbackTimeoutMs: 5000,
   });
 
+  // Handle video codec errors and provide user-friendly messages
+  const videoError = useVideoErrorHandling({
+    player,
+  });
+
   // Enable playback tracking using effective data
   usePlaybackTracking(player, effectiveVideoData, effectiveVideoURL, params);
 
@@ -691,8 +697,9 @@ export default function WatchPage() {
     ],
   );
 
-  // Combine content, audio, and episode switch errors
-  const finalError = contentError || audioError || episodeSwitchError;
+  // Combine content, audio, video, and episode switch errors
+  const finalError =
+    contentError || audioError || videoError || episodeSwitchError;
 
   // Separate initial loading from episode switching
   // Only show full loading screen for initial page load, not during episode switching
