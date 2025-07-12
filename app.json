@@ -5,7 +5,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#000",
+          "backgroundColor": "#000000",
           "image": "./src/assets/images/dark_mode_logo.png"
         }
       ],

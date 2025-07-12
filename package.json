@@ -81,6 +81,16 @@
       "exclude": [
         "react-native"
       ]
+    },
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "@typescript-eslint/eslint-plugin",
+          "eslint",
+          "react-native-subtitles"
+        ],
+        "listUnknownPackages": false
+      }
     }
   },
   "private": true,
