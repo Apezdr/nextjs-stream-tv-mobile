@@ -21,6 +21,10 @@ import type {
   BannerResponse,
   ScreensaverResponse,
   SyncValidationUpdateRequest,
+  GenresListResponse,
+  GenresListParams,
+  GenresContentResponse,
+  GenresContentParams,
 } from "@/src/data/types/content.types";
 
 /**
@@ -231,6 +235,78 @@ export function useUpdateValidationStatus() {
         queryKey: invalidatePatterns.allContent(),
       });
     },
+  });
+}
+
+/**
+ * Hook to fetch available genres list
+ */
+export function useGenresList(params: GenresListParams = {}) {
+  const {
+    action = "list",
+    type = "movie",
+    includeCounts = true,
+    isTVdevice = true,
+  } = params;
+
+  return useQuery({
+    queryKey: queryKeys.genresList({ type, includeCounts, isTVdevice }),
+    queryFn: () => {
+      const queryParams = buildQueryParams({
+        action,
+        type,
+        includeCounts,
+        isTVdevice,
+      });
+      return enhancedApiClient.get<GenresListResponse>(
+        `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+      );
+    },
+  });
+}
+
+/**
+ * Hook to fetch content for a specific genre with pagination
+ */
+export function useGenreContent(params: GenresContentParams) {
+  const {
+    action = "content",
+    genre,
+    type = "movie",
+    page = 0,
+    limit = 30,
+    sort = "newest",
+    sortOrder = "desc",
+    includeWatchHistory = true,
+    isTVdevice = true,
+  } = params;
+
+  return useQuery({
+    queryKey: queryKeys.genreContent({
+      genre,
+      type,
+      page,
+      limit,
+      sort,
+      sortOrder,
+    }),
+    queryFn: () => {
+      const queryParams = buildQueryParams({
+        action,
+        genre,
+        type,
+        page,
+        limit,
+        sort,
+        sortOrder,
+        includeWatchHistory,
+        isTVdevice,
+      });
+      return enhancedApiClient.get<GenresContentResponse>(
+        `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+      );
+    },
+    enabled: !!genre,
   });
 }
 

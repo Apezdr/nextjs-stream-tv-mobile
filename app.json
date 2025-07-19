@@ -37,7 +37,14 @@
       "expo-secure-store",
       "react-native-video",
       "expo-web-browser",
-      "expo-build-properties",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "permissions": ["android.permission.WAKE_LOCK"]
+          }
+        }
+      ],
       "./enableLargeHeap"
     ],
     "android": {

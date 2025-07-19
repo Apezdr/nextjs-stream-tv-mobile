@@ -1,4 +1,3 @@
-import { ImageBackground } from "expo-image";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
@@ -31,6 +30,7 @@ import {
   useMovieDetails,
 } from "@/src/data/hooks/useContent";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import { backdropManager } from "@/src/utils/BackdropManager";
 
 export default function MediaInfoPage() {
   const router = useRouter();
@@ -84,6 +84,24 @@ export default function MediaInfoPage() {
     params.type === "movie" ? movieData.isRefreshing : tvData.isRefreshing;
   const error = params.type === "movie" ? movieData.error : tvData.error;
 
+  // Show backdrop when media info loads
+  useEffect(() => {
+    if (mediaInfo?.backdrop) {
+      console.log("[MediaInfo] Showing backdrop:", mediaInfo.backdrop);
+      backdropManager.show(mediaInfo.backdrop, {
+        fade: true,
+        duration: 500,
+        blurhash: mediaInfo.backdropBlurhash,
+      });
+    }
+
+    // Don't hide backdrop on unmount - let the next page handle it
+    // This allows seamless transitions to the watch page
+    return () => {
+      console.log("[MediaInfo] Component unmounting, keeping backdrop visible");
+    };
+  }, [mediaInfo?.backdrop, mediaInfo?.backdropBlurhash]);
+
   // Debounce refresh to prevent excessive API calls
   const lastRefreshRef = useRef<number>(0);
   const REFRESH_DEBOUNCE_MS = 5000; // Only allow refresh every 5 seconds
@@ -124,10 +142,19 @@ export default function MediaInfoPage() {
           type: params.type,
           season: selectedSeason,
           episode: episode.episodeNumber,
+          backdrop: mediaInfo?.backdrop,
+          backdropBlurhash: mediaInfo?.backdropBlurhash,
         },
       });
     },
-    [params.id, params.type, selectedSeason, router],
+    [
+      params.id,
+      params.type,
+      selectedSeason,
+      router,
+      mediaInfo?.backdrop,
+      mediaInfo?.backdropBlurhash,
+    ],
   );
 
   const handlePlayMovie = useCallback(() => {
@@ -136,9 +163,17 @@ export default function MediaInfoPage() {
       params: {
         id: params.id,
         type: params.type,
+        backdrop: mediaInfo?.backdrop,
+        backdropBlurhash: mediaInfo?.backdropBlurhash,
       },
     });
-  }, [params.id, params.type, router]);
+  }, [
+    params.id,
+    params.type,
+    router,
+    mediaInfo?.backdrop,
+    mediaInfo?.backdropBlurhash,
+  ]);
 
   const handleSeasonChange = useCallback(
     (newSeason: number) => {
@@ -326,16 +361,6 @@ export default function MediaInfoPage() {
       {/* Movie Content Section */}
       {params.type === "movie" && mediaInfo && (
         <View style={styles.movieLayout}>
-          <ImageBackground
-            source={mediaInfo.backdrop}
-            style={[StyleSheet.absoluteFillObject, { opacity: 0.2 }]}
-            placeholder={{
-              uri: `data:image/png;base64,${mediaInfo.backdropBlurhash}`,
-            }}
-            placeholderContentFit="cover"
-            transition={1000}
-            contentFit="cover"
-          />
           {/* Movie Info */}
           <View style={styles.movieColumn}>
             {/* Logo/Title */}
@@ -526,8 +551,8 @@ const styles = StyleSheet.create({
 
   // Right column styles
   episodesTitleContainer: {
-    flexDirection: "row",
     alignItems: "center",
+    flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 20,
   },
@@ -573,13 +598,13 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   refreshIndicator: {
-    position: "absolute",
-    top: -20,
-    right: 0,
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderRadius: 4,
     paddingHorizontal: 8,
     paddingVertical: 2,
+    position: "absolute",
+    right: 0,
+    top: -20,
   },
   refreshText: {
     color: "#CCCCCC",

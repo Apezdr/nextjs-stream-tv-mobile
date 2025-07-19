@@ -28,6 +28,7 @@ export const API_ENDPOINTS = {
     CHAPTER: "/api/authenticated/chapter",
     BANNER: "/api/authenticated/banner",
     SCREENSAVER: "/api/authenticated/screensaver",
+    GENRES: "/api/authenticated/genres",
     CALENDAR: (endpoint: "sonarr" | "radarr") =>
       `/api/authenticated/calendar/${endpoint}`,
   },

@@ -12,6 +12,8 @@ import type {
   ContentListResponse,
   HorizontalListParams,
   MediaItem,
+  GenresContentResponse,
+  GenresContentParams,
 } from "@/src/data/types/content.types";
 
 /**
@@ -30,6 +32,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
         sortOrder,
         page: pageParam,
         limit,
+        isTVDevice: true,
       });
       return enhancedApiClient.get<ContentListResponse>(
         `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
@@ -39,6 +42,8 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       // If we got fewer items than the limit, we've reached the end
       if (!lastPage.currentItems || lastPage.currentItems.length < limit) {
         return undefined;
+      } else if (lastPage.nextItem === null) {
+        return undefined; // No more items to load
       }
       // Return the next page number
       return allPages.length;
@@ -145,6 +150,78 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     prefetchMultiple,
     prefetchBulk,
   };
+}
+
+/**
+ * Hook for infinite genre content loading with pagination
+ */
+export function useInfiniteGenreContent(params: GenresContentParams) {
+  const {
+    genre,
+    type = "movie",
+    limit = 30,
+    sort = "newest",
+    sortOrder = "desc",
+    includeWatchHistory = true,
+    isTVdevice = true,
+  } = params;
+  const queryClient = useQueryClient();
+
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.genreContent({
+      genre,
+      type,
+      limit,
+      sort,
+      sortOrder,
+    }),
+    queryFn: async ({ pageParam = 0 }) => {
+      const queryParams = buildQueryParams({
+        action: "content",
+        genre,
+        type,
+        page: pageParam,
+        limit,
+        sort,
+        sortOrder,
+        includeWatchHistory,
+        isTVdevice,
+      });
+      return enhancedApiClient.get<GenresContentResponse>(
+        `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+      );
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      // If we got fewer items than the limit, we've reached the end
+      if (!lastPage.currentItems || lastPage.currentItems.length < limit) {
+        return undefined;
+      } else if (lastPage.nextItem === null) {
+        return undefined; // No more items to load
+      }
+      // Return the next page number
+      return allPages.length;
+    },
+    initialPageParam: 0,
+    enabled: !!genre,
+  });
+
+  return query;
+}
+
+/**
+ * Helper to get flattened data from infinite genre query
+ */
+export function getFlattenedInfiniteGenreData(
+  data: ReturnType<typeof useInfiniteGenreContent>["data"],
+): MediaItem[] {
+  if (!data?.pages) return [];
+
+  return data.pages.reduce<MediaItem[]>((acc, page) => {
+    if (page.currentItems) {
+      acc.push(...page.currentItems);
+    }
+    return acc;
+  }, []);
 }
 
 /**

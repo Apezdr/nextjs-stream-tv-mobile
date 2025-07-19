@@ -16,6 +16,10 @@ import {
   EpisodePickerParams,
   BannerResponse,
   TVDeviceMediaResponse,
+  GenresListResponse,
+  GenresListParams,
+  GenresContentResponse,
+  GenresContentParams,
 } from "@/src/data/types/content.types";
 
 // Debounce utility for app state changes
@@ -961,5 +965,209 @@ export function useMovieDetails(
     isRefreshing,
     error,
     refetch,
+  };
+}
+
+/**
+ * Hook for fetching available genres list
+ */
+export function useGenresList(params: GenresListParams = {}) {
+  const [data, setData] = useState<GenresListResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = useCallback(
+    async (isBackgroundRefresh: boolean = false) => {
+      try {
+        if (!isBackgroundRefresh) {
+          setIsLoading(true);
+        } else {
+          setIsRefreshing(true);
+        }
+
+        setError(null);
+
+        const result = await contentService.getGenresList(params);
+        setData(result);
+      } catch (err) {
+        if (!isBackgroundRefresh) {
+          const errorMessage =
+            err instanceof Error ? err.message : "Unknown error";
+          setError(errorMessage);
+          console.error("Genres list fetch error:", err);
+        } else {
+          console.warn("Background genres list refresh failed:", err);
+        }
+      } finally {
+        if (!isBackgroundRefresh) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [params],
+  );
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Add app focus handler for background refresh
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (nextAppState === "active" && data) {
+        console.log(
+          "[useGenresList] App focused, refreshing genres list in background",
+        );
+        fetchData(true);
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [data, fetchData]);
+
+  const refetch = useCallback(() => {
+    if (data) {
+      fetchData(true);
+    } else {
+      fetchData(false);
+    }
+  }, [fetchData, data]);
+
+  return {
+    data,
+    isLoading,
+    isRefreshing,
+    error,
+    refetch,
+  };
+}
+
+/**
+ * Hook for fetching content by genre with pagination support
+ */
+export function useGenreContent(params: GenresContentParams) {
+  const [data, setData] = useState<GenresContentResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(params.page || 0);
+
+  const fetchData = useCallback(
+    async (
+      pageNum: number,
+      append: boolean = false,
+      isBackgroundRefresh: boolean = false,
+    ) => {
+      try {
+        if (!isBackgroundRefresh) {
+          setIsLoading(true);
+        } else {
+          setIsRefreshing(true);
+        }
+
+        setError(null);
+
+        const result = await contentService.getGenreContent({
+          ...params,
+          page: pageNum,
+        });
+
+        setData((prev) => {
+          if (append && prev) {
+            // Append new items for pagination
+            return {
+              ...result,
+              currentItems: [...prev.currentItems, ...result.currentItems],
+            };
+          }
+          return result;
+        });
+      } catch (err) {
+        if (!isBackgroundRefresh) {
+          const errorMessage =
+            err instanceof Error ? err.message : "Unknown error";
+          setError(errorMessage);
+          console.error("Genre content fetch error:", err);
+        } else {
+          console.warn("Background genre content refresh failed:", err);
+        }
+      } finally {
+        if (!isBackgroundRefresh) {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [params],
+  );
+
+  // Initial data load
+  useEffect(() => {
+    if (params.genre) {
+      fetchData(page);
+    }
+  }, [fetchData, page, params.genre]);
+
+  // Add app focus handler for background refresh
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (nextAppState === "active" && data && params.genre) {
+        console.log(
+          `[useGenreContent] App focused, refreshing genre content in background for ${params.genre}`,
+        );
+        fetchData(page, false, true);
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [data, fetchData, page, params.genre]);
+
+  // Function to load next page
+  const loadMore = useCallback(() => {
+    if (data?.nextItem && !isLoading) {
+      const nextPage = page + 1;
+      setPage(nextPage);
+      fetchData(nextPage, true);
+    }
+  }, [data, isLoading, page, fetchData]);
+
+  // Function to refresh data
+  const refresh = useCallback(() => {
+    const initialPage = params.page || 0;
+    setPage(initialPage);
+
+    if (data) {
+      fetchData(initialPage, false, true);
+    } else {
+      fetchData(initialPage, false, false);
+    }
+  }, [params.page, fetchData, data]);
+
+  return {
+    data,
+    isLoading,
+    isRefreshing,
+    error,
+    loadMore,
+    refresh,
+    hasMore: !!data?.nextItem,
   };
 }

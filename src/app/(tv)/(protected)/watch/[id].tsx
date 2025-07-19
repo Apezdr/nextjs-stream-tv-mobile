@@ -1,4 +1,5 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, useVideoPlayer, VideoView } from "expo-video";
 import {
@@ -27,6 +28,7 @@ import {
   MediaDetailsResponse,
   TVDeviceEpisode,
 } from "@/src/data/types/content.types";
+import { backdropManager } from "@/src/utils/BackdropManager";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -375,6 +377,8 @@ export default function WatchPage() {
     type: "tv" | "movie";
     season?: string;
     episode?: string;
+    backdrop?: string; // Backdrop URL passed from navigation
+    backdropBlurhash?: string; // Backdrop blurhash passed from navigation
   }>();
   const router = useRouter();
 
@@ -384,6 +388,10 @@ export default function WatchPage() {
   const { setVideoPlayingState } = useScreensaver();
   const [isEpisodeSwitching, setIsEpisodeSwitching] = useState(false);
   const isEpisodeSwitchingRef = useRef(false);
+
+  // Video player loading states
+  const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
   // Content loading (abstracted) - skip loading during episode switching
   // Use ref to ensure we block loading even during React state update timing issues
@@ -418,6 +426,18 @@ export default function WatchPage() {
   const effectiveEpisodeNumber =
     currentEpisodeData?.episodeNumber || currentEpisodeNumber;
 
+  // Backdrop URL resolution - prioritize route param, then current data, then loaded data
+  const effectiveBackdropURL =
+    params.backdrop || // From route navigation
+    currentEpisodeData?.backdrop || // From episode switching
+    videoData?.backdrop; // From initial data load
+
+  // Backdrop blurhash resolution - prioritize route param, then current data, then loaded data
+  const effectiveBackdropBlurhash =
+    params.backdropBlurhash || // From route navigation
+    currentEpisodeData?.backdropBlurhash || // From episode switching
+    videoData?.backdropBlurhash; // From initial data load
+
   // Buffer Options
   const bufferOptions: BufferOptions = {
     // Conservative forward buffer - balance smoothness vs memory
@@ -451,6 +471,72 @@ export default function WatchPage() {
 
     p.play();
   });
+
+  // Video player loading state tracking
+  useEffect(() => {
+    if (!player) return;
+
+    // Reset loading state when player changes
+    setIsVideoLoading(true);
+    setIsVideoPlaying(false);
+
+    const listeners: { remove: () => void }[] = [];
+
+    try {
+      // Listen for status changes to detect when video is ready
+      const statusListener = player.addListener("statusChange", (status) => {
+        console.log("[WatchPage] Video status changed:", status);
+
+        // Video is ready when it has loaded enough to start playing
+        if (status.status === "readyToPlay" && !status.error) {
+          setIsVideoLoading(false);
+        }
+      });
+
+      // Listen for playing state changes
+      const playingListener = player.addListener(
+        "playingChange",
+        ({ isPlaying }) => {
+          console.log("[WatchPage] Video playing state changed:", isPlaying);
+          setIsVideoPlaying(isPlaying);
+
+          // If video starts playing, it's definitely not loading anymore
+          if (isPlaying) {
+            setIsVideoLoading(false);
+          }
+        },
+      );
+
+      // Listen for source changes (during episode switching)
+      const sourceListener = player.addListener("sourceChange", () => {
+        console.log(
+          "[WatchPage] Video source changed - resetting loading state",
+        );
+        setIsVideoLoading(true);
+        setIsVideoPlaying(false);
+      });
+
+      listeners.push(statusListener, playingListener, sourceListener);
+    } catch (error) {
+      console.error(
+        "[WatchPage] Error setting up video loading listeners:",
+        error,
+      );
+    }
+
+    return () => {
+      listeners.forEach((listener) => {
+        try {
+          listener.remove();
+        } catch (error) {
+          console.error(
+            "[WatchPage] Error removing video loading listener:",
+            error,
+          );
+        }
+      });
+    };
+  }, [player]);
 
   // Handle audio‐codec errors and fallback using effective data
   const audioError = useAudioFallback({
@@ -735,12 +821,29 @@ export default function WatchPage() {
     };
   }, [setMode]);
 
-  // Screensaver sync
+  // Screensaver sync and keep awake management
   useEffect(() => {
     const sub = player.addListener("playingChange", ({ isPlaying }) => {
       setVideoPlayingState(isPlaying);
+
+      // Keep screen awake during video playback to prevent Android screensaver
+      if (isPlaying) {
+        activateKeepAwakeAsync();
+        console.log("[WatchPage] Activated keep awake for video playback");
+      } else {
+        deactivateKeepAwake();
+        console.log(
+          "[WatchPage] Deactivated keep awake - video paused/stopped",
+        );
+      }
     });
-    return () => sub.remove();
+
+    return () => {
+      sub.remove();
+      // Ensure keep awake is deactivated when component unmounts
+      deactivateKeepAwake();
+      console.log("[WatchPage] Component unmounting - deactivated keep awake");
+    };
   }, [player, setVideoPlayingState]);
 
   const handleExit = useCallback(() => {
@@ -808,17 +911,89 @@ export default function WatchPage() {
     [effectiveVideoData],
   );
 
+  // Backdrop management with global backdrop manager
+  useEffect(() => {
+    // Show backdrop immediately when page loads, even if we don't have the URL yet
+    if (
+      effectiveBackdropURL ||
+      showFullLoading ||
+      isEpisodeSwitching ||
+      isVideoLoading
+    ) {
+      console.log(
+        "[WatchPage] Showing backdrop:",
+        effectiveBackdropURL || "loading...",
+      );
+
+      // Determine loading message based on current state
+      let message: string | undefined;
+      if (showFullLoading) message = "Loading video...";
+      else if (isEpisodeSwitching) message = "Switching episode...";
+      else if (isVideoLoading) message = "Buffering...";
+
+      // Show backdrop with URL if available, otherwise just update message
+      if (effectiveBackdropURL) {
+        backdropManager.show(effectiveBackdropURL, {
+          fade: true,
+          duration: 300,
+          blurhash: effectiveBackdropBlurhash as string | undefined,
+          message,
+        });
+      } else if (message && backdropManager.isBackdropVisible()) {
+        // If backdrop is already visible but we don't have URL yet, just update message
+        backdropManager.setMessage(message);
+      }
+    }
+
+    // Hide backdrop when video starts playing
+    if (
+      !showFullLoading &&
+      !isEpisodeSwitching &&
+      !isVideoLoading &&
+      isVideoPlaying
+    ) {
+      console.log("[WatchPage] Video playing - hiding backdrop");
+      backdropManager.hide({ fade: true, duration: 500 });
+    }
+
+    // Cleanup on unmount
+    return () => {
+      console.log("[WatchPage] Component unmounting - hiding backdrop");
+      backdropManager.hide({ fade: true, duration: 300 });
+    };
+  }, [
+    effectiveBackdropURL,
+    effectiveBackdropBlurhash,
+    showFullLoading,
+    isEpisodeSwitching,
+    isVideoLoading,
+    isVideoPlaying,
+  ]);
+
+  // Update backdrop message when loading states change
+  useEffect(() => {
+    if (effectiveBackdropURL) {
+      let message: string | undefined;
+      if (showFullLoading) message = "Loading video...";
+      else if (isEpisodeSwitching) message = "Switching episode...";
+      else if (isVideoLoading) message = "Buffering...";
+
+      if (message) {
+        backdropManager.setMessage(message);
+      } else {
+        backdropManager.setMessage(undefined);
+      }
+    }
+  }, [
+    showFullLoading,
+    isEpisodeSwitching,
+    isVideoLoading,
+    effectiveBackdropURL,
+  ]);
+
   // Render
   if (showFullLoading) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.messageContainer}>
-          <Text style={[styles.messageText, styles.clickableText]}>
-            Loading video...
-          </Text>
-        </View>
-      </View>
-    );
+    return <View style={styles.container} />;
   }
   if (finalError) {
     return (
@@ -870,6 +1045,7 @@ export default function WatchPage() {
         allowsPictureInPicture={false}
         nativeControls={false}
       />
+
       <StandaloneVideoControls
         player={player}
         videoInfo={videoInfo}

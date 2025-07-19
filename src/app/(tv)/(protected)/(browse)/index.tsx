@@ -12,7 +12,7 @@ import {
 } from "react-native";
 
 import TVBanner from "@/src/components/TV/Banner/TVBanner";
-import ContentRow from "@/src/components/Video/ContentRow";
+import ContentRow from "@/src/components/TV/Pages/ContentRow";
 import { Colors } from "@/src/constants/Colors";
 import {
   MINIMIZED_WIDTH,
@@ -25,6 +25,7 @@ import {
 } from "@/src/data/hooks/queries/useInfiniteContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
 import { MediaItem } from "@/src/data/types/content.types";
+import { backdropManager } from "@/src/utils/BackdropManager";
 
 export default function TVHomePage() {
   const { currentMode, setMode } = useTVAppState();
@@ -89,25 +90,25 @@ export default function TVHomePage() {
     type: "recentlyWatched",
     sort: "date",
     sortOrder: "desc",
-    limit: 50, // Larger batches for fewer requests
+    limit: 15, // Larger batches for fewer requests
   });
   const recentlyAdded = useInfiniteContentList({
     type: "recentlyAdded",
     sort: "date",
     sortOrder: "desc",
-    limit: 50,
+    limit: 15,
   });
   const movies = useInfiniteContentList({
     type: "movie",
     sort: "title",
     sortOrder: "asc",
-    limit: 50,
+    limit: 15,
   });
   const tvShows = useInfiniteContentList({
     type: "tv",
     sort: "title",
     sortOrder: "asc",
-    limit: 50,
+    limit: 15,
   });
 
   // Debounce refresh to prevent excessive API calls
@@ -221,6 +222,10 @@ export default function TVHomePage() {
           }
         }, 2000); // Reduced delay from 3s to 2s
       });
+
+      // Hide backdrop when returning to browse page
+      console.log("[BrowsePage] Hiding backdrop on browse page load");
+      backdropManager.hide({ fade: true, duration: 1200 });
 
       // Cleanup function
       return () => {
@@ -351,7 +356,7 @@ export default function TVHomePage() {
         videoLink: item.link,
         backdropUrl: item.backdrop,
         hdr: item.hdr,
-        logoUrl: item.logo,
+        logo: item.logo,
       };
     });
   }, []);
@@ -450,9 +455,11 @@ export default function TVHomePage() {
   const handleSelectContent = useCallback(
     (
       showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
       mediaType: "movie" | "tv",
+      seasonNumber?: number,
+      episodeNumber?: number,
+      backdropUrl?: string,
+      backdropBlurhash?: string,
     ) => {
       // Smart navigation logic based on content type
       if (mediaType === "tv" && seasonNumber && episodeNumber) {
@@ -471,6 +478,8 @@ export default function TVHomePage() {
             type: mediaType,
             season: seasonNumber,
             episode: episodeNumber,
+            ...(backdropUrl && { backdrop: backdropUrl }),
+            ...(backdropBlurhash && { backdropBlurhash }),
           },
         });
       } else if (mediaType === "tv") {
@@ -493,11 +502,13 @@ export default function TVHomePage() {
           params: {
             id: showId,
             type: mediaType,
+            ...(backdropUrl && { backdrop: backdropUrl }),
+            ...(backdropBlurhash && { backdropBlurhash }),
           },
         });
       }
     },
-    [router],
+    [logDebug, router],
   );
 
   return (
@@ -507,6 +518,8 @@ export default function TVHomePage() {
         style={[styles.contentBrowser, { marginLeft: getContentMarginLeft() }]}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
+        nestedScrollEnabled={true}
+        snapToAlignment="center"
       >
         {/* Video preview banner */}
         <TVBanner />
@@ -528,20 +541,11 @@ export default function TVHomePage() {
               title="Continue Watching"
               items={transformedRecentlyWatched}
               onSelectContent={handleSelectContent}
-              itemSize="large"
-              refreshing={recentlyWatched.isRefetching}
+              itemSize="small"
               hasNextPage={recentlyWatched.hasNextPage}
               isFetchingNextPage={recentlyWatched.isFetchingNextPage}
               onLoadMore={() => recentlyWatched.fetchNextPage()}
-              onPrefetch={() => recentlyWatched.prefetchNext()}
-              onPrefetchMultiple={(distance) =>
-                recentlyWatched.prefetchMultiple(distance)
-              }
-              onPrefetchBulk={(maxPages) =>
-                recentlyWatched.prefetchBulk(maxPages)
-              }
               loadMoreThreshold={0.4}
-              prefetchThreshold={0.2}
             />
           </View>
         ) : null}
@@ -564,19 +568,10 @@ export default function TVHomePage() {
               items={transformedRecentlyAdded}
               onSelectContent={handleSelectContent}
               itemSize="medium"
-              refreshing={recentlyAdded.isRefetching}
               hasNextPage={recentlyAdded.hasNextPage}
               isFetchingNextPage={recentlyAdded.isFetchingNextPage}
               onLoadMore={() => recentlyAdded.fetchNextPage()}
-              onPrefetch={() => recentlyAdded.prefetchNext()}
-              onPrefetchMultiple={(distance) =>
-                recentlyAdded.prefetchMultiple(distance)
-              }
-              onPrefetchBulk={(maxPages) =>
-                recentlyAdded.prefetchBulk(maxPages)
-              }
               loadMoreThreshold={0.4}
-              prefetchThreshold={0.2}
             />
           </View>
         ) : null}
@@ -599,17 +594,10 @@ export default function TVHomePage() {
               items={transformedTVShows}
               onSelectContent={handleSelectContent}
               itemSize="medium"
-              refreshing={tvShows.isRefetching}
               hasNextPage={tvShows.hasNextPage}
               isFetchingNextPage={tvShows.isFetchingNextPage}
               onLoadMore={() => tvShows.fetchNextPage()}
-              onPrefetch={() => tvShows.prefetchNext()}
-              onPrefetchMultiple={(distance) =>
-                tvShows.prefetchMultiple(distance)
-              }
-              onPrefetchBulk={(maxPages) => tvShows.prefetchBulk(maxPages)}
               loadMoreThreshold={0.4}
-              prefetchThreshold={0.2}
             />
           </View>
         ) : null}
@@ -632,17 +620,10 @@ export default function TVHomePage() {
               items={transformedMovies}
               onSelectContent={handleSelectContent}
               itemSize="medium"
-              refreshing={movies.isRefetching}
               hasNextPage={movies.hasNextPage}
               isFetchingNextPage={movies.isFetchingNextPage}
               onLoadMore={() => movies.fetchNextPage()}
-              onPrefetch={() => movies.prefetchNext()}
-              onPrefetchMultiple={(distance) =>
-                movies.prefetchMultiple(distance)
-              }
-              onPrefetchBulk={(maxPages) => movies.prefetchBulk(maxPages)}
               loadMoreThreshold={0.4}
-              prefetchThreshold={0.2}
             />
           </View>
         ) : null}

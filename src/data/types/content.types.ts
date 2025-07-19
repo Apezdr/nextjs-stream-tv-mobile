@@ -20,6 +20,7 @@ export interface MediaItem {
   thumbnailBlurhash?: string; // data:image/png;base64, encoded blurhash for thumbnail
   type: "movie" | "tv";
   backdrop: string;
+  backdropBlurhash?: string; // data:image/png;base64, encoded blurhash for backdrop
   lastWatchedDate: string;
   link: string;
   hdr?: string; // HDR format (e.g., "HDR10", "10-bit SDR (BT.709)")
@@ -327,3 +328,69 @@ export interface ContentSelectionOptions {
     videoURL: string;
   }>;
 }
+
+// Genre-related types for the genres API
+export interface Genre {
+  id: number;
+  name: string;
+  movieCount?: number;
+  tvShowCount?: number;
+  totalCount?: number;
+}
+
+// Response from genres list endpoint (action=list)
+export interface GenresListResponse {
+  availableGenres: Genre[];
+  totalGenres: number;
+  mediaTypeCounts: {
+    movies: number;
+    tvShows: number;
+    total: number;
+  };
+  filters: {
+    type: "all" | "movie" | "tv";
+    includeCounts: boolean;
+  };
+}
+
+// Parameters for genres list endpoint
+export interface GenresListParams {
+  action?: "list";
+  type?: "all" | "movie" | "tv";
+  includeCounts?: boolean;
+  isTVdevice?: boolean;
+}
+
+// Response from genres content endpoint (action=content)
+export interface GenresContentResponse {
+  currentItems: MediaItem[];
+  previousItem: MediaItem | null;
+  nextItem: MediaItem | null;
+  genreInfo: {
+    requestedGenres: string[];
+    totalResults: number;
+    currentPage: number;
+    totalPages: number;
+  };
+  filters: {
+    type: "all" | "movie" | "tv";
+    sort: "newest" | "oldest" | "title" | "rating";
+    sortOrder: "asc" | "desc";
+  };
+}
+
+// Parameters for genres content endpoint
+export interface GenresContentParams {
+  action: "content";
+  genre: string; // Genre name(s), comma-separated for multiple
+  type?: "all" | "movie" | "tv";
+  page?: number;
+  limit?: number;
+  sort?: "newest" | "oldest" | "title" | "rating";
+  sortOrder?: "asc" | "desc";
+  includeWatchHistory?: boolean;
+  isTVdevice?: boolean;
+}
+
+// Combined genres API parameters
+export type GenresApiParams = GenresListParams | GenresContentParams;

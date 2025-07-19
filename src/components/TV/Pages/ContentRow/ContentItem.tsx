@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import React, { memo, useCallback, useMemo } from "react";
 import {
   StyleSheet,
@@ -12,6 +13,7 @@ import {
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
+import { backdropManager } from "@/src/utils/BackdropManager";
 
 // Create a TV-compatible TouchableOpacity component
 interface TVTouchableProps
@@ -41,8 +43,9 @@ export interface ContentItemData {
   mediaType?: "movie" | "tv";
   videoLink?: string;
   backdropUrl?: string;
+  backdropBlurhash?: string;
   hdr?: string;
-  logoUrl?: string;
+  logo?: string;
 }
 
 interface ContentItemProps {
@@ -52,6 +55,8 @@ interface ContentItemProps {
     seasonNumber: number | undefined,
     episodeNumber: number | undefined,
     mediaType: "movie" | "tv",
+    backdropUrl?: string, // Optional backdrop URL for video player
+    backdropBlurhash?: string, // Optional backdrop blurhash for video player
   ) => void;
   size?: "small" | "medium" | "large";
   hasTVPreferredFocus?: boolean;
@@ -87,11 +92,35 @@ const ContentItem = ({
 
   // Memoize press handler
   const handlePress = useCallback(() => {
+    if (item.backdropUrl) {
+      // 1) Immediately show the blurhash/fade—even if the real image isn’t cached yet:
+      backdropManager.show(item.backdropUrl, {
+        fade: true,
+        duration: 300,
+        blurhash: item.thumbnailBlurhash, // pass the raw string
+      });
+
+      // 2) Fire‑and‑forget cache warming
+      Image.prefetch(item.backdropUrl)
+        .then((ok) => {
+          if (!ok) {
+            console.warn(
+              "[ContentItem] prefetch returned false (may flicker):",
+              item.backdropUrl,
+            );
+          }
+        })
+        .catch((err) => console.warn("[ContentItem] prefetch error:", err));
+    }
+
+    // 3) Now navigate
     onSelect(
       item.showId,
       item.seasonNumber,
       item.episodeNumber,
       item.mediaType || "movie",
+      item.backdropUrl,
+      item.thumbnailBlurhash,
     );
   }, [
     onSelect,
@@ -99,6 +128,8 @@ const ContentItem = ({
     item.seasonNumber,
     item.episodeNumber,
     item.mediaType,
+    item.backdropUrl,
+    item.thumbnailBlurhash,
   ]);
 
   // Focus handler
@@ -127,9 +158,33 @@ const ContentItem = ({
         placeholderContentFit="cover"
         transition={200}
         contentFit="cover"
-        width={Math.round(dimensions.itemWidth) + 100}
+        width={
+          Math.round(dimensions.itemWidth) +
+          (item.mediaType === "movie" ? 100 : 300)
+        }
         quality={100}
       />
+
+      {/* Season/Episode info at the top */}
+      {item.seasonNumber && item.episodeNumber && (
+        <View style={styles.topOverlay}>
+          <Text style={styles.seasonEpisodeText}>
+            S{item.seasonNumber}E{item.episodeNumber}
+          </Text>
+        </View>
+      )}
+
+      {/* Logo image above bottom overlay for episodes */}
+      {item.seasonNumber && item.episodeNumber && item.logo && (
+        <View style={styles.logoContainer}>
+          <Image
+            source={{ uri: item.logo }}
+            style={styles.logoImage}
+            contentFit="contain"
+            transition={200}
+          />
+        </View>
+      )}
 
       <View style={styles.overlay}>
         <Text style={styles.title} numberOfLines={1}>
@@ -162,11 +217,33 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 0,
   },
+  logoContainer: {
+    alignItems: "center",
+    bottom: 60,
+    height: 60,
+    justifyContent: "center",
+    left: 12,
+    position: "absolute",
+    right: 12,
+    zIndex: 2,
+  },
+  logoImage: {
+    height: 50,
+    width: "90%",
+  },
   playButton: {
     alignItems: "center",
     height: 24,
     justifyContent: "center",
     width: 24,
+  },
+  seasonEpisodeText: {
+    color: Colors.dark.whiteText,
+    fontSize: 12,
+    fontWeight: "600",
+    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
   },
   thumbnail: {
     height: "100%",
@@ -175,9 +252,19 @@ const styles = StyleSheet.create({
   title: {
     color: Colors.dark.whiteText,
     flex: 1,
-    fontSize: 14,
+    fontSize: 10,
     fontWeight: "500",
     marginRight: 8,
+  },
+  topOverlay: {
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    borderRadius: 4,
+    left: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    position: "absolute",
+    top: 8,
+    zIndex: 1,
   },
 });
 

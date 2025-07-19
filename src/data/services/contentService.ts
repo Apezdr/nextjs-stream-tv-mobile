@@ -18,6 +18,10 @@ import {
   ScreensaverResponse,
   SyncValidationUpdateRequest,
   TVDeviceMediaResponse,
+  GenresListResponse,
+  GenresListParams,
+  GenresContentResponse,
+  GenresContentParams,
 } from "@/src/data/types/content.types";
 
 // Types for playback tracking
@@ -320,5 +324,65 @@ export const contentService = {
     data: PlaybackUpdateRequest,
   ): Promise<void> => {
     await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.UPDATE_PLAYBACK, data);
+  },
+
+  /**
+   * Fetch available genres with optional content counts
+   */
+  getGenresList: async (
+    params: GenresListParams = {},
+  ): Promise<GenresListResponse> => {
+    const {
+      action = "list",
+      type = "movie", // Default to movies for the movies page
+      includeCounts = true,
+      isTVdevice = true, // Enable TV device optimizations
+    } = params;
+
+    const queryParams = buildQueryParams({
+      action,
+      type,
+      includeCounts,
+      isTVdevice,
+    });
+
+    return enhancedApiClient.get<GenresListResponse>(
+      `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+    );
+  },
+
+  /**
+   * Fetch content for a specific genre with pagination
+   */
+  getGenreContent: async (
+    params: GenresContentParams,
+  ): Promise<GenresContentResponse> => {
+    const {
+      action = "content",
+      genre,
+      type = "movie", // Default to movies for the movies page
+      page = 0,
+      limit = 30,
+      sort = "newest",
+      sortOrder = "desc",
+      includeWatchHistory = true,
+      isTVdevice = true, // Enable TV device optimizations
+    } = params;
+
+    const queryParams = buildQueryParams({
+      action,
+      genre,
+      type,
+      page,
+      limit,
+      sort,
+      sortOrder,
+      includeWatchHistory,
+      isTVdevice,
+    });
+
+    return enhancedApiClient.get<GenresContentResponse>(
+      `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+    );
   },
 };

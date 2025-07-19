@@ -45,6 +45,22 @@ export const queryKeys = {
   contentCount: (type?: string) =>
     [...queryKeys.content(), "count", type || "all"] as const,
 
+  // Genre queries
+  genresList: (params: {
+    type?: string;
+    includeCounts?: boolean;
+    isTVdevice?: boolean;
+  }) => [...queryKeys.content(), "genres", "list", params] as const,
+
+  genreContent: (params: {
+    genre: string;
+    type?: string;
+    page?: number;
+    limit?: number;
+    sort?: string;
+    sortOrder?: string;
+  }) => [...queryKeys.content(), "genres", "content", params] as const,
+
   // Banner and screensaver
   banner: () => [...queryKeys.content(), "banner"] as const,
   screensaver: () => [...queryKeys.content(), "screensaver"] as const,
