@@ -35,13 +35,13 @@ export interface ContentItemData {
   description?: string;
   thumbnailUrl?: string;
   thumbnailBlurhash?: string; // for episodes
-  showId: string;
+  showId?: string;
   // Use raw numbers from API instead of formatted strings
   seasonNumber?: number;
   episodeNumber?: number;
   // Additional fields for the video player
   mediaType?: "movie" | "tv";
-  videoLink?: string;
+  link?: string;
   backdropUrl?: string;
   backdropBlurhash?: string;
   hdr?: string;
@@ -115,7 +115,7 @@ const ContentItem = ({
 
     // 3) Now navigate
     onSelect(
-      item.showId,
+      item.showId || item.id,
       item.seasonNumber,
       item.episodeNumber,
       item.mediaType || "movie",
@@ -137,6 +137,18 @@ const ContentItem = ({
     collapseSidebar();
   }, [collapseSidebar]);
 
+  // omit the blurhash from the console log
+  // if (item.episodeNumber) {
+  //   console.log(
+  //     "item",
+  //     JSON.stringify(
+  //       { ...item, thumbnailBlurhash: undefined, blurhash: undefined },
+  //       null,
+  //       2,
+  //     ),
+  //   );
+  // }
+
   return (
     <TouchableOpacity
       style={[
@@ -145,7 +157,7 @@ const ContentItem = ({
       ]}
       onPress={handlePress}
       onFocus={handleFocus}
-      activeOpacity={0.5}
+      activeOpacity={1.0}
       isTVSelectable={Platform.isTV}
       hasTVPreferredFocus={hasTVPreferredFocus && Platform.isTV}
     >
@@ -205,6 +217,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     margin: 8,
     overflow: "hidden",
+    opacity: 0.22, // Default 22% opacity
   },
   overlay: {
     alignItems: "center",

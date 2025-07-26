@@ -104,19 +104,17 @@ export function useMoviesPageLogic() {
   // Shared transformation function to reduce code duplication
   const transformMediaItems = useCallback((items: MediaItem[]) => {
     return items.map((item) => {
-      const uniqueId = item.id;
-
       return {
-        id: uniqueId,
+        id: item.id,
         title: item.title,
         description: `MOVIE • ${item.hdr || "HD"}`,
         thumbnailUrl: item.posterURL,
         thumbnailBlurhash: item.posterBlurhash || "",
-        showId: item.id,
+        //showId: undefined, // Movies don't have showId, only TV shows do
         seasonNumber: undefined,
         episodeNumber: undefined,
         mediaType: item.type as "movie" | "tv",
-        videoLink: item.link,
+        link: item.link,
         backdropUrl: item.backdrop,
         backdropBlurhash: item.backdropBlurhash,
         hdr: item.hdr,

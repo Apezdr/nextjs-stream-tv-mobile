@@ -8,8 +8,6 @@ import {
   Platform,
   Dimensions,
   TVFocusGuideView,
-  NativeSyntheticEvent,
-  NativeScrollEvent,
 } from "react-native";
 
 import ContentItem, {
@@ -60,13 +58,20 @@ const ContentRow = ({
   loadMoreThreshold = 0.3, // start prefetch when 30% from end
   trapFocusDown = false,
 }: ContentRowProps) => {
-  // guard so we only call onLoadMore once per new page
-  const loadGuard = useRef(false);
+  // Simplified load guard - just track if we're currently loading
+  const isLoadingMore = useRef(false);
 
-  // reset guard whenever the list grows (i.e. you got new items)
+  // Reset loading state when items change (new data arrived)
   useEffect(() => {
-    loadGuard.current = false;
+    isLoadingMore.current = false;
   }, [items.length]);
+
+  // Reset loading state when fetching status changes
+  useEffect(() => {
+    if (!isFetchingNextPage) {
+      isLoadingMore.current = false;
+    }
+  }, [isFetchingNextPage]);
 
   // calculate item width + total spacing
   const itemDimensions = useMemo(() => {
@@ -81,45 +86,17 @@ const ContentRow = ({
     return { itemWidth, totalItemWidth: itemWidth + itemMargin };
   }, [itemSize]);
 
-  // how many items before the end we should fire prefetch?
-  const triggerDistancePx = useMemo(() => {
-    const itemCountTrigger = Math.ceil(items.length * loadMoreThreshold);
-    return itemCountTrigger * itemDimensions.totalItemWidth;
-  }, [items.length, loadMoreThreshold, itemDimensions.totalItemWidth]);
-
-  // scroll handler: prefetch when we're within triggerDistancePx of the true end
-  const handleScroll = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (
-        !hasNextPage ||
-        isFetchingNextPage ||
-        !onLoadMore ||
-        loadGuard.current
-      ) {
-        return;
-      }
-      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-      const distanceFromEnd =
-        contentSize.width - (contentOffset.x + layoutMeasurement.width);
-
-      if (distanceFromEnd <= triggerDistancePx) {
-        onLoadMore();
-        loadGuard.current = true;
-      }
-    },
-    [hasNextPage, isFetchingNextPage, onLoadMore, triggerDistancePx],
-  );
-
-  // fallback: if you do actually hit the real end
+  // Simplified and reliable end reached handler
   const handleEndReached = useCallback(() => {
+    // Only proceed if we have a next page, aren't already fetching, have a load function, and aren't already loading
     if (
       hasNextPage &&
       !isFetchingNextPage &&
       onLoadMore &&
-      !loadGuard.current
+      !isLoadingMore.current
     ) {
+      isLoadingMore.current = true;
       onLoadMore();
-      loadGuard.current = true;
     }
   }, [hasNextPage, isFetchingNextPage, onLoadMore]);
 
@@ -161,8 +138,9 @@ const ContentRow = ({
     [itemDimensions.totalItemWidth],
   );
 
-  const renderFooter = useCallback(() => {
-    if (!isFetchingNextPage) return null;
+  // Stable footer component to prevent flickering
+  const renderFooter = useMemo(() => {
+    if (!isFetchingNextPage && !isLoadingMore.current) return null;
     return (
       <View style={styles.loadingFooter}>
         <Text style={styles.loadingText}>Loading more…</Text>
@@ -201,9 +179,8 @@ const ContentRow = ({
           updateCellsBatchingPeriod={Platform.isTV ? 12 : 50}
           decelerationRate="fast"
           scrollEventThrottle={16}
-          onScroll={handleScroll}
           onEndReached={handleEndReached}
-          onEndReachedThreshold={0.1}
+          onEndReachedThreshold={0.5}
           ListFooterComponent={renderFooter}
           contentContainerStyle={styles.scrollContent}
           style={styles.scrollView}

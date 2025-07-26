@@ -24,7 +24,13 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
-    queryKey: queryKeys.infiniteContentList({ type, sort, sortOrder, limit }),
+    queryKey: queryKeys.infiniteContentList({
+      type,
+      sort,
+      sortOrder,
+      limit,
+      isTVdevice: true,
+    }),
     queryFn: async ({ pageParam = 0 }) => {
       const queryParams = buildQueryParams({
         type,
@@ -32,7 +38,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
         sortOrder,
         page: pageParam,
         limit,
-        isTVDevice: true,
+        isTVdevice: "true",
       });
       return enhancedApiClient.get<ContentListResponse>(
         `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
@@ -49,6 +55,12 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       return allPages.length;
     },
     initialPageParam: 0,
+    // Enhanced retry logic for infinite queries
+    retry: (failureCount, error: Error & { status?: number }) => {
+      // retry 6 times for network/server errors
+      return failureCount < 6;
+    },
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff, max 10s
     // Stale time is configured in queryClient
   });
 
@@ -203,6 +215,12 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
     },
     initialPageParam: 0,
     enabled: !!genre,
+    // Enhanced retry logic for infinite queries
+    retry: (failureCount, error: Error & { status?: number }) => {
+      // retry 6 times for network/server errors
+      return failureCount < 6;
+    },
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff, max 10s
   });
 
   return query;
@@ -255,6 +273,7 @@ export const infiniteContentPrefetch = {
       sort = "id",
       sortOrder = "desc",
       limit = 30,
+      isTVdevice = true,
     } = params;
 
     return queryClient.prefetchQuery({
@@ -264,6 +283,7 @@ export const infiniteContentPrefetch = {
         sortOrder,
         page: currentPageCount,
         limit,
+        isTVdevice: isTVdevice,
       }),
       queryFn: () => {
         const queryParams = buildQueryParams({
@@ -272,6 +292,7 @@ export const infiniteContentPrefetch = {
           sortOrder,
           page: currentPageCount,
           limit,
+          isTVdevice: isTVdevice,
         });
         return enhancedApiClient.get<ContentListResponse>(
           `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,

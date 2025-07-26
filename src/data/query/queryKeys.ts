@@ -23,6 +23,7 @@ export const queryKeys = {
     sortOrder?: string;
     page?: number;
     limit?: number;
+    isTVdevice?: boolean; // Optional parameter to specify if the request is from a TV device
   }) => [...queryKeys.content(), "list", params] as const,
 
   // Infinite content list queries
@@ -31,6 +32,7 @@ export const queryKeys = {
     sort?: string;
     sortOrder?: string;
     limit?: number;
+    isTVdevice?: boolean; // Optional parameter to specify if the request is from a TV device
   }) => [...queryKeys.content(), "infiniteList", params] as const,
 
   // Episode picker queries

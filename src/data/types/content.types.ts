@@ -51,6 +51,7 @@ export interface HorizontalListParams {
   page?: number;
   limit?: number;
   includeWatchHistory?: boolean; // Optional parameter to include watch history
+  isTVdevice?: boolean; // Optional parameter to specify if the request is from a TV device
 }
 
 // Episode picker response structure

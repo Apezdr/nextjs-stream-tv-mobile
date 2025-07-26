@@ -353,7 +353,7 @@ export default function TVHomePage() {
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
         mediaType: item.type,
-        videoLink: item.link,
+        link: item.link,
         backdropUrl: item.backdrop,
         hdr: item.hdr,
         logo: item.logo,

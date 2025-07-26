@@ -93,7 +93,16 @@ const GenreContentRow = memo(function GenreContentRow({
         <LazyContentRow
           title={`${genre.name} Movies`}
           items={transformedGenreContent}
-          onSelectContent={onSelectContent}
+          onSelectContent={(
+            showId: string,
+            mediaType: "movie" | "tv",
+            seasonNumber?: number,
+            episodeNumber?: number,
+            backdropUrl?: string,
+            backdropBlurhash?: string,
+          ) => {
+            onSelectContent(showId, seasonNumber, episodeNumber, mediaType);
+          }}
           itemSize="medium"
           hasNextPage={hasNextPage}
           isFetchingNextPage={isFetchingNextPage}
