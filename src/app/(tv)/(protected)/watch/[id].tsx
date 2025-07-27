@@ -1,7 +1,7 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { BufferOptions, useVideoPlayer, VideoView } from "expo-video";
+import { BufferOptions, useVideoPlayer, VideoPlayer, VideoView } from "expo-video";
 import {
   useEffect,
   useState,
@@ -101,7 +101,7 @@ function useContentLoader(
 
 // Custom hook for playback tracking with improved memory leak prevention
 function usePlaybackTracking(
-  player: any,
+  player: VideoPlayer,
   videoData: MediaDetailsResponse | null,
   videoURL: string | null,
   params: {
@@ -118,7 +118,7 @@ function usePlaybackTracking(
   const pendingUpdateRef = useRef<Promise<void> | null>(null);
 
   // Helper function to check if player is still valid
-  const isPlayerValid = useCallback((player: any): boolean => {
+  const isPlayerValid = useCallback((player: VideoPlayer | null): boolean => {
     if (!player) return false;
 
     try {
@@ -851,7 +851,7 @@ export default function WatchPage() {
     resetActivityTimer();
     setMode("browse");
     router.back();
-  }, [resetActivityTimer, setMode, router]);
+  }, [setVideoPlayingState, resetActivityTimer, setMode, router]);
 
   const handleInfoPress = useCallback(() => {
     setVideoPlayingState(false);

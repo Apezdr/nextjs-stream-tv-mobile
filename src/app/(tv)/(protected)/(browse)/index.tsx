@@ -8,16 +8,11 @@ import {
   Text,
   ActivityIndicator,
   InteractionManager,
-  DeviceEventEmitter,
 } from "react-native";
 
 import TVBanner from "@/src/components/TV/Banner/TVBanner";
 import ContentRow from "@/src/components/TV/Pages/ContentRow";
 import { Colors } from "@/src/constants/Colors";
-import {
-  MINIMIZED_WIDTH,
-  EXPANDED_WIDTH,
-} from "@/src/constants/SidebarConstants";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import {
   useInfiniteContentList,
@@ -40,50 +35,12 @@ export default function TVHomePage() {
     }
   }, []);
 
-  // State for tracking sidebar state changes via custom events
-  const [sidebarState, setSidebarState] = useState<
-    "closed" | "minimized" | "expanded"
-  >("minimized");
-
-  // Listen for sidebar state changes via custom events
-  useEffect(() => {
-    const handleSidebarStateChange = (
-      state: "closed" | "minimized" | "expanded",
-    ) => {
-      setSidebarState(state);
-    };
-
-    // Listen for custom sidebar state events using React Native's DeviceEventEmitter
-    const subscription = DeviceEventEmitter.addListener(
-      "sidebarStateChange",
-      handleSidebarStateChange,
-    );
-
-    return () => {
-      subscription.remove();
-    };
-  }, []);
-
   // Ensure we're in browse mode when this page loads
   useEffect(() => {
     if (currentMode !== "browse") {
       setMode("browse");
     }
   }, [currentMode, setMode]);
-
-  // Calculate dynamic left margin based on sidebar state
-  const getContentMarginLeft = useCallback(() => {
-    switch (sidebarState) {
-      case "closed":
-        return 0;
-      case "minimized":
-        return MINIMIZED_WIDTH;
-      case "expanded":
-        return EXPANDED_WIDTH;
-      default:
-        return 0;
-    }
-  }, [sidebarState]);
 
   // API hooks with optimized settings
   const recentlyWatched = useInfiniteContentList({
@@ -413,14 +370,19 @@ export default function TVHomePage() {
       });
 
       // Navigate to media info page with the first available season
-      router.push({
-        pathname: "/media-info/[id]",
-        params: {
-          id: showId,
-          type: mediaType,
-          season: firstAvailableSeason,
+      router.push(
+        {
+          pathname: "/media-info/[id]",
+          params: {
+            id: showId,
+            type: mediaType,
+            season: firstAvailableSeason,
+          },
         },
-      });
+        {
+          dangerouslySingular: true,
+        },
+      );
 
       // Clear pending navigation
       setPendingTVNavigation(null);
@@ -438,14 +400,19 @@ export default function TVHomePage() {
       );
 
       // Fallback to season 1 if we can't get available seasons
-      router.push({
-        pathname: "/media-info/[id]",
-        params: {
-          id: showId,
-          type: mediaType,
-          season: 1,
+      router.push(
+        {
+          pathname: "/media-info/[id]",
+          params: {
+            id: showId,
+            type: mediaType,
+            season: 1,
+          },
         },
-      });
+        {
+          dangerouslySingular: true,
+        },
+      );
 
       // Clear pending navigation
       setPendingTVNavigation(null);
@@ -471,17 +438,22 @@ export default function TVHomePage() {
           episode: episodeNumber,
         });
 
-        router.push({
-          pathname: "/watch/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            season: seasonNumber,
-            episode: episodeNumber,
-            ...(backdropUrl && { backdrop: backdropUrl }),
-            ...(backdropBlurhash && { backdropBlurhash }),
+        router.push(
+          {
+            pathname: "/watch/[id]",
+            params: {
+              id: showId,
+              type: mediaType,
+              season: seasonNumber,
+              episode: episodeNumber,
+              ...(backdropUrl && { backdrop: backdropUrl }),
+              ...(backdropBlurhash && { backdropBlurhash }),
+            },
           },
-        });
+          {
+            dangerouslySingular: true,
+          },
+        );
       } else if (mediaType === "tv") {
         // TV show without specific episode - query available seasons first
         logDebug("Querying available seasons for TV show:", {
@@ -497,15 +469,20 @@ export default function TVHomePage() {
           type: mediaType,
         });
 
-        router.push({
-          pathname: "/media-info/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            ...(backdropUrl && { backdrop: backdropUrl }),
-            ...(backdropBlurhash && { backdropBlurhash }),
+        router.push(
+          {
+            pathname: "/media-info/[id]",
+            params: {
+              id: showId,
+              type: mediaType,
+              ...(backdropUrl && { backdrop: backdropUrl }),
+              ...(backdropBlurhash && { backdropBlurhash }),
+            },
           },
-        });
+          {
+            dangerouslySingular: true,
+          },
+        );
       }
     },
     [logDebug, router],
@@ -515,7 +492,7 @@ export default function TVHomePage() {
     <View style={styles.container}>
       {/* Content browser with stepped scrolling */}
       <ScrollView
-        style={[styles.contentBrowser, { marginLeft: getContentMarginLeft() }]}
+        style={styles.contentBrowser}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
         nestedScrollEnabled={true}
@@ -643,7 +620,7 @@ const styles = StyleSheet.create({
   contentContainer: {
     paddingBottom: 30,
     paddingHorizontal: 20,
-    paddingTop: 30,
+    paddingTop: 12,
   },
   errorSection: {
     alignItems: "center",

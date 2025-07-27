@@ -135,17 +135,22 @@ export default function MediaInfoPage() {
 
   const handlePlayEpisode = useCallback(
     (episode: TVDeviceEpisode) => {
-      router.push({
-        pathname: "/watch/[id]",
-        params: {
-          id: params.id,
-          type: params.type,
-          season: selectedSeason,
-          episode: episode.episodeNumber,
-          backdrop: mediaInfo?.backdrop,
-          backdropBlurhash: mediaInfo?.backdropBlurhash,
+      router.push(
+        {
+          pathname: "/watch/[id]",
+          params: {
+            id: params.id,
+            type: params.type,
+            season: selectedSeason,
+            episode: episode.episodeNumber,
+            backdrop: mediaInfo?.backdrop,
+            backdropBlurhash: mediaInfo?.backdropBlurhash,
+          },
         },
-      });
+        {
+          dangerouslySingular: true,
+        },
+      );
     },
     [
       params.id,
@@ -158,15 +163,20 @@ export default function MediaInfoPage() {
   );
 
   const handlePlayMovie = useCallback(() => {
-    router.push({
-      pathname: "/watch/[id]",
-      params: {
-        id: params.id,
-        type: params.type,
-        backdrop: mediaInfo?.backdrop,
-        backdropBlurhash: mediaInfo?.backdropBlurhash,
+    router.push(
+      {
+        pathname: "/watch/[id]",
+        params: {
+          id: params.id,
+          type: params.type,
+          backdrop: mediaInfo?.backdrop,
+          backdropBlurhash: mediaInfo?.backdropBlurhash,
+        },
       },
-    });
+      {
+        dangerouslySingular: true,
+      },
+    );
   }, [
     params.id,
     params.type,

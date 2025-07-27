@@ -1005,13 +1005,18 @@ export default function TVBanner({ style }: TVBannerProps) {
     if (!currentBanner) return;
 
     // Navigate to media info page for the banner item
-    router.push({
-      pathname: "/media-info/[id]",
-      params: {
-        id: currentBanner.id,
-        type: currentBanner.type,
+    router.push(
+      {
+        pathname: "/media-info/[id]",
+        params: {
+          id: currentBanner.id,
+          type: currentBanner.type,
+        },
       },
-    });
+      {
+        dangerouslySingular: true,
+      },
+    );
   }, [currentBanner, router]);
 
   const tvEventHandler = useCallback(

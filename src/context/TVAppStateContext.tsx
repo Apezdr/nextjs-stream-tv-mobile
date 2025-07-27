@@ -61,9 +61,6 @@ export interface VideoContent {
   }; // Keyed by language code, e.g. { "English": { ... } }
 }
 
-// Types for sidebar state (only relevant in browse mode)
-export type SidebarState = "closed" | "minimized" | "expanded";
-
 // Define a type for focusable elements
 export type FocusableElement = React.ComponentRef<typeof TextInput> | null;
 
@@ -86,15 +83,6 @@ interface TVAppStateContextType {
   registerPlayerControls: (controls: VideoPlayerControls) => void;
   unregisterPlayerControls: () => void;
   updatePlayerState: (state: Partial<VideoPlayerState>) => void;
-
-  // Sidebar state (browse mode only)
-  sidebarState: SidebarState;
-  setSidebarState: (state: SidebarState) => void;
-  toggleSidebar: () => void;
-  expandSidebar: () => void;
-  collapseSidebar: () => void;
-  closeSidebar: () => void;
-  isSidebarVisible: boolean;
 
   // Focus restoration
   previouslyFocusedElement: FocusableElement;
@@ -149,9 +137,6 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
   // Video content state
   const [currentVideo, setCurrentVideo] = useState<VideoContent | null>(null);
 
-  // Sidebar state (only used in browse mode)
-  const [sidebarState, setSidebarState] = useState<SidebarState>("minimized");
-
   // Focus restoration
   const [previouslyFocusedElement, setPreviouslyFocusedElement] =
     useState<FocusableElement>(null);
@@ -176,9 +161,6 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
   // Player controls (null when no player active)
   const [playerControls, setPlayerControls] =
     useState<VideoPlayerControls | null>(null);
-
-  // Check if sidebar is visible
-  const isSidebarVisible = sidebarState !== "closed";
 
   // Player controls registration
   const registerPlayerControls = useCallback(
@@ -244,39 +226,7 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
       console.log(`Switching TV app mode from ${prevMode} to ${mode}`);
       return mode;
     });
-
-    // Auto-close sidebar when entering watch mode
-    if (mode === "watch") {
-      setSidebarState("closed");
-    } else if (mode === "browse") {
-      // Open sidebar to minimized when returning to browse mode
-      setSidebarState("minimized");
-    } else if (mode === "media-info") {
-      // Keep sidebar closed in media-info mode
-      setSidebarState("closed");
-    }
   }, []); // Remove currentMode dependency to prevent unnecessary re-renders
-
-  // Sidebar controls
-  const toggleSidebar = useCallback(() => {
-    setSidebarState((prev) => {
-      if (prev === "closed") return "minimized";
-      if (prev === "minimized") return "expanded";
-      return "minimized"; // If expanded, go back to minimized
-    });
-  }, []);
-
-  const expandSidebar = useCallback(() => {
-    setSidebarState("expanded");
-  }, []);
-
-  const collapseSidebar = useCallback(() => {
-    setSidebarState("minimized");
-  }, []);
-
-  const closeSidebar = useCallback(() => {
-    setSidebarState("closed");
-  }, []);
 
   // Content selection and watch mode
   const selectContentAndWatch = useCallback(
@@ -444,8 +394,6 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
       playerStateDuration: playerState.duration,
       playerStateError: !!playerState.error,
       hasPlayerControls: !!playerControls,
-      sidebarState,
-      isSidebarVisible,
     });
 
     return {
@@ -454,13 +402,6 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
       currentVideo,
       playerState,
       playerControls,
-      sidebarState,
-      setSidebarState,
-      toggleSidebar,
-      expandSidebar,
-      collapseSidebar,
-      closeSidebar,
-      isSidebarVisible,
       previouslyFocusedElement,
       setPreviouslyFocusedElement,
       restorePreviousFocus,
@@ -488,16 +429,9 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
     playerState.duration,
     playerState.error,
     playerControls, // This changes rarely
-    sidebarState,
-    isSidebarVisible,
     previouslyFocusedElement, // Need to track changes to focused element
     // Functions are stable due to useCallback
     setMode,
-    setSidebarState,
-    toggleSidebar,
-    expandSidebar,
-    collapseSidebar,
-    closeSidebar,
     setPreviouslyFocusedElement,
     restorePreviousFocus,
     selectContentAndWatch,

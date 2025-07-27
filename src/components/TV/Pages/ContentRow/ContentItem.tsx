@@ -12,7 +12,6 @@ import {
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
-import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { backdropManager } from "@/src/utils/BackdropManager";
 
 // Create a TV-compatible TouchableOpacity component
@@ -68,8 +67,6 @@ const ContentItem = ({
   size = "medium",
   hasTVPreferredFocus = false,
 }: ContentItemProps) => {
-  const { collapseSidebar } = useTVAppState();
-
   // Memoize dimensions calculation
   const dimensions = useMemo(() => {
     const getItemWidth = () => {
@@ -134,8 +131,8 @@ const ContentItem = ({
 
   // Focus handler
   const handleFocus = useCallback(() => {
-    collapseSidebar();
-  }, [collapseSidebar]);
+    // Focus handling logic can be added here if needed
+  }, []);
 
   // omit the blurhash from the console log
   // if (item.episodeNumber) {

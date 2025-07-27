@@ -1,6 +1,6 @@
 /**
  * Extracted movies page logic for code-splitting
- * Handles TV navigation, sidebar state, and data management
+ * Handles TV navigation and data management
  */
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
@@ -11,12 +11,8 @@ import {
   startTransition,
   useDeferredValue,
 } from "react";
-import { DeviceEventEmitter, InteractionManager } from "react-native";
+import { InteractionManager } from "react-native";
 
-import {
-  MINIMIZED_WIDTH,
-  EXPANDED_WIDTH,
-} from "@/src/constants/SidebarConstants";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useGenresList } from "@/src/data/hooks/queries/useContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
@@ -35,49 +31,12 @@ export function useMoviesPageLogic() {
     }
   }, []);
 
-  // State for tracking sidebar state changes via custom events
-  const [sidebarState, setSidebarState] = useState<
-    "closed" | "minimized" | "expanded"
-  >("minimized");
-
-  // Listen for sidebar state changes via custom events
-  useEffect(() => {
-    const handleSidebarStateChange = (
-      state: "closed" | "minimized" | "expanded",
-    ) => {
-      setSidebarState(state);
-    };
-
-    const subscription = DeviceEventEmitter.addListener(
-      "sidebarStateChange",
-      handleSidebarStateChange,
-    );
-
-    return () => {
-      subscription.remove();
-    };
-  }, []);
-
   // Ensure we're in browse mode when this page loads
   useEffect(() => {
     if (currentMode !== "browse") {
       setMode("browse");
     }
   }, [currentMode, setMode]);
-
-  // Calculate dynamic left margin based on sidebar state
-  const getContentMarginLeft = useCallback(() => {
-    switch (sidebarState) {
-      case "closed":
-        return 0;
-      case "minimized":
-        return MINIMIZED_WIDTH;
-      case "expanded":
-        return EXPANDED_WIDTH;
-      default:
-        return 0;
-    }
-  }, [sidebarState]);
 
   // Fetch available movie genres
   const {
@@ -152,14 +111,19 @@ export function useMoviesPageLogic() {
         availableSeasons,
       });
 
-      router.push({
-        pathname: "/media-info/[id]",
-        params: {
-          id: showId,
-          type: mediaType,
-          season: firstAvailableSeason,
+      router.push(
+        {
+          pathname: "/media-info/[id]",
+          params: {
+            id: showId,
+            type: mediaType,
+            season: firstAvailableSeason,
+          },
         },
-      });
+        {
+          dangerouslySingular: true,
+        },
+      );
 
       startTransition(() => {
         setPendingTVNavigation(null);
@@ -177,14 +141,19 @@ export function useMoviesPageLogic() {
         rootShowError,
       );
 
-      router.push({
-        pathname: "/media-info/[id]",
-        params: {
-          id: showId,
-          type: mediaType,
-          season: 1,
+      router.push(
+        {
+          pathname: "/media-info/[id]",
+          params: {
+            id: showId,
+            type: mediaType,
+            season: 1,
+          },
         },
-      });
+        {
+          dangerouslySingular: true,
+        },
+      );
 
       startTransition(() => {
         setPendingTVNavigation(null);
@@ -209,17 +178,22 @@ export function useMoviesPageLogic() {
           episode: episodeNumber,
         });
 
-        router.push({
-          pathname: "/watch/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            season: seasonNumber,
-            episode: episodeNumber,
-            ...(backdropUrl && { backdrop: backdropUrl }),
-            ...(backdropBlurhash && { backdropBlurhash }),
+        router.push(
+          {
+            pathname: "/watch/[id]",
+            params: {
+              id: showId,
+              type: mediaType,
+              season: seasonNumber,
+              episode: episodeNumber,
+              ...(backdropUrl && { backdrop: backdropUrl }),
+              ...(backdropBlurhash && { backdropBlurhash }),
+            },
           },
-        });
+          {
+            dangerouslySingular: true,
+          },
+        );
       } else if (mediaType === "tv") {
         logDebug("Querying available seasons for TV show:", {
           id: showId,
@@ -235,15 +209,20 @@ export function useMoviesPageLogic() {
           type: mediaType,
         });
 
-        router.push({
-          pathname: "/media-info/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            ...(backdropUrl && { backdrop: backdropUrl }),
-            ...(backdropBlurhash && { backdropBlurhash }),
+        router.push(
+          {
+            pathname: "/media-info/[id]",
+            params: {
+              id: showId,
+              type: mediaType,
+              ...(backdropUrl && { backdrop: backdropUrl }),
+              ...(backdropBlurhash && { backdropBlurhash }),
+            },
           },
-        });
+          {
+            dangerouslySingular: true,
+          },
+        );
       }
     },
     [router],
@@ -292,9 +271,5 @@ export function useMoviesPageLogic() {
     // Functions
     handleSelectContent,
     transformMediaItems,
-    getContentMarginLeft,
-
-    // State
-    sidebarState,
   };
 }

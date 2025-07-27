@@ -1037,10 +1037,16 @@ export const Screensaver: React.FC = () => {
         if (type === "tv") {
           navigationMethod(
             `/(tv)/(protected)/watch/${_id}?type=${type}&season=1&episode=1` as Href,
+            {
+              dangerouslySingular: true,
+            },
           );
         } else {
           navigationMethod(
             `/(tv)/(protected)/watch/${_id}?type=${type}` as Href,
+            {
+              dangerouslySingular: true,
+            },
           );
         }
         break;

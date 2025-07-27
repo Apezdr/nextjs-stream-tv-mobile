@@ -37,19 +37,13 @@ const MoviesPageContent = memo(function MoviesPageContent() {
     genresError,
     handleSelectContent,
     transformMediaItems,
-    getContentMarginLeft,
   } = useMoviesPageLogic();
 
   // Render loading state
   if (isLoadingGenres) {
     return (
       <View style={styles.container}>
-        <View
-          style={[
-            styles.contentBrowser,
-            { marginLeft: getContentMarginLeft() },
-          ]}
-        >
+        <View style={styles.contentBrowser}>
           <View style={styles.loadingContainer}>
             <Text style={styles.title}>Movies</Text>
             <ActivityIndicator color="#FFFFFF" size="large" />
@@ -64,12 +58,7 @@ const MoviesPageContent = memo(function MoviesPageContent() {
   if (genresError || !genresData) {
     return (
       <View style={styles.container}>
-        <View
-          style={[
-            styles.contentBrowser,
-            { marginLeft: getContentMarginLeft() },
-          ]}
-        >
+        <View style={styles.contentBrowser}>
           <View style={styles.errorContainer}>
             <Text style={styles.title}>Movies</Text>
             <Text style={styles.errorText}>
@@ -89,7 +78,7 @@ const MoviesPageContent = memo(function MoviesPageContent() {
     <View style={styles.container}>
       {/* Content browser with stepped scrolling */}
       <ScrollView
-        style={[styles.contentBrowser, { marginLeft: getContentMarginLeft() }]}
+        style={styles.contentBrowser}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
       >
@@ -126,7 +115,7 @@ const styles = StyleSheet.create({
   contentContainer: {
     paddingBottom: 30,
     paddingHorizontal: 20,
-    paddingTop: 30,
+    paddingTop: 12,
   },
   errorContainer: {
     alignItems: "center",

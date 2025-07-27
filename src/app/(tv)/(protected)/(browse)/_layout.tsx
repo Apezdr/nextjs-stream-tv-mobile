@@ -1,14 +1,13 @@
-import { Slot, useFocusEffect } from "expo-router";
-import React, { useEffect, useState, useCallback } from "react";
+import { Slot, usePathname } from "expo-router";
+import React, { useEffect } from "react";
 import { View, StyleSheet } from "react-native";
 
-import { TVSidebar } from "@/src/components/TV/Navigation";
+import TVTopNavigation from "@/src/components/TV/Navigation/TVTopNavigation";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 
 export default function BrowseLayout() {
   const { setMode } = useTVAppState();
-  const [shouldSidebarHandleBackButton, setShouldSidebarHandleBackButton] =
-    useState(false);
+  const pathname = usePathname();
 
   // Ensure we're in browse mode for all browse routes
   useEffect(() => {
@@ -16,26 +15,15 @@ export default function BrowseLayout() {
     setMode("browse");
   }, [setMode]);
 
-  // Use focus effect to control when sidebar should handle back button
-  useFocusEffect(
-    useCallback(() => {
-      // When this screen gains focus, allow sidebar to handle back button
-      setShouldSidebarHandleBackButton(true);
-
-      return () => {
-        // When this screen loses focus, disable sidebar back button handling
-        setShouldSidebarHandleBackButton(false);
-      };
-    }, []),
-  );
-
   return (
     <View style={styles.container}>
-      {/* Sidebar is always present in browse mode */}
-      <TVSidebar
-        shouldRegisterBackButtonHandler={shouldSidebarHandleBackButton}
-      />
-      <Slot />
+      {/* Top Navigation */}
+      <TVTopNavigation currentRoute={pathname} />
+
+      {/* Main Content */}
+      <View style={styles.content}>
+        <Slot />
+      </View>
     </View>
   );
 }
@@ -44,5 +32,9 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: "#141414",
     flex: 1,
+  },
+  content: {
+    flex: 1,
+    paddingTop: 80, // Account for fixed top navigation height
   },
 });
