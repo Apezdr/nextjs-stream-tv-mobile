@@ -1,7 +1,12 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { BufferOptions, useVideoPlayer, VideoPlayer, VideoView } from "expo-video";
+import {
+  BufferOptions,
+  useVideoPlayer,
+  VideoPlayer,
+  VideoView,
+} from "expo-video";
 import {
   useEffect,
   useState,

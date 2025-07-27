@@ -267,6 +267,7 @@ const ProfileButton: React.FC<ProfileButtonProps> = ({
                   selectedDropdownIndex === index &&
                     styles.selectedDropdownItem,
                 ]}
+                activeOpacity={1.0}
                 onPress={() => handleDropdownItemAction(item.action)}
                 onFocus={handleDropdownItemFocus}
                 onBlur={handleDropdownItemBlur}
@@ -314,6 +315,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     position: "absolute",
     right: 0,
+    left: 0,
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
@@ -331,6 +333,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     paddingHorizontal: 16,
     paddingVertical: 12,
+    opacity: 0.5,
   },
   dropdownText: {
     color: "#CCCCCC",
