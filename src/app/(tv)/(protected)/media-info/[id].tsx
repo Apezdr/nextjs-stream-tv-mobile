@@ -1,5 +1,5 @@
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import React, {
+import {
   useCallback,
   useState,
   useRef,
@@ -30,7 +30,27 @@ import {
   useMovieDetails,
 } from "@/src/data/hooks/useContent";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
-import { backdropManager } from "@/src/utils/BackdropManager";
+import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { useBackdropStore } from "@/src/stores/backdropStore";
+
+/**
+ * Small helper to format milliseconds into H:MM:SS or M:SS
+ * We keep this minimal and consistent with WatchProgressBar formatting.
+ */
+function formatTimeFromMs(ms?: number | null): string {
+  if (!ms) return "0:00";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds
+      .toString()
+      .padStart(2, "0")}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
 
 export default function MediaInfoPage() {
   const router = useRouter();
@@ -47,6 +67,9 @@ export default function MediaInfoPage() {
   const [isOverviewTruncated, setIsOverviewTruncated] =
     useState<boolean>(false);
   const overviewOpacity = useRef(new Animated.Value(1)).current;
+
+  // Use the new Zustand-based backdrop manager
+  const { show: showBackdrop } = useBackdropManager();
 
   // React 19 concurrent features
   const [isPending, startTransition] = useTransition();
@@ -84,23 +107,17 @@ export default function MediaInfoPage() {
     params.type === "movie" ? movieData.isRefreshing : tvData.isRefreshing;
   const error = params.type === "movie" ? movieData.error : tvData.error;
 
-  // Show backdrop when media info loads
-  useEffect(() => {
-    if (mediaInfo?.backdrop) {
-      console.log("[MediaInfo] Showing backdrop:", mediaInfo.backdrop);
-      backdropManager.show(mediaInfo.backdrop, {
-        fade: true,
-        duration: 500,
-        blurhash: mediaInfo.backdropBlurhash,
-      });
-    }
+  // Extract backdrop values to prevent unnecessary re-renders from React Query updates
+  const backdropUrl = mediaInfo?.backdrop;
+  const backdropBlurhash = mediaInfo?.backdropBlurhash;
 
-    // Don't hide backdrop on unmount - let the next page handle it
-    // This allows seamless transitions to the watch page
+  // Don't hide backdrop on unmount - let the next page handle it
+  // This allows seamless transitions to the watch page
+  useEffect(() => {
     return () => {
       console.log("[MediaInfo] Component unmounting, keeping backdrop visible");
     };
-  }, [mediaInfo?.backdrop, mediaInfo?.backdropBlurhash]);
+  }, []);
 
   // Debounce refresh to prevent excessive API calls
   const lastRefreshRef = useRef<number>(0);
@@ -111,6 +128,29 @@ export default function MediaInfoPage() {
     useCallback(() => {
       const now = Date.now();
       const timeSinceLastRefresh = now - lastRefreshRef.current;
+
+      // Show backdrop when page comes into focus (handles both initial load and back navigation)
+      if (backdropUrl) {
+        // Guard to avoid replaying the same backdrop when nothing changed.
+        // Use the Zustand store's getState() so we don't cause a React re-render.
+        const { url: currentUrl, visible: isVisible } =
+          useBackdropStore.getState();
+        if (currentUrl !== backdropUrl || !isVisible) {
+          console.log(
+            "[MediaInfo] Page focused - showing backdrop:",
+            backdropUrl,
+          );
+          showBackdrop(backdropUrl, {
+            fade: true,
+            duration: 500,
+            blurhash: backdropBlurhash,
+          });
+        } else {
+          console.log(
+            "[MediaInfo] Page focused - backdrop unchanged and visible, skipping show()",
+          );
+        }
+      }
 
       // Only refresh if enough time has passed and we have data
       if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
@@ -130,6 +170,9 @@ export default function MediaInfoPage() {
       movieData.refetch,
       tvData.data,
       tvData.refetch,
+      backdropUrl,
+      backdropBlurhash,
+      showBackdrop,
     ]),
   );
 
@@ -407,6 +450,17 @@ export default function MediaInfoPage() {
               <Text style={styles.metadataSeparator}>•</Text>
               <Text style={styles.metadataType}>Movie</Text>
               <Text style={styles.metadataSeparator}>•</Text>
+              {/* If there's no significant watch history (less than 10 seconds), show duration inline */}
+              {(!mediaInfo.watchHistory?.playbackTime ||
+                (mediaInfo.watchHistory?.playbackTime ?? 0) < 10) &&
+              mediaInfo.duration ? (
+                <>
+                  <Text style={styles.metadataDuration}>
+                    {formatTimeFromMs(mediaInfo.duration)}
+                  </Text>
+                  <Text style={styles.metadataSeparator}>•</Text>
+                </>
+              ) : null}
               <View style={styles.ratingBox}>
                 <Text style={styles.ratingBoxText}>R</Text>
               </View>
@@ -584,6 +638,11 @@ const styles = StyleSheet.create({
   metadataType: {
     color: "#CCCCCC",
     fontSize: 16,
+  },
+  metadataDuration: {
+    color: "#CCCCCC",
+    fontSize: 16,
+    marginHorizontal: 6,
   },
   playButtonContainer: {
     marginTop: 32,

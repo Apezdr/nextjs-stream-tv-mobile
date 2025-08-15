@@ -20,12 +20,15 @@ import {
 } from "@/src/data/hooks/queries/useInfiniteContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
 import { MediaItem } from "@/src/data/types/content.types";
-import { backdropManager } from "@/src/utils/BackdropManager";
+import { useBackdropManager } from "@/src/hooks/useBackdrop";
 
 export default function TVHomePage() {
   const { currentMode, setMode } = useTVAppState();
   const router = useRouter();
   const isFocused = useIsFocused();
+
+  // Use the new Zustand-based backdrop manager
+  const { hide: hideBackdrop } = useBackdropManager();
 
   // Conditional logging for performance optimization
   const DEBUG_HOME_PAGE = __DEV__ && false; // Enable only when needed for debugging
@@ -182,7 +185,7 @@ export default function TVHomePage() {
 
       // Hide backdrop when returning to browse page
       console.log("[BrowsePage] Hiding backdrop on browse page load");
-      backdropManager.hide({ fade: true, duration: 1200 });
+      hideBackdrop({ fade: true, duration: 1200 });
 
       // Cleanup function
       return () => {

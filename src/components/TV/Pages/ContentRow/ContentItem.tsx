@@ -12,7 +12,7 @@ import {
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
-import { backdropManager } from "@/src/utils/BackdropManager";
+import { useBackdropManager } from "@/src/hooks/useBackdrop";
 
 // Create a TV-compatible TouchableOpacity component
 interface TVTouchableProps
@@ -67,6 +67,9 @@ const ContentItem = ({
   size = "medium",
   hasTVPreferredFocus = false,
 }: ContentItemProps) => {
+  // Use the new Zustand-based backdrop manager
+  const { show: showBackdrop } = useBackdropManager();
+
   // Memoize dimensions calculation
   const dimensions = useMemo(() => {
     const getItemWidth = () => {
@@ -87,14 +90,14 @@ const ContentItem = ({
     return { itemWidth, itemHeight };
   }, [size]);
 
-  // Memoize press handler
+  // Memoize press handler - MIGRATED to use Zustand
   const handlePress = useCallback(() => {
     if (item.backdropUrl) {
-      // 1) Immediately show the blurhash/fade—even if the real image isn’t cached yet:
-      backdropManager.show(item.backdropUrl, {
+      // 1) Immediately show the backdrop using Zustand store
+      showBackdrop(item.backdropUrl, {
         fade: true,
         duration: 300,
-        blurhash: item.thumbnailBlurhash, // pass the raw string
+        blurhash: item.backdropBlurhash || item.thumbnailBlurhash, // Use backdrop blurhash if available, fallback to thumbnail
       });
 
       // 2) Fire‑and‑forget cache warming
@@ -117,15 +120,17 @@ const ContentItem = ({
       item.episodeNumber,
       item.mediaType || "movie",
       item.backdropUrl,
-      item.thumbnailBlurhash,
+      item.backdropBlurhash || item.thumbnailBlurhash,
     );
   }, [
+    showBackdrop, // NEW: Zustand action
     onSelect,
     item.showId,
     item.seasonNumber,
     item.episodeNumber,
     item.mediaType,
     item.backdropUrl,
+    item.backdropBlurhash,
     item.thumbnailBlurhash,
   ]);
 

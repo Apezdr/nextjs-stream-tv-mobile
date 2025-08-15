@@ -1,7 +1,7 @@
 import { useIsFocused } from "@react-navigation/native";
 import { ImageBackground } from "expo-image";
 import { useRouter } from "expo-router";
-import { useVideoPlayer, VideoView } from "expo-video";
+import { VideoView } from "expo-video";
 import { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
   View,
@@ -22,6 +22,7 @@ import Animated, {
 import { useTVAppState, TVAppMode } from "@/src/context/TVAppStateContext";
 import { useBanner } from "@/src/data/hooks/useContent";
 import { BannerItem } from "@/src/data/types/content.types";
+import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 
 interface TVBannerProps {
   style?: ViewStyle;
@@ -89,8 +90,8 @@ export default function TVBanner({ style }: TVBannerProps) {
   const [volumeBeforeFocusLoss, setVolumeBeforeFocusLoss] = useState<number>(1);
   const [isMutedDueToFocusLoss, setIsMutedDueToFocusLoss] = useState(false);
 
-  // Create video player instance (reused for all clips)
-  const player = useVideoPlayer(currentVideoURL, (p) => {
+  // Create optimized video player instance with focus-aware resource management
+  const { player } = useOptimizedVideoPlayer(currentVideoURL, (p) => {
     p.timeUpdateEventInterval = 0.5; // Update every 500ms for position tracking
     p.loop = false;
     p.muted = false; // Not muted, we'll control volume programmatically

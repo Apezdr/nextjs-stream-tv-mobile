@@ -1,12 +1,7 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import {
-  BufferOptions,
-  useVideoPlayer,
-  VideoPlayer,
-  VideoView,
-} from "expo-video";
+import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
 import {
   useEffect,
   useState,
@@ -33,7 +28,8 @@ import {
   MediaDetailsResponse,
   TVDeviceEpisode,
 } from "@/src/data/types/content.types";
-import { backdropManager } from "@/src/utils/BackdropManager";
+import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -394,6 +390,13 @@ export default function WatchPage() {
   const [isEpisodeSwitching, setIsEpisodeSwitching] = useState(false);
   const isEpisodeSwitchingRef = useRef(false);
 
+  // Use the new Zustand-based backdrop manager
+  const {
+    show: showBackdrop,
+    hide: hideBackdrop,
+    setMessage: setBackdropMessage,
+  } = useBackdropManager();
+
   // Video player loading states
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
@@ -444,21 +447,24 @@ export default function WatchPage() {
     videoData?.backdropBlurhash; // From initial data load
 
   // Buffer Options
-  const bufferOptions: BufferOptions = {
-    // Conservative forward buffer - balance smoothness vs memory
-    preferredForwardBufferDuration: 15, // 15 seconds = ~116 MB (vs 60s = 463 MB)
+  const bufferOptions = useMemo<BufferOptions>(
+    () => ({
+      // Conservative forward buffer - balance smoothness vs memory
+      preferredForwardBufferDuration: 15, // 15 seconds = ~116 MB (vs 60s = 463 MB)
 
-    // iOS: Let system manage stalling intelligently
-    waitsToMinimizeStalling: true,
+      // iOS: Let system manage stalling intelligently
+      waitsToMinimizeStalling: true,
 
-    // Android: Memory-conscious settings
-    minBufferForPlayback: 3, // Just 3 seconds minimum = ~23 MB
-    maxBufferBytes: 134217728, // 128 MB hard limit (vs 0 = unlimited)
-    prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
-  };
+      // Android: Memory-conscious settings
+      minBufferForPlayback: 3, // Just 3 seconds minimum = ~23 MB
+      maxBufferBytes: 134217728, // 128 MB hard limit (vs 0 = unlimited)
+      prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
+    }),
+    [],
+  );
 
-  // Create player with resume functionality using effective data
-  const player = useVideoPlayer(effectiveVideoURL, (p) => {
+  // Create optimized player with focus-aware resource management
+  const { player } = useOptimizedVideoPlayer(effectiveVideoURL, (p) => {
     p.timeUpdateEventInterval = 1;
     p.loop = false;
     p.bufferOptions = bufferOptions;
@@ -916,84 +922,49 @@ export default function WatchPage() {
     [effectiveVideoData],
   );
 
-  // Backdrop management with global backdrop manager
+  // Optimized backdrop management - only show when actually visible to user
   useEffect(() => {
-    // Show backdrop immediately when page loads, even if we don't have the URL yet
-    if (
-      effectiveBackdropURL ||
-      showFullLoading ||
-      isEpisodeSwitching ||
-      isVideoLoading
-    ) {
+    // Only show backdrop during initial loading or episode switching
+    // Don't show/hide backdrop during video buffering since it's behind the video player
+    const shouldShowBackdrop = showFullLoading || isEpisodeSwitching;
+
+    if (shouldShowBackdrop && effectiveBackdropURL) {
       console.log(
-        "[WatchPage] Showing backdrop:",
-        effectiveBackdropURL || "loading...",
+        "[WatchPage] Showing backdrop for loading state:",
+        effectiveBackdropURL,
       );
 
-      // Determine loading message based on current state
+      // Determine loading message
       let message: string | undefined;
       if (showFullLoading) message = "Loading video...";
       else if (isEpisodeSwitching) message = "Switching episode...";
-      else if (isVideoLoading) message = "Buffering...";
 
-      // Show backdrop with URL if available, otherwise just update message
-      if (effectiveBackdropURL) {
-        backdropManager.show(effectiveBackdropURL, {
-          fade: true,
-          duration: 300,
-          blurhash: effectiveBackdropBlurhash as string | undefined,
-          message,
-        });
-      } else if (message && backdropManager.isBackdropVisible()) {
-        // If backdrop is already visible but we don't have URL yet, just update message
-        backdropManager.setMessage(message);
-      }
+      showBackdrop(effectiveBackdropURL, {
+        fade: true,
+        duration: 300,
+        blurhash: effectiveBackdropBlurhash as string | undefined,
+        message,
+      });
     }
 
-    // Hide backdrop when video starts playing
-    if (
-      !showFullLoading &&
-      !isEpisodeSwitching &&
-      !isVideoLoading &&
-      isVideoPlaying
-    ) {
-      console.log("[WatchPage] Video playing - hiding backdrop");
-      backdropManager.hide({ fade: true, duration: 500 });
+    // Hide backdrop when we're done with initial loading or episode switching
+    if (!shouldShowBackdrop && !showFullLoading && !isEpisodeSwitching) {
+      console.log("[WatchPage] Hiding backdrop - video interface ready");
+      hideBackdrop({ fade: true, duration: 500 });
     }
 
     // Cleanup on unmount
     return () => {
       console.log("[WatchPage] Component unmounting - hiding backdrop");
-      backdropManager.hide({ fade: true, duration: 300 });
+      hideBackdrop({ fade: true, duration: 300 });
     };
   }, [
     effectiveBackdropURL,
     effectiveBackdropBlurhash,
     showFullLoading,
     isEpisodeSwitching,
-    isVideoLoading,
-    isVideoPlaying,
-  ]);
-
-  // Update backdrop message when loading states change
-  useEffect(() => {
-    if (effectiveBackdropURL) {
-      let message: string | undefined;
-      if (showFullLoading) message = "Loading video...";
-      else if (isEpisodeSwitching) message = "Switching episode...";
-      else if (isVideoLoading) message = "Buffering...";
-
-      if (message) {
-        backdropManager.setMessage(message);
-      } else {
-        backdropManager.setMessage(undefined);
-      }
-    }
-  }, [
-    showFullLoading,
-    isEpisodeSwitching,
-    isVideoLoading,
-    effectiveBackdropURL,
+    showBackdrop,
+    hideBackdrop,
   ]);
 
   // Render

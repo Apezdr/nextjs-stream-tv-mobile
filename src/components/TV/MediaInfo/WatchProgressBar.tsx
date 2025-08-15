@@ -27,25 +27,28 @@ export default function WatchProgressBar({
   duration,
   style,
 }: WatchProgressBarProps) {
-  // Don't render if no watch history or no playback time
-  if (
-    !watchHistory ||
-    !watchHistory.playbackTime ||
-    watchHistory.playbackTime <= 0
-  ) {
-    return null;
-  }
-
   // Convert duration from milliseconds to seconds (API returns duration in milliseconds)
   const adjustedDuration = duration ? duration / 1000 : 0;
 
-  // Calculate progress percentage
-  const progressPercentage = adjustedDuration
-    ? Math.min((watchHistory.playbackTime / adjustedDuration) * 100, 100)
+  // Nothing to show if we don't have a valid duration
+  if (!adjustedDuration) {
+    return null;
+  }
+
+  // Determine if we have useful watch history
+  const hasWatchHistory =
+    !!watchHistory &&
+    !!watchHistory.playbackTime &&
+    watchHistory.playbackTime > 0;
+
+  const playbackTime = watchHistory?.playbackTime ?? 0;
+
+  const progressPercentage = hasWatchHistory
+    ? Math.min((playbackTime / adjustedDuration) * 100, 100)
     : 0;
 
-  // Don't show progress bar if we don't have duration or if progress is minimal
-  if (!adjustedDuration || progressPercentage < 1) {
+  // Only render the progress bar component when user has watched 10+ seconds
+  if (!hasWatchHistory || playbackTime < 10) {
     return null;
   }
 
@@ -54,6 +57,7 @@ export default function WatchProgressBar({
   return (
     <View style={[styles.container, style]}>
       <View style={styles.progressContainer}>
+        {/* Progress bar */}
         <View style={styles.progressTrack}>
           <View
             style={[
@@ -64,11 +68,16 @@ export default function WatchProgressBar({
           />
         </View>
         <Text style={styles.progressText}>
-          {isCompleted
-            ? "Watched"
-            : `${formatTime(watchHistory.playbackTime)} / ${formatTime(adjustedDuration || 0)}`}
+          {`${formatTime(playbackTime)} / ${formatTime(adjustedDuration)}`}
         </Text>
       </View>
+
+      {/* "Watched" label below the progress container */}
+      {isCompleted && (
+        <View style={styles.watchedContainer}>
+          <Text style={styles.watchedLabel}>Watched</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -76,6 +85,7 @@ export default function WatchProgressBar({
 const styles = StyleSheet.create({
   container: {
     marginTop: 12,
+    position: "relative", // Enable absolute positioning for child elements
   },
   progressContainer: {
     alignItems: "center",
@@ -92,7 +102,6 @@ const styles = StyleSheet.create({
   progressText: {
     color: "#CCCCCC",
     fontSize: 14,
-    minWidth: 100,
     textAlign: "right",
   },
   progressTrack: {
@@ -101,5 +110,16 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 4,
     marginRight: 12,
+  },
+  watchedContainer: {
+    position: "absolute",
+    right: 20,
+    top: 16,
+  },
+  watchedLabel: {
+    color: "#30830fff",
+    fontSize: 12,
+    fontStyle: "italic",
+    fontWeight: "800",
   },
 });

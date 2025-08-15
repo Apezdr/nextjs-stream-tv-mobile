@@ -108,6 +108,9 @@ const StandaloneVideoControls = memo(
       stopContinuousActivity,
     } = useRemoteActivity();
 
+    // State for SeekBar preferred focus management
+    const [seekBarShouldFocus, setSeekBarShouldFocus] = useState(true); // Initially true for first load
+
     // Caption selection state - use undefined to distinguish from user selecting "Off" (null)
     const [selectedCaptionLanguage, setSelectedCaptionLanguage] = useState<
       string | null | undefined
@@ -289,6 +292,23 @@ const StandaloneVideoControls = memo(
         }
       }
     }, [videoInfo?.captionURLs, selectedCaptionLanguage]);
+
+    // Reset SeekBar focus state after it's been applied (for initial load and episode changes)
+    useEffect(() => {
+      if (seekBarShouldFocus) {
+        console.log("🎯 SeekBar focus state set to true, will reset in 200ms");
+        // Reset after a brief delay to allow focus transfer, then disable for normal navigation
+        const timer = setTimeout(() => {
+          console.log("🎯 Resetting SeekBar focus state to false");
+          setSeekBarShouldFocus(false);
+        }, 200);
+        return () => clearTimeout(timer);
+      }
+    }, [seekBarShouldFocus]);
+
+    useEffect(() => {
+      setSeekBarShouldFocus(true); // Reset focus state
+    }, []);
 
     const controlsContainerStyle = overlayMode
       ? [styles.controls, styles.overlayControls]
@@ -505,6 +525,7 @@ const StandaloneVideoControls = memo(
                     isPlaying={isPlaying}
                     onStartSeeking={startContinuousActivity}
                     onStopSeeking={stopContinuousActivity}
+                    hasTVPreferredFocus={!seekBarShouldFocus}
                   />
 
                   {/* Caption Controls */}
@@ -537,6 +558,8 @@ const StandaloneVideoControls = memo(
                             resetActivityTimer();
                             if (onEpisodeSelect) {
                               onEpisodeSelect(episode);
+                              // Transfer focus to SeekBar using hasTVPreferredFocus toggle
+                              setSeekBarShouldFocus(true);
                             }
                           }}
                           isLoading={isLoadingEpisodes}
@@ -617,6 +640,13 @@ const styles = StyleSheet.create({
     width: "100%",
   },
 
+  dot: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 3,
+    height: 6,
+    width: 6,
+  },
+
   episodeCarouselInFlow: {
     width: "100%",
   },
@@ -628,6 +658,46 @@ const styles = StyleSheet.create({
     width: "100%",
   },
 
+  episodeSwitchingContent: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  episodeSwitchingIndicator: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderRadius: 8,
+    marginHorizontal: 40,
+    marginVertical: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+
+  episodeSwitchingText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+
+  errorContainer: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 0, 0, 0.1)",
+    borderColor: "rgba(255, 0, 0, 0.3)",
+    borderRadius: 8,
+    borderWidth: 1,
+    marginHorizontal: 40,
+    marginTop: 10,
+    padding: 15,
+  },
+
+  errorText: {
+    color: "#FF6B6B",
+    fontSize: 14,
+    marginBottom: 10,
+    textAlign: "center",
+  },
+
   flex1: {
     flex: 1,
   },
@@ -636,6 +706,12 @@ const styles = StyleSheet.create({
     minWidth: 50,
     paddingHorizontal: 12,
     paddingVertical: 12,
+  },
+
+  loadingDots: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 4,
   },
 
   logo: {
@@ -694,6 +770,23 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 40,
     justifyContent: "center",
+  },
+
+  retryButton: {
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 6,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+  },
+
+  retryButtonFocused: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  },
+
+  retryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
   },
 
   seekBarSection: {
@@ -764,76 +857,6 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.8)",
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 3,
-  },
-
-  errorContainer: {
-    alignItems: "center",
-    backgroundColor: "rgba(255, 0, 0, 0.1)",
-    borderColor: "rgba(255, 0, 0, 0.3)",
-    borderRadius: 8,
-    borderWidth: 1,
-    marginHorizontal: 40,
-    marginTop: 10,
-    padding: 15,
-  },
-
-  errorText: {
-    color: "#FF6B6B",
-    fontSize: 14,
-    marginBottom: 10,
-    textAlign: "center",
-  },
-
-  retryButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
-    borderRadius: 6,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-  },
-
-  retryButtonFocused: {
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-  },
-
-  retryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  episodeSwitchingIndicator: {
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-    borderRadius: 8,
-    marginHorizontal: 40,
-    marginVertical: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-
-  episodeSwitchingContent: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 10,
-  },
-
-  episodeSwitchingText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "500",
-  },
-
-  loadingDots: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 4,
-  },
-
-  dot: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 3,
-    height: 6,
-    width: 6,
   },
 });
 

@@ -102,8 +102,12 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
     if (!event) return;
 
     const { eventType, eventKeyAction } = event;
-    console.log("[RemoteActivity] TV Event:", eventType, eventKeyAction);
 
+    console.log(
+      "[RemoteActivity] ✅ PROCESSING event:",
+      eventType,
+      eventKeyAction,
+    );
     // Reset activity timer for most events
     resetActivityTimer();
 

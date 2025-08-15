@@ -4,9 +4,9 @@ import { Image } from "expo-image";
 import React, {
   forwardRef,
   useImperativeHandle,
-  useState,
   useRef,
   useCallback,
+  useEffect,
 } from "react";
 import {
   View,
@@ -16,6 +16,7 @@ import {
   Animated,
 } from "react-native";
 
+import { useBackdrop, useBackdropActions } from "@/src/hooks/useBackdrop";
 import {
   BackdropComponentRef,
   BackdropOptions,
@@ -25,11 +26,9 @@ type GlobalBackdropProps = object;
 
 const GlobalBackdrop = forwardRef<BackdropComponentRef, GlobalBackdropProps>(
   (_props, ref) => {
-    // Visual state
-    const [url, setUrl] = useState<string | null>(null);
-    const [blurhash, setBlurhash] = useState<string | null>(null);
-    const [visible, setVisible] = useState(false);
-    const [message, setMessageState] = useState<string | undefined>(undefined);
+    // Use Zustand state instead of local state
+    const { url, blurhash, visible, message } = useBackdrop();
+    const { show, hide, update, setMessage } = useBackdropActions();
 
     // Animation values
     const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -53,59 +52,47 @@ const GlobalBackdrop = forwardRef<BackdropComponentRef, GlobalBackdropProps>(
       [],
     );
 
-    // Expose imperative API: show, hide, update, setMessage
+    // Expose imperative API that delegates to Zustand actions
     useImperativeHandle(
       ref,
       () => ({
         show: (newUrl: string, options?: BackdropOptions) => {
           if (!newUrl) return;
-          setUrl(newUrl);
-          setBlurhash(options?.blurhash ?? null);
-          setMessageState(options?.message);
-          setVisible(true);
-
-          if (options?.message) {
-            animateOpacity(messageOpacity, 1, 200);
-          }
-          const dur = options?.duration ?? (options?.fade ? 300 : 0);
-          animateOpacity(fadeAnim, 1, dur);
+          show(newUrl, options);
         },
 
         hide: (options?: { fade?: boolean; duration?: number }) => {
-          const dur = options?.duration ?? (options?.fade ? 300 : 0);
-          animateOpacity(messageOpacity, 0, 150);
-          animateOpacity(fadeAnim, 0, dur, () => {
-            setVisible(false);
-            setUrl(null);
-            setBlurhash(null);
-            setMessageState(undefined);
-          });
+          hide(options);
         },
 
         update: (newUrl: string, newBlurhash?: string) => {
           if (!newUrl) return;
-          if (newUrl !== url) {
-            setUrl(newUrl);
-            setBlurhash(newBlurhash ?? null);
-            // keep message intact
-          }
+          update(newUrl, newBlurhash);
         },
 
         setMessage: (newMessage?: string) => {
-          if (newMessage !== message) {
-            if (newMessage) {
-              setMessageState(newMessage);
-              animateOpacity(messageOpacity, 1, 200);
-            } else {
-              animateOpacity(messageOpacity, 0, 200, () => {
-                setMessageState(undefined);
-              });
-            }
-          }
+          setMessage(newMessage);
         },
       }),
-      [animateOpacity, fadeAnim, messageOpacity, url, message],
+      [show, hide, update, setMessage],
     );
+
+    // Handle animations based on Zustand state changes
+    useEffect(() => {
+      if (visible) {
+        animateOpacity(fadeAnim, 1, 300);
+      } else {
+        animateOpacity(fadeAnim, 0, 300);
+      }
+    }, [visible, fadeAnim, animateOpacity]);
+
+    useEffect(() => {
+      if (message) {
+        animateOpacity(messageOpacity, 1, 200);
+      } else {
+        animateOpacity(messageOpacity, 0, 200);
+      }
+    }, [message, messageOpacity, animateOpacity]);
 
     // If nothing to show, render nothing
     if (!visible || !url) {
@@ -116,9 +103,11 @@ const GlobalBackdrop = forwardRef<BackdropComponentRef, GlobalBackdropProps>(
       <Animated.View
         style={[styles.container, { opacity: fadeAnim }]}
         pointerEvents="none"
+        key={url}
       >
         {/* Full‑screen backdrop image */}
         <Image
+          key={url} // Add key to prevent unnecessary re-renders of same URL
           source={{ uri: url }}
           style={styles.backdropImage}
           contentFit="cover"
@@ -127,6 +116,8 @@ const GlobalBackdrop = forwardRef<BackdropComponentRef, GlobalBackdropProps>(
           placeholder={
             blurhash ? { uri: `data:image/png;base64,${blurhash}` } : undefined
           }
+          cachePolicy="memory-disk" // Improve caching
+          priority="high" // Prioritize backdrop loading
         />
 
         {/* Dark dim overlay for contrast */}
