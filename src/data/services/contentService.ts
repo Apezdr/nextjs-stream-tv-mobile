@@ -23,6 +23,7 @@ import {
   GenresContentResponse,
   GenresContentParams,
 } from "@/src/data/types/content.types";
+import { generateUserAgent } from "@/src/utils/deviceInfo";
 
 // Types for playback tracking
 export interface PlaybackUpdateRequest {
@@ -323,7 +324,14 @@ export const contentService = {
   updatePlaybackProgress: async (
     data: PlaybackUpdateRequest,
   ): Promise<void> => {
-    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.UPDATE_PLAYBACK, data);
+    // Generate platform-specific user agent for tracking
+    const userAgent = generateUserAgent();
+
+    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.UPDATE_PLAYBACK, data, {
+      headers: {
+        "User-Agent": userAgent,
+      },
+    });
   },
 
   /**

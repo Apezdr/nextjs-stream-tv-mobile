@@ -1,20 +1,50 @@
-// app/_layout.tsx
+// app/login/_layout.tsx
 import "expo-dev-client";
 import { Stack } from "expo-router";
-import { Platform } from "react-native";
+import { Platform, View, StyleSheet } from "react-native";
 
-// Root layout with providers
-export default function RootLayout() {
+import GlobalBackdrop from "@/src/components/TV/GlobalBackdrop";
+
+// Login layout with backdrop
+export default function LoginLayout() {
   const isTV = Platform.isTV;
+
+  if (isTV) {
+    return (
+      <View style={styles.container}>
+        <GlobalBackdrop />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: "fade",
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        >
+          <Stack.Screen name="index" />
+        </Stack>
+      </View>
+    );
+  }
+
   return (
-    <Stack
-      screenOptions={{
-        headerShown: isTV ? false : true,
-        animation: isTV ? "fade" : "default",
-        contentStyle: { backgroundColor: "#000" }, // Ensure full screen on TV
-      }}
-    >
-      <Stack.Screen name="index" />
-    </Stack>
+    <View style={styles.container}>
+      <GlobalBackdrop />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          animation: "default",
+          contentStyle: { backgroundColor: "transparent" },
+        }}
+      >
+        <Stack.Screen name="index" />
+      </Stack>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: "#141414",
+    flex: 1,
+  },
+});

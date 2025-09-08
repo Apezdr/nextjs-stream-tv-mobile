@@ -1,4 +1,3 @@
-// src/app/(tv)/(protected)/watch/[id].tsx
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
@@ -10,16 +9,20 @@ import {
   useRef,
   useTransition,
 } from "react";
-import { View, StyleSheet, Text, BackHandler, Pressable } from "react-native";
+import {
+  View,
+  StyleSheet,
+  Text,
+  BackHandler,
+  TouchableOpacity,
+} from "react-native";
+import { SystemBars } from "react-native-edge-to-edge";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
-import StandaloneVideoControls from "@/src/components/Video/StandaloneVideoControls";
+import MobileVideoControls from "@/src/components/Mobile/Video/MobileVideoControls";
 import { Colors } from "@/src/constants/Colors";
-import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
-import { useScreensaver } from "@/src/context/ScreensaverContext";
-import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
-import { setWatchMode, tvQueryHelpers } from "@/src/data/query/queryClient";
 import {
   contentService,
   PlaybackUpdateRequest,
@@ -100,7 +103,7 @@ function useContentLoader(
   };
 }
 
-// Custom hook for playback tracking with improved memory leak prevention
+// Custom hook for playback tracking (simplified for mobile)
 function usePlaybackTracking(
   player: VideoPlayer,
   videoData: MediaDetailsResponse | null,
@@ -116,7 +119,6 @@ function usePlaybackTracking(
   const updateIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const listenersRef = useRef<{ remove: () => void }[]>([]);
   const isMountedRef = useRef(true);
-  const pendingUpdateRef = useRef<Promise<void> | null>(null);
 
   // Helper function to check if player is still valid
   const isPlayerValid = useCallback((player: VideoPlayer | null): boolean => {
@@ -132,7 +134,7 @@ function usePlaybackTracking(
     }
   }, []);
 
-  // Expose function to flush current progress immediately (for navigation events)
+  // Expose function to flush current progress immediately
   const flushCurrentProgress = useCallback(async (): Promise<void> => {
     if (!player || !videoData || !videoURL || !isPlayerValid(player)) {
       return;
@@ -141,9 +143,7 @@ function usePlaybackTracking(
     try {
       const currentTime = player.currentTime;
       if (typeof currentTime === "number" && currentTime > 0) {
-        console.log(
-          "[PlaybackTracking] Force flushing current progress before navigation",
-        );
+        console.log("[MobilePlaybackTracking] Force flushing current progress");
 
         const playbackData: PlaybackUpdateRequest = {
           videoId: videoURL,
@@ -164,10 +164,12 @@ function usePlaybackTracking(
         await contentService.updatePlaybackProgress(playbackData);
         lastUpdateTimeRef.current = currentTime;
 
-        console.log(`[PlaybackTracking] Updated progress: ${currentTime}s`);
+        console.log(
+          `[MobilePlaybackTracking] Updated progress: ${currentTime}s`,
+        );
       }
     } catch (error) {
-      console.error("[PlaybackTracking] Error in force flush:", error);
+      console.error("[MobilePlaybackTracking] Error in force flush:", error);
     }
   }, [
     player,
@@ -209,46 +211,43 @@ function usePlaybackTracking(
         };
 
         console.log(
-          `[PlaybackTracking] Sending update for ${playbackData.mediaMetadata.mediaType} ${playbackData.mediaMetadata.mediaId} at ${currentTime}s`,
+          `[MobilePlaybackTracking] Sending update at ${currentTime}s`,
         );
 
-        // Store the promise to handle cleanup
-        const updatePromise =
-          contentService.updatePlaybackProgress(playbackData);
-        pendingUpdateRef.current = updatePromise;
-
-        await updatePromise;
-
-        // Clear the pending update if it's still the same one
-        if (pendingUpdateRef.current === updatePromise) {
-          pendingUpdateRef.current = null;
-        }
+        await contentService.updatePlaybackProgress(playbackData);
 
         if (isMountedRef.current) {
-          console.log(`[PlaybackTracking] Updated progress: ${currentTime}s`);
+          console.log(
+            `[MobilePlaybackTracking] Updated progress: ${currentTime}s`,
+          );
         }
       } catch (error) {
         if (isMountedRef.current) {
-          console.error("[PlaybackTracking] Failed to update progress:", error);
+          console.error(
+            "[MobilePlaybackTracking] Failed to update progress:",
+            error,
+          );
         }
       }
     },
     [videoData, videoURL, params],
   );
 
-  // Cleanup function to remove all listeners
+  // Cleanup functions
   const cleanupListeners = useCallback(() => {
     listenersRef.current.forEach((listener) => {
       try {
         listener.remove();
       } catch (error) {
-        console.error("[PlaybackTracking] Error removing listener:", error);
+        console.error(
+          "[MobilePlaybackTracking] Error removing listener:",
+          error,
+        );
       }
     });
     listenersRef.current = [];
   }, []);
 
-  // Cleanup function to clear interval
   const cleanupInterval = useCallback(() => {
     if (updateIntervalRef.current) {
       clearInterval(updateIntervalRef.current);
@@ -292,10 +291,9 @@ function usePlaybackTracking(
             }
           } catch (error) {
             console.error(
-              "[PlaybackTracking] Player released during time update:",
+              "[MobilePlaybackTracking] Player released during time update:",
               error,
             );
-            // Player has been released, clean up
             cleanupInterval();
             cleanupListeners();
           }
@@ -315,10 +313,9 @@ function usePlaybackTracking(
             }
           } catch (error) {
             console.error(
-              "[PlaybackTracking] Player released during playing change:",
+              "[MobilePlaybackTracking] Player released during playing change:",
               error,
             );
-            // Player has been released, clean up
             cleanupInterval();
             cleanupListeners();
           }
@@ -338,10 +335,9 @@ function usePlaybackTracking(
             }
           } catch (error) {
             console.error(
-              "[PlaybackTracking] Player released during interval update:",
+              "[MobilePlaybackTracking] Player released during interval update:",
               error,
             );
-            // Player has been released, clean up immediately
             cleanupInterval();
             cleanupListeners();
           }
@@ -362,12 +358,15 @@ function usePlaybackTracking(
           listenersRef.current.push(timeUpdateListener, playingChangeListener);
         } catch (error) {
           console.error(
-            "[PlaybackTracking] Error setting up listeners:",
+            "[MobilePlaybackTracking] Error setting up listeners:",
             error,
           );
         }
       } catch (error) {
-        console.error("[PlaybackTracking] Error in setupTracking:", error);
+        console.error(
+          "[MobilePlaybackTracking] Error in setupTracking:",
+          error,
+        );
       }
     };
 
@@ -393,21 +392,15 @@ function usePlaybackTracking(
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
-
-      // Clean up everything
       cleanupListeners();
       cleanupInterval();
-
-      // Note: We don't send progress here anymore as it's handled by
-      // navigation event handlers before unmount occurs
     };
   }, [cleanupListeners, cleanupInterval]);
 
-  // Return both the hook functionality and the flush function
   return { flushCurrentProgress };
 }
 
-export default function WatchPage() {
+export default function MobileWatchPage() {
   const params = useLocalSearchParams<{
     id: string;
     type: "tv" | "movie";
@@ -418,26 +411,17 @@ export default function WatchPage() {
   }>();
   const router = useRouter();
 
-  // App contexts
-  const { setMode } = useTVAppState();
-  const { resetActivityTimer } = useRemoteActivity();
-  const { setVideoPlayingState } = useScreensaver();
   const [isEpisodeSwitching, setIsEpisodeSwitching] = useState(false);
   const isEpisodeSwitchingRef = useRef(false);
 
-  // Use the new Zustand-based backdrop manager
-  const {
-    show: showBackdrop,
-    hide: hideBackdrop,
-    setMessage: setBackdropMessage,
-  } = useBackdropManager();
+  // Use the backdrop manager
+  const { show: showBackdrop, hide: hideBackdrop } = useBackdropManager();
 
   // Video player loading states
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
   // Content loading (abstracted) - skip loading during episode switching
-  // Use ref to ensure we block loading even during React state update timing issues
   const { videoURL, videoData, loading, contentError } = useContentLoader(
     params,
     isEpisodeSwitching || isEpisodeSwitchingRef.current,
@@ -481,24 +465,20 @@ export default function WatchPage() {
     currentEpisodeData?.backdropBlurhash || // From episode switching
     videoData?.backdropBlurhash; // From initial data load
 
-  // Buffer Options
+  // Buffer Options (mobile-optimized)
   const bufferOptions = useMemo<BufferOptions>(
     () => ({
-      // Conservative forward buffer - balance smoothness vs memory
-      preferredForwardBufferDuration: 15, // 15 seconds = ~116 MB (vs 60s = 463 MB)
-
-      // iOS: Let system manage stalling intelligently
+      // More conservative for mobile devices
+      preferredForwardBufferDuration: 10, // 10 seconds for mobile
       waitsToMinimizeStalling: true,
-
-      // Android: Memory-conscious settings
-      minBufferForPlayback: 3, // Just 3 seconds minimum = ~23 MB
-      maxBufferBytes: 134217728, // 128 MB hard limit (vs 0 = unlimited)
-      prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
+      minBufferForPlayback: 2, // 2 seconds minimum for mobile
+      maxBufferBytes: 67108864, // 64 MB for mobile (half of TV)
+      prioritizeTimeOverSizeThreshold: true,
     }),
     [],
   );
 
-  // Create optimized player with focus-aware resource management
+  // Create optimized player
   const { player } = useOptimizedVideoPlayer(effectiveVideoURL, (p) => {
     p.timeUpdateEventInterval = 1;
     p.loop = false;
@@ -510,7 +490,7 @@ export default function WatchPage() {
       // Resume from saved position (with a small buffer to account for seeking precision)
       const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
       console.log(
-        `[WatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
+        `[MobileWatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
       );
       p.currentTime = resumeTime;
     }
@@ -531,7 +511,7 @@ export default function WatchPage() {
     try {
       // Listen for status changes to detect when video is ready
       const statusListener = player.addListener("statusChange", (status) => {
-        console.log("[WatchPage] Video status changed:", status);
+        console.log("[MobileWatchPage] Video status changed:", status);
 
         // Video is ready when it has loaded enough to start playing
         if (status.status === "readyToPlay" && !status.error) {
@@ -543,7 +523,10 @@ export default function WatchPage() {
       const playingListener = player.addListener(
         "playingChange",
         ({ isPlaying }) => {
-          console.log("[WatchPage] Video playing state changed:", isPlaying);
+          console.log(
+            "[MobileWatchPage] Video playing state changed:",
+            isPlaying,
+          );
           setIsVideoPlaying(isPlaying);
 
           // If video starts playing, it's definitely not loading anymore
@@ -556,7 +539,7 @@ export default function WatchPage() {
       // Listen for source changes (during episode switching)
       const sourceListener = player.addListener("sourceChange", () => {
         console.log(
-          "[WatchPage] Video source changed - resetting loading state",
+          "[MobileWatchPage] Video source changed - resetting loading state",
         );
         setIsVideoLoading(true);
         setIsVideoPlaying(false);
@@ -565,7 +548,7 @@ export default function WatchPage() {
       listeners.push(statusListener, playingListener, sourceListener);
     } catch (error) {
       console.error(
-        "[WatchPage] Error setting up video loading listeners:",
+        "[MobileWatchPage] Error setting up video loading listeners:",
         error,
       );
     }
@@ -576,7 +559,7 @@ export default function WatchPage() {
           listener.remove();
         } catch (error) {
           console.error(
-            "[WatchPage] Error removing video loading listener:",
+            "[MobileWatchPage] Error removing video loading listener:",
             error,
           );
         }
@@ -605,14 +588,14 @@ export default function WatchPage() {
     params,
   );
 
-  // Function to fetch episode data using the preferred API pattern
+  // Function to fetch episode data for TV shows
   const fetchEpisodeData = useCallback(async () => {
     if (params.type !== "tv" || !params.id) return;
 
-    // Don't fetch episode data during episode switching to prevent skeleton flash
+    // Don't fetch episode data during episode switching
     if (isEpisodeSwitching || isEpisodeSwitchingRef.current) {
       console.log(
-        "[WatchPage] Skipping episode data fetch during episode switching",
+        "[MobileWatchPage] Skipping episode data fetch during episode switching",
       );
       return;
     }
@@ -623,17 +606,15 @@ export default function WatchPage() {
     try {
       if (isFirstLoad) {
         setIsLoadingEpisodes(true);
-        console.log(
-          "[WatchPage] First load - showing skeleton while fetching episode data",
-        );
+        console.log("[MobileWatchPage] First load - fetching episode data");
       } else {
         console.log(
-          "[WatchPage] Background refresh - updating episodes silently",
+          "[MobileWatchPage] Background refresh - updating episodes silently",
         );
       }
 
       console.log(
-        "[WatchPage] Fetching episode data for season",
+        "[MobileWatchPage] Fetching episode data for season",
         currentSeasonNumber,
       );
       const result = await contentService.getTVMediaDetails({
@@ -644,12 +625,16 @@ export default function WatchPage() {
       });
 
       if (result && result.episodes) {
-        console.log("[WatchPage] Loaded", result.episodes.length, "episodes");
+        console.log(
+          "[MobileWatchPage] Loaded",
+          result.episodes.length,
+          "episodes",
+        );
         setEpisodes(result.episodes);
         setHasLoadedEpisodesOnce(true);
       }
     } catch (error) {
-      console.error("[WatchPage] Error fetching episode data:", error);
+      console.error("[MobileWatchPage] Error fetching episode data:", error);
     } finally {
       if (isFirstLoad) {
         setIsLoadingEpisodes(false);
@@ -672,40 +657,16 @@ export default function WatchPage() {
     }
   }, [currentSeasonNumber, params.type]);
 
-  // Lazily fetch episode data after the video starts playing
+  // Lazily fetch episode data after the video starts playing (for TV shows)
   useEffect(() => {
     if (videoURL && player && params.type === "tv") {
       // Start a transition to avoid blocking the main thread
       startTransition(() => {
-        console.log("[WatchPage] Lazily fetching episode data");
+        console.log("[MobileWatchPage] Lazily fetching episode data");
         fetchEpisodeData();
       });
     }
   }, [videoURL, player, params.type, fetchEpisodeData]);
-
-  // Periodically refresh episode data while playing (every 5 minutes)
-  useEffect(() => {
-    if (params.type !== "tv" || !videoURL || !player) return;
-
-    // Set up a refresh interval
-    episodeRefreshTimerRef.current = setInterval(
-      () => {
-        // Use transition to avoid interfering with playback
-        startTransition(() => {
-          console.log("[WatchPage] Refreshing episode data");
-          fetchEpisodeData();
-        });
-      },
-      5 * 60 * 1000,
-    ); // Every 5 minutes
-
-    return () => {
-      if (episodeRefreshTimerRef.current) {
-        clearInterval(episodeRefreshTimerRef.current);
-        episodeRefreshTimerRef.current = null;
-      }
-    };
-  }, [params.type, videoURL, player, fetchEpisodeData]);
 
   // Enhanced episode selection with seamless switching
   const handleEpisodeSelect = useCallback(
@@ -718,7 +679,7 @@ export default function WatchPage() {
         setEpisodeSwitchError(null);
 
         console.log(
-          "[WatchPage] Seamlessly switching to episode",
+          "[MobileWatchPage] Switching to episode",
           episode.episodeNumber,
         );
 
@@ -727,7 +688,7 @@ export default function WatchPage() {
           const currentTime = player.currentTime;
           if (currentTime > 0) {
             console.log(
-              "[WatchPage] Sending final playback update for current episode",
+              "[MobileWatchPage] Sending final playback update for current episode",
             );
             await contentService.updatePlaybackProgress({
               videoId: effectiveVideoURL,
@@ -746,7 +707,7 @@ export default function WatchPage() {
         }
 
         // Phase 2: Fetch new episode data with watch history
-        console.log("[WatchPage] Fetching new episode data");
+        console.log("[MobileWatchPage] Fetching new episode data");
         const newEpisodeData = await contentService.getMediaDetails({
           mediaType: params.type,
           mediaId: params.id,
@@ -761,14 +722,16 @@ export default function WatchPage() {
 
         // Phase 3: Replace video source seamlessly
         if (player) {
-          console.log("[WatchPage] Replacing video source");
+          console.log("[MobileWatchPage] Replacing video source");
           await player.replaceAsync({ uri: newEpisodeData.videoURL });
 
           // Apply resume position from watch history
           const watchHistory = newEpisodeData.watchHistory;
           if (watchHistory && watchHistory.playbackTime > 0) {
             const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
-            console.log(`[WatchPage] Resuming new episode from ${resumeTime}s`);
+            console.log(
+              `[MobileWatchPage] Resuming new episode from ${resumeTime}s`,
+            );
             player.currentTime = resumeTime;
           }
 
@@ -785,7 +748,6 @@ export default function WatchPage() {
         });
 
         // Phase 5: Update episode list to reflect any watch history changes
-        // This ensures the episode carousel shows updated progress/watched status
         if (newEpisodeData.episodeNumber) {
           setEpisodes((prevEpisodes) =>
             prevEpisodes.map((ep) =>
@@ -799,24 +761,23 @@ export default function WatchPage() {
           );
         }
 
-        console.log("[WatchPage] Episode switch completed successfully");
+        console.log("[MobileWatchPage] Episode switch completed successfully");
       } catch (error) {
-        console.error("[WatchPage] Episode switch failed:", error);
+        console.error("[MobileWatchPage] Episode switch failed:", error);
         setEpisodeSwitchError(
           error instanceof Error ? error.message : "Failed to switch episode",
         );
 
         // Fallback: try updating params for critical failures
         if (error instanceof Error && error.message.includes("No video URL")) {
-          console.log("[WatchPage] Falling back to param update");
+          console.log("[MobileWatchPage] Falling back to param update");
           router.setParams({
             season: currentSeasonNumber.toString(),
             episode: episode.episodeNumber.toString(),
           });
         }
       } finally {
-        // Add a small delay before clearing the switching flags to ensure
-        // the URL parameter change doesn't trigger the content loader
+        // Add a small delay before clearing the switching flags
         setTimeout(() => {
           setIsEpisodeSwitching(false);
           isEpisodeSwitchingRef.current = false;
@@ -839,52 +800,23 @@ export default function WatchPage() {
     contentError || audioError || videoError || episodeSwitchError;
 
   // Separate initial loading from episode switching
-  // Only show full loading screen for initial page load, not during episode switching
   const showFullLoading = loading && !currentEpisodeData;
 
-  // Tell the app we're in "watch" mode and optimize queries for video playback
+  // Keep screen awake during video playback
   useEffect(() => {
-    console.log(
-      "[WatchPage] Entering watch mode - suspending background queries",
-    );
+    if (!player) return;
 
-    // Set TV app state to watch mode
-    setMode("watch");
-
-    // Enable React Query watch mode optimizations
-    setWatchMode(true);
-
-    // Suspend background queries and clear browse cache to free memory
-    tvQueryHelpers.suspendBackgroundQueries();
-    tvQueryHelpers.clearBrowseCache();
-
-    return () => {
-      console.log(
-        "[WatchPage] Exiting watch mode - resuming background queries",
-      );
-
-      // Restore normal mode
-      setMode("browse");
-      setWatchMode(false);
-
-      // Resume background queries
-      tvQueryHelpers.resumeBackgroundQueries();
-    };
-  }, [setMode]);
-
-  // Screensaver sync and keep awake management
-  useEffect(() => {
     const sub = player.addListener("playingChange", ({ isPlaying }) => {
-      setVideoPlayingState(isPlaying);
-
-      // Keep screen awake during video playback to prevent Android screensaver
+      // Keep screen awake during video playback to prevent mobile screensaver
       if (isPlaying) {
         activateKeepAwakeAsync();
-        console.log("[WatchPage] Activated keep awake for video playback");
+        console.log(
+          "[MobileWatchPage] Activated keep awake for video playback",
+        );
       } else {
         deactivateKeepAwake();
         console.log(
-          "[WatchPage] Deactivated keep awake - video paused/stopped",
+          "[MobileWatchPage] Deactivated keep awake - video paused/stopped",
         );
       }
     });
@@ -893,65 +825,61 @@ export default function WatchPage() {
       sub.remove();
       // Ensure keep awake is deactivated when component unmounts
       deactivateKeepAwake();
-      console.log("[WatchPage] Component unmounting - deactivated keep awake");
+      console.log(
+        "[MobileWatchPage] Component unmounting - deactivated keep awake",
+      );
     };
-  }, [player, setVideoPlayingState]);
+  }, [player]);
 
+  // Mobile-optimized exit handler
   const handleExit = useCallback(async () => {
     try {
       // Flush current progress before navigation
       await flushCurrentProgress();
     } catch (error) {
-      console.error("[WatchPage] Error flushing progress on exit:", error);
+      console.error(
+        "[MobileWatchPage] Error flushing progress on exit:",
+        error,
+      );
     }
 
-    setVideoPlayingState(false);
-    resetActivityTimer();
-    setMode("browse");
+    // Restore system bars
+    SystemBars.setHidden(false);
     router.back();
-  }, [
-    flushCurrentProgress,
-    setVideoPlayingState,
-    resetActivityTimer,
-    setMode,
-    router,
-  ]);
+  }, [flushCurrentProgress, router]);
 
+  // Mobile-optimized info navigation
   const handleInfoPress = useCallback(async () => {
     try {
       // Flush current progress before navigation
       await flushCurrentProgress();
     } catch (error) {
       console.error(
-        "[WatchPage] Error flushing progress on info navigation:",
+        "[MobileWatchPage] Error flushing progress on info navigation:",
         error,
       );
     }
 
-    setVideoPlayingState(false);
-    resetActivityTimer();
+    // Restore system bars
+    SystemBars.setHidden(false);
 
-    // Use dismissTo to navigate back to the media-info page if it exists in the stack,
-    // or create a new one if it doesn't
-    router.dismissTo({
-      pathname: "/media-info/[id]",
-      params: {
-        id: params.id,
-        type: params.type,
-        ...(params.season && { season: params.season }),
+    // Navigate to media info page
+    router.push(
+      {
+        pathname: "/(mobile)/(protected)/media-info/[id]",
+        params: {
+          id: params.id,
+          type: params.type,
+          ...(params.season && { season: params.season }),
+        },
       },
-    });
-  }, [
-    flushCurrentProgress,
-    resetActivityTimer,
-    router,
-    params.id,
-    params.type,
-    params.season,
-    setVideoPlayingState,
-  ]);
+      {
+        dangerouslySingular: true,
+      },
+    );
+  }, [flushCurrentProgress, router, params.id, params.type, params.season]);
 
-  // Back handler
+  // Back handler for Android
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       handleExit();
@@ -959,6 +887,14 @@ export default function WatchPage() {
     });
     return () => sub.remove();
   }, [handleExit]);
+
+  // Set system bars to hidden for fullscreen video experience
+  useEffect(() => {
+    SystemBars.setHidden(true);
+    return () => {
+      SystemBars.setHidden(false);
+    };
+  }, []);
 
   const videoInfo = useMemo(
     () =>
@@ -986,15 +922,14 @@ export default function WatchPage() {
     [effectiveVideoData],
   );
 
-  // Optimized backdrop management - only show when actually visible to user
+  // Optimized backdrop management for mobile
   useEffect(() => {
     // Only show backdrop during initial loading or episode switching
-    // Don't show/hide backdrop during video buffering since it's behind the video player
     const shouldShowBackdrop = showFullLoading || isEpisodeSwitching;
 
     if (shouldShowBackdrop && effectiveBackdropURL) {
       console.log(
-        "[WatchPage] Showing backdrop for loading state:",
+        "[MobileWatchPage] Showing backdrop for loading state:",
         effectiveBackdropURL,
       );
 
@@ -1013,13 +948,13 @@ export default function WatchPage() {
 
     // Hide backdrop when we're done with initial loading or episode switching
     if (!shouldShowBackdrop && !showFullLoading && !isEpisodeSwitching) {
-      console.log("[WatchPage] Hiding backdrop - video interface ready");
+      console.log("[MobileWatchPage] Hiding backdrop - video interface ready");
       hideBackdrop({ fade: true, duration: 500 });
     }
 
     // Cleanup on unmount
     return () => {
-      console.log("[WatchPage] Component unmounting - hiding backdrop");
+      console.log("[MobileWatchPage] Component unmounting - hiding backdrop");
       hideBackdrop({ fade: true, duration: 300 });
     };
   }, [
@@ -1031,46 +966,34 @@ export default function WatchPage() {
     hideBackdrop,
   ]);
 
-  // Render
+  // Render loading state
   if (showFullLoading) {
     return <View style={styles.container} />;
   }
+
+  // Render error state
   if (finalError) {
     return (
       <View style={styles.container}>
         <View style={styles.messageContainer}>
           <Text style={styles.errorText}>Error: {finalError}</Text>
-          <Pressable
-            focusable
-            hasTVPreferredFocus
-            style={({ focused }) => [
-              styles.clickableText,
-              focused && styles.clickableTextFocused,
-            ]}
-            onPress={handleExit}
-          >
-            <Text style={styles.messageText}>Go back to browse</Text>
-          </Pressable>
+          <TouchableOpacity style={styles.errorButton} onPress={handleExit}>
+            <Text style={styles.errorButtonText}>Go back</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   }
+
+  // Render no content state
   if (!effectiveVideoURL || !player) {
     return (
       <View style={styles.container}>
         <View style={styles.messageContainer}>
           <Text style={styles.errorText}>No video content loaded.</Text>
-          <Pressable
-            focusable
-            hasTVPreferredFocus
-            style={({ focused }) => [
-              styles.clickableText,
-              focused && styles.clickableTextFocused,
-            ]}
-            onPress={handleExit}
-          >
-            <Text style={styles.messageText}>Go back to browse</Text>
-          </Pressable>
+          <TouchableOpacity style={styles.errorButton} onPress={handleExit}>
+            <Text style={styles.errorButtonText}>Go back</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -1085,46 +1008,42 @@ export default function WatchPage() {
         allowsPictureInPicture={false}
         nativeControls={false}
       />
-
-      <StandaloneVideoControls
-        player={player}
-        videoInfo={videoInfo}
-        overlayMode
-        onExitWatchMode={handleExit}
-        onInfoPress={handleInfoPress}
-        showCaptionControls={!!videoInfo?.captionURLs}
-        episodes={params.type === "tv" ? episodes : undefined}
-        currentEpisodeNumber={effectiveEpisodeNumber}
-        onEpisodeSelect={handleEpisodeSelect}
-        isLoadingEpisodes={isLoadingEpisodes}
-        isEpisodeSwitching={isEpisodeSwitching}
-        episodeSwitchError={episodeSwitchError}
-      />
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <MobileVideoControls
+          player={player}
+          videoInfo={videoInfo}
+          onExitWatchMode={handleExit}
+          onInfoPress={handleInfoPress}
+          episodes={params.type === "tv" ? episodes : undefined}
+          currentEpisodeNumber={effectiveEpisodeNumber}
+          onEpisodeSelect={handleEpisodeSelect}
+          isLoadingEpisodes={isLoadingEpisodes}
+          isEpisodeSwitching={isEpisodeSwitching}
+          episodeSwitchError={episodeSwitchError}
+        />
+      </GestureHandlerRootView>
     </View>
   );
 }
 
-// (You’d define CenteredMessage and CenteredError as tiny helpers)
-
 const styles = StyleSheet.create({
-  clickableText: {
-    backgroundColor: Colors.dark.inputBackground,
-    borderRadius: 8,
-    marginTop: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-  },
-  clickableTextFocused: {
-    backgroundColor: Colors.dark.tint,
-    borderColor: "#FFFFFF",
-    borderWidth: 2,
-  },
   container: {
     backgroundColor: "#000000",
     flex: 1,
   },
+  errorButton: {
+    backgroundColor: Colors.dark.brandPrimary,
+    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+  },
+  errorButtonText: {
+    color: Colors.dark.whiteText,
+    fontSize: 16,
+    fontWeight: "600",
+  },
   errorText: {
-    color: "#FF6B6B",
+    color: Colors.dark.error,
     fontSize: 18,
     marginBottom: 20,
     textAlign: "center",
@@ -1134,12 +1053,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     padding: 20,
-  },
-  messageText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    marginBottom: 10,
-    textAlign: "center",
   },
   video: {
     bottom: 0,

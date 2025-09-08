@@ -1,5 +1,6 @@
 // app/_layout.tsx
 import "expo-dev-client";
+import "react-native-gesture-handler";
 import {
   ThemeProvider,
   DefaultTheme,
@@ -7,11 +8,12 @@ import {
 } from "@react-navigation/native";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { Platform, useColorScheme } from "react-native";
+import { SystemBars } from "react-native-edge-to-edge";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PortalProvider } from "@/src/components/common/Portal";
 import { AuthProvider, useAuth } from "@/src/providers/AuthProvider";
 import { QueryProvider } from "@/src/providers/QueryProvider";
 
@@ -20,7 +22,7 @@ SplashScreen.preventAutoHideAsync();
 
 // Inner component that uses the auth context
 function StackNavigator({ isTV = Platform.isTV }) {
-  const { user, ready } = useAuth();
+  const { user, ready, apiReady } = useAuth();
 
   // Determine if user is logged in based on auth context
   const loggedIn = !!user;
@@ -38,21 +40,23 @@ function StackNavigator({ isTV = Platform.isTV }) {
   // Always render the Stack to prevent white flash
   // The splash screen will remain visible until auth is ready
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#000" }}>
-      <StatusBar style="auto" />
+    <>
+      <SystemBars style="light" />
       <Stack
         screenOptions={{
-          headerShown: isTV ? false : true,
+          headerShown: false,
           animation: isTV ? "fade" : "default",
           contentStyle: { backgroundColor: "#000" },
         }}
       >
-        <Stack.Protected guard={ready && loggedIn}>
+        <Stack.Protected guard={apiReady && ready && loggedIn}>
           {isTV ? (
-            <Stack.Screen
-              name="(tv)"
-              options={{ headerShown: false, animation: "fade" }}
-            />
+            <SafeAreaView style={{ flex: 1, backgroundColor: "#000" }}>
+              <Stack.Screen
+                name="(tv)"
+                options={{ headerShown: false, animation: "fade" }}
+              />
+            </SafeAreaView>
           ) : (
             <Stack.Screen
               name="(mobile)"
@@ -64,7 +68,7 @@ function StackNavigator({ isTV = Platform.isTV }) {
           <Stack.Screen name="login" />
         </Stack.Protected>
       </Stack>
-    </SafeAreaView>
+    </>
   );
 }
 
@@ -77,7 +81,9 @@ export default function RootLayout() {
     <QueryProvider>
       <AuthProvider>
         <ThemeProvider value={theme}>
-          <StackNavigator isTV={isTV} />
+          <PortalProvider>
+            <StackNavigator isTV={isTV} />
+          </PortalProvider>
         </ThemeProvider>
       </AuthProvider>
     </QueryProvider>

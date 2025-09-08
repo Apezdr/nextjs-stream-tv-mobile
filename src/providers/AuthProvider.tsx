@@ -1,7 +1,6 @@
 // app/providers/AuthProvider.tsx
 import { SplashScreen } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import * as WebBrowser from "expo-web-browser";
 import React, {
   createContext,
   useContext,
@@ -23,6 +22,7 @@ import type {
   QRTokenCheckResponse,
 } from "@/src/data/types/auth.types";
 import { getDeviceInfo, getDeviceType } from "@/src/utils/deviceInfo";
+import { useBackdropStore } from "@/src/stores/backdropStore";
 
 type User = {
   id: string;
@@ -36,6 +36,8 @@ type User = {
 interface AuthContextType {
   /** true once we've rehydrated from storage */
   ready: boolean;
+  /** true once API client is fully configured with baseUrl and credentials */
+  apiReady: boolean;
   /** the API host you entered, e.g. "https://cinema.test.com" */
   server: string | null;
   /** call this first (with your validated host) */
@@ -101,6 +103,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [ready, setReady] = useState(false);
+  const [apiReady, setApiReady] = useState(false);
   const [server, setServerRaw] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [mobileToken, setMobileToken] = useState<string | null>(null);
@@ -254,6 +257,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
       // When credentials are refreshed, invalidate user-specific cached data
       // This ensures we prefer fresh data after re-authentication
       cacheStore.invalidateUserSpecificCache();
+
+      // Mark API as ready now that it's fully configured
+      setApiReady(true);
+
+      if (DEBUG_AUTH) {
+        console.log("[Auth] API client is now ready for requests");
+      }
     } else {
       if (DEBUG_AUTH) {
         console.log("[Auth] Clearing API client configuration");
@@ -264,6 +274,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
       enhancedApiClient.setAuthToken(null);
       enhancedApiClient.setSessionId(null);
       enhancedApiClient.setTokenRefreshCallback(null);
+
+      // Mark API as not ready
+      setApiReady(false);
     }
   }, [server, mobileToken, sessionId]);
 
@@ -421,14 +434,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
       console.error("[Auth] Server status check failed:", error);
       setIsServerDown(true);
       setServerStatusMessage(
-        "Server status check failed. Please try again later.",
+        "Server status check failed. Attempting to reconnect.",
       );
       // Start recovery checking when server status check fails
       startServerRecoveryChecking();
       if (DEBUG_AUTH) {
         console.log("[Auth] Setting server status state due to error:", {
           isServerDown: true,
-          message: "Server status check failed. Please try again later.",
+          message: "Server status check failed. Attempting to reconnect.",
         });
       }
     }
@@ -575,6 +588,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
   async function signInWithProvider(providerId: string) {
     if (!server) throw new Error("Must call setServer first");
 
+    // Prevent web browser authentication on tvOS since expo-web-browser is not supported
+    if (Platform.isTVOS) {
+      throw new Error(
+        "Web browser authentication is not supported on tvOS. Please use QR code authentication instead.",
+      );
+    }
+
     try {
       setIsAuthenticating(true);
 
@@ -622,8 +642,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
         console.log(`[Auth] Opening browser with URL: ${authUrl}`);
       }
 
+      // Dynamically import WebBrowser only on non-tvOS platforms
+      const { openAuthSessionAsync } = await import("expo-web-browser");
+
       // Open the browser without expecting a return via URL scheme
-      await WebBrowser.openAuthSessionAsync(authUrl, null, {
+      await openAuthSessionAsync(authUrl, null, {
         showInRecents: true,
         // Any additional options that might help with TV platform compatibility
       });
@@ -778,8 +801,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
 
       // 1) Get the client ID for this device
-      const clientId: string =
-        (await SecureStore.getItemAsync(CLIENT_ID_KEY)) || generateClientId();
+      let clientId: string | null =
+        await SecureStore.getItemAsync(CLIENT_ID_KEY);
+      if (!clientId) {
+        clientId = generateClientId();
+        await SecureStore.setItemAsync(CLIENT_ID_KEY, clientId);
+        if (DEBUG_AUTH) {
+          console.log(
+            `[Auth] Generated new client ID for QR session: ${clientId}`,
+          );
+        }
+      }
 
       // 2) Register a QR session with the server
       if (DEBUG_AUTH) {
@@ -792,24 +824,47 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const deviceInfo = getDeviceInfo();
       const deviceType = getDeviceType();
 
+      const requestData = {
+        clientId,
+        deviceType,
+        host: server.replace("https://", "").replace("http://", ""),
+        deviceInfo,
+      } as QRSessionRequest;
+
+      if (DEBUG_AUTH) {
+        console.log(
+          "[Auth] QR session request data:",
+          JSON.stringify(requestData, null, 2),
+        );
+      }
+
       const qrSessionResp = await fetch(
         `${server}${API_ENDPOINTS.AUTH.REGISTER_QR_SESSION}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            clientId,
-            deviceType,
-            host: server.replace("https://", "").replace("http://", ""),
-            deviceInfo,
-          } as QRSessionRequest),
+          body: JSON.stringify(requestData),
         },
       );
 
       if (!qrSessionResp.ok) {
-        throw new Error(
-          `Failed to register QR auth session: ${qrSessionResp.status}`,
-        );
+        let errorMessage = `Failed to register QR auth session: ${qrSessionResp.status}`;
+        try {
+          const errorData = await qrSessionResp.text();
+          if (DEBUG_AUTH) {
+            console.error(
+              "[Auth] QR session registration error response:",
+              errorData,
+            );
+          }
+          errorMessage += ` - ${errorData}`;
+        } catch (e) {
+          // Error response may not contain readable text
+          if (DEBUG_AUTH) {
+            console.error("[Auth] Could not read error response body:", e);
+          }
+        }
+        throw new Error(errorMessage);
       }
 
       const qrSessionData = (await qrSessionResp.json()) as QRSessionResponse;
@@ -1111,12 +1166,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     // Clear all cached data when signing out
     cacheStore.clear();
+
+    // Clear any active backdrops when signing out
+    useBackdropStore.getState().reset();
   };
 
   return (
     <AuthContext.Provider
       value={{
         ready,
+        apiReady,
         server,
         setServer,
         signInWithProvider,

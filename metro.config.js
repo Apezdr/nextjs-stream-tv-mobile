@@ -4,6 +4,20 @@ const { getDefaultConfig } = require("expo/metro-config");
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(__dirname);
 
+// Configure SVG transformer
+const { transformer, resolver } = config;
+
+config.transformer = {
+  ...transformer,
+  babelTransformerPath: require.resolve("react-native-svg-transformer/expo"),
+};
+
+config.resolver = {
+  ...resolver,
+  assetExts: resolver.assetExts.filter((ext) => ext !== "svg"),
+  sourceExts: [...resolver.sourceExts, "svg"],
+};
+
 // When enabled, the optional code below will allow Metro to resolve
 // and bundle source files with TV-specific extensions
 // (e.g., *.ios.tv.tsx, *.android.tv.tsx, *.tv.tsx)

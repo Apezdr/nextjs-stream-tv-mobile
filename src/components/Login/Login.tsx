@@ -18,7 +18,7 @@ import {
 import QRCode from "react-native-qrcode-svg";
 
 import logoAnimation from "@/src/assets/lottie/logo-in.json";
-import QRIcon from "@/src/assets/provider-icons/qr-logo.svg";
+// import QRIcon from "@/src/assets/provider-icons/qr-logo.svg";
 import FocusableButton from "@/src/components/basic/TV/Parts/Button";
 import FocusableTextInput from "@/src/components/basic/TV/Parts/Input";
 import Card from "@/src/components/common/Card";
@@ -56,7 +56,7 @@ const splashSvgString = `
   />
 </svg>`;
 
-export default function LoginTV() {
+export default function Login() {
   const {
     ready,
     server,
@@ -432,12 +432,11 @@ export default function LoginTV() {
           </View>
           <Text style={styles.authTitle}>Choose Authentication Method</Text>
           <Text style={styles.authSubtitle}>
-            Sign in to access the content on this server, we recommend using QR
-            Code.
+            Sign in to access the content on this server
           </Text>
 
           <View style={styles.providersContainer}>
-            <FocusableButton
+            {/* <FocusableButton
               title="Use QR Code"
               onPress={() => setStage("qr")}
               leftIcon={QRIcon}
@@ -446,7 +445,7 @@ export default function LoginTV() {
               textStyle={styles.qrButtonText}
               focusedStyle={styles.qrButtonFocused}
               hasTVPreferredFocus
-            />
+            /> */}
             {providers.map((p) => (
               <ProviderButton
                 key={p.id}
@@ -457,6 +456,9 @@ export default function LoginTV() {
                     Alert.alert("Login failed", err.message),
                   )
                 }
+                style={[styles.button, styles.providerButton]}
+                textStyle={styles.providerButtonText}
+                focusedStyle={styles.providerButtonFocused}
               />
             ))}
           </View>
@@ -697,27 +699,44 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.dark.brandPrimary,
     width: "100%",
   },
+  providerButton: {
+    backgroundColor: Colors.dark.qrBg,
+    borderColor: Colors.dark.qrBorder,
+    marginTop: 2,
+    opacity: 1,
+    width: "100%",
+  },
   providersContainer: {
     gap: 2,
     marginBottom: 15,
     width: "100%",
   },
-  qrButton: {
-    backgroundColor: Colors.dark.qrBg,
-    borderColor: Colors.dark.qrBorder,
-    marginTop: 2,
-    opacity: 0.3,
-    width: "100%",
-  },
-  qrButtonText: {
+  providerButtonText: {
     color: Colors.dark.qrText,
     fontSize: 18,
   },
-  qrButtonFocused: {
+  providerButtonFocused: {
     backgroundColor: Colors.dark.qrBg,
+    borderColor: Colors.dark.link,
     opacity: 1,
     transform: [{ scale: 1.05 }],
   },
+  // qrButton: {
+  //   backgroundColor: Colors.dark.qrBg,
+  //   borderColor: Colors.dark.qrBorder,
+  //   marginTop: 2,
+  //   opacity: 0.3,
+  //   width: "100%",
+  // },
+  // qrButtonText: {
+  //   color: Colors.dark.qrText,
+  //   fontSize: 18,
+  // },
+  // qrButtonFocused: {
+  //   backgroundColor: Colors.dark.qrBg,
+  //   opacity: 1,
+  //   transform: [{ scale: 1.05 }],
+  // },
   backButton: {
     backgroundColor: Colors.dark.outline,
     height: 48,

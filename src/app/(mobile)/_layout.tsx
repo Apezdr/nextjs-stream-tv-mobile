@@ -1,7 +1,6 @@
 // app/(mobile)/_layout.tsx
-import { Redirect, Tabs } from "expo-router";
+import { Redirect, Stack } from "expo-router";
 
-import { TabBarIcon } from "@/src/components/TabBarIcon";
 import { useAuth } from "@/src/providers/AuthProvider";
 
 export default function MobileLayout() {
@@ -18,21 +17,14 @@ export default function MobileLayout() {
     return <Redirect href="/login" />;
   }
 
-  // logged in → render your mobile navigation
+  // logged in → render protected routes
   return (
-    <Tabs
+    <Stack
       screenOptions={{
-        headerShown: true,
+        headerShown: false,
       }}
     >
-      <Tabs.Screen
-        name="(protected)/index"
-        options={{
-          title: "Mobile Home",
-          tabBarIcon: () => <TabBarIcon name="home-sharp" />,
-        }}
-      />
-      {/* Add more TV-specific tabs here */}
-    </Tabs>
+      <Stack.Screen name="(protected)" />
+    </Stack>
   );
 }

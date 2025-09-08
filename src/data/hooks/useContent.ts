@@ -589,17 +589,14 @@ export function useTVMediaDetails(
   const season = params?.season;
   const episode = params?.episode;
 
-  // Cache for static data that doesn't change between seasons
+  // Cache for truly static data that doesn't change between seasons
   const [cachedStaticData, setCachedStaticData] = useState<{
     id: string;
     title: string;
     type: string;
-    posterURL: string;
     backdrop: string;
-    posterBlurhash: string;
     backdropBlurhash: string;
     logo?: string;
-    airDate?: string; // Optional air date for TV shows
     availableSeasons: number[];
     totalSeasons: number;
     navigation: TVDeviceMediaResponse["navigation"];
@@ -627,17 +624,14 @@ export function useTVMediaDetails(
           includeWatchHistory: true,
         });
 
-        // Cache the static data and navigation
+        // Cache only truly static data (exclude season-specific fields like posterURL)
         setCachedStaticData({
           id: result.id,
           title: result.title,
           type: result.type,
-          posterURL: result.posterURL,
           backdrop: result.backdrop,
-          posterBlurhash: result.posterBlurhash,
           backdropBlurhash: result.backdropBlurhash,
           logo: result.logo,
-          airDate: result.airDate, // Optional air date for TV shows
           availableSeasons: result.availableSeasons,
           totalSeasons: result.totalSeasons,
           navigation: result.navigation,
@@ -681,9 +675,17 @@ export function useTVMediaDetails(
           includeWatchHistory: true,
         });
 
-        // Merge cached static data with fresh metadata, episodes, and season-specific data
+        console.log(`[useTVMediaDetails] Fresh season ${targetSeason} data:`, {
+          posterURL: result.posterURL,
+          seasonNumber: result.seasonNumber,
+        });
+
+        // Merge cached static data with fresh season-specific data
         setData({
           ...cachedStaticData,
+          // Always use fresh season-specific data from API
+          posterURL: result.posterURL, // ✅ Fresh poster for this season
+          posterBlurhash: result.posterBlurhash, // ✅ Fresh poster blurhash
           metadata: result.metadata, // Use fresh metadata (includes season-specific overview)
           airDate: result.airDate, // Use fresh airDate (season-specific)
           seasonNumber: result.seasonNumber,

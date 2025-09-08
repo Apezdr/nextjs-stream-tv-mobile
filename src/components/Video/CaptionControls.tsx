@@ -1,6 +1,6 @@
 // src/components/Video/CaptionControls.tsx
 import { Ionicons } from "@expo/vector-icons";
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
@@ -10,6 +10,8 @@ import {
   TVFocusGuideView,
   ScrollView,
   Modal,
+  FlatList,
+  Platform,
 } from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
@@ -66,6 +68,16 @@ interface CaptionControlsProps {
   onSubtitleBackgroundChange?: (background: SubtitleBackgroundOption) => void;
   onActivityReset?: () => void;
   shouldAllowFocusDown?: boolean; // Whether to allow focus to move down to the next control
+}
+
+// Button data structure for FlatList
+interface ButtonData {
+  id: string;
+  type: "caption" | "more" | "settings";
+  label: string;
+  language?: string | null;
+  onPress: () => void;
+  isSelected?: boolean;
 }
 
 // Predefined accessibility-focused subtitle styles
@@ -210,182 +222,206 @@ const CaptionControls = memo(
 
     const availableLanguages = captionURLs ? Object.keys(captionURLs) : [];
 
-    // Always show settings cog, even when no captions are available
-    if (!captionURLs || availableLanguages.length === 0) {
-      return (
-        <View style={styles.captionControlsContainer}>
-          <View style={styles.captionControls} focusable={true}>
-            <View style={styles.primaryButtons}>
-              {/* Settings Cog - Always visible */}
-              <Pressable
-                style={({ focused, pressed }) => [
-                  styles.captionButton,
-                  styles.settingsButton,
-                  focused && styles.captionButtonFocused,
-                  pressed && styles.captionButtonPressed,
+    // Create unified button data for FlatList
+    const buttonData = useMemo(() => {
+      const buttons: ButtonData[] = [];
+
+      // For no captions case, only show settings
+      if (!captionURLs || availableLanguages.length === 0) {
+        buttons.push({
+          id: "settings",
+          type: "settings",
+          label: "Settings",
+          onPress: toggleStyleSettings,
+        });
+        return buttons;
+      }
+
+      // Always add "Off" button first
+      buttons.push({
+        id: "off",
+        type: "caption",
+        label: "Off",
+        language: null,
+        onPress: () => handleCaptionLanguageSelect(null),
+        isSelected: selectedCaptionLanguage === null,
+      });
+
+      // Add up to 2 languages for main controls, prioritizing English and Spanish
+      const prioritizedLanguages: string[] = [];
+      const preferredLanguages = ["en", "english", "es", "spanish", "español"];
+
+      // First, add preferred languages if available
+      availableLanguages.forEach((language) => {
+        if (
+          preferredLanguages.some((pref) =>
+            language.toLowerCase().includes(pref.toLowerCase()),
+          ) &&
+          prioritizedLanguages.length < 2
+        ) {
+          prioritizedLanguages.push(language);
+        }
+      });
+
+      // Then fill remaining slots with other languages
+      availableLanguages.forEach((language) => {
+        if (
+          !prioritizedLanguages.includes(language) &&
+          prioritizedLanguages.length < 2
+        ) {
+          prioritizedLanguages.push(language);
+        }
+      });
+
+      // Add the prioritized languages to buttons
+      prioritizedLanguages.forEach((language) => {
+        buttons.push({
+          id: language,
+          type: "caption",
+          label: language,
+          language: language,
+          onPress: () => handleCaptionLanguageSelect(language),
+          isSelected: selectedCaptionLanguage === language,
+        });
+      });
+
+      // Add More button only if there are more than 2 languages (keeping original logic)
+      const additionalLanguages = availableLanguages.slice(2);
+      if (additionalLanguages.length > 0) {
+        buttons.push({
+          id: "more",
+          type: "more",
+          label: "More",
+          onPress: toggleMoreOptions,
+        });
+      }
+
+      // Always add Settings button
+      buttons.push({
+        id: "settings",
+        type: "settings",
+        label: "Settings",
+        onPress: toggleStyleSettings,
+      });
+
+      return buttons;
+    }, [
+      availableLanguages,
+      selectedCaptionLanguage,
+      toggleMoreOptions,
+      toggleStyleSettings,
+      handleCaptionLanguageSelect,
+    ]);
+
+    // Render function for FlatList items
+    const renderButton = useCallback(({ item }: { item: ButtonData }) => {
+      if (item.type === "caption") {
+        return (
+          <Pressable
+            style={({ focused, pressed }) => [
+              styles.captionButton,
+              item.isSelected && styles.captionButtonSelected,
+              focused && styles.captionButtonFocused,
+              pressed && styles.captionButtonPressed,
+            ]}
+            onPress={item.onPress}
+            isTVSelectable
+            focusable={true}
+          >
+            <View style={styles.captionButtonContent}>
+              {item.isSelected && (
+                <Ionicons
+                  name="checkmark"
+                  size={16}
+                  color="#fff"
+                  style={styles.checkmark}
+                />
+              )}
+              <Text
+                style={[
+                  styles.captionButtonText,
+                  item.isSelected && styles.captionButtonTextSelected,
                 ]}
-                onPress={toggleStyleSettings}
-                focusable={true}
-                isTVSelectable
               >
-                <View style={styles.captionButtonContent}>
-                  <Ionicons
-                    name="settings-outline"
-                    size={20}
-                    color={Colors.dark.videoControlIconColor}
-                  />
-                </View>
-              </Pressable>
+                {item.label}
+              </Text>
             </View>
+          </Pressable>
+        );
+      }
 
-            {/* Style Settings Popover */}
-            {showStyleSettings && (
-              <TVFocusGuideView autoFocus hasTVPreferredFocus={true}>
-                <View style={styles.styleSettingsMenu}>
-                  <View style={styles.popoverHeader}>
-                    <Text style={styles.popoverTitle}>Subtitle Settings</Text>
-                    <Pressable
-                      style={({ focused, pressed }) => [
-                        styles.closeButton,
-                        focused && styles.closeButtonFocused,
-                        pressed && styles.captionButtonPressed,
-                      ]}
-                      onPress={() => setShowStyleSettings(false)}
-                      focusable={true}
-                      isTVSelectable
-                    >
-                      <Ionicons
-                        name="close"
-                        size={20}
-                        color={Colors.dark.videoControlIconColor}
-                      />
-                    </Pressable>
-                  </View>
+      if (item.type === "more") {
+        return (
+          <Pressable
+            style={({ focused, pressed }) => [
+              styles.captionButton,
+              styles.moreOptionsButton,
+              focused && styles.captionButtonFocused,
+              pressed && styles.captionButtonPressed,
+            ]}
+            onPress={item.onPress}
+            focusable={true}
+            isTVSelectable
+          >
+            <View style={styles.captionButtonContent}>
+              <Text style={styles.captionButtonText}>{item.label}</Text>
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={Colors.dark.videoControlIconColor}
+              />
+            </View>
+          </Pressable>
+        );
+      }
 
-                  <ScrollView
-                    style={styles.styleScrollView}
-                    showsVerticalScrollIndicator={false}
-                  >
-                    {/* Background Options Section */}
-                    <View style={styles.sectionHeader}>
-                      <Text style={styles.sectionTitle}>Background</Text>
-                    </View>
-                    {SUBTITLE_BACKGROUND_OPTIONS.map((background) => (
-                      <Pressable
-                        key={background.id}
-                        style={({ focused, pressed }) => [
-                          styles.backgroundOption,
-                          selectedSubtitleBackground?.id === background.id &&
-                            styles.backgroundOptionSelected,
-                          focused && styles.backgroundOptionFocused,
-                          pressed && styles.captionButtonPressed,
-                        ]}
-                        onPress={() => handleBackgroundSelect(background)}
-                        focusable={true}
-                        isTVSelectable
-                      >
-                        <View style={styles.backgroundOptionContent}>
-                          <View style={styles.backgroundInfo}>
-                            <Text style={styles.backgroundName}>
-                              {background.name}
-                            </Text>
-                            <Text style={styles.backgroundDescription}>
-                              {background.description}
-                            </Text>
-                          </View>
-                          <View
-                            style={[
-                              styles.backgroundPreview,
-                              { backgroundColor: background.backgroundColor },
-                            ]}
-                          >
-                            <Text style={styles.backgroundPreviewText}>
-                              Sample
-                            </Text>
-                          </View>
-                          {selectedSubtitleBackground?.id === background.id && (
-                            <Ionicons
-                              name="checkmark"
-                              size={20}
-                              color={Colors.dark.videoControlIconColor}
-                              style={styles.backgroundCheckmark}
-                            />
-                          )}
-                        </View>
-                      </Pressable>
-                    ))}
+      if (item.type === "settings") {
+        return (
+          <Pressable
+            style={({ focused, pressed }) => [
+              styles.captionButton,
+              styles.settingsButton,
+              focused && styles.captionButtonFocused,
+              pressed && styles.captionButtonPressed,
+            ]}
+            onPress={item.onPress}
+            focusable={true}
+            isTVSelectable
+          >
+            <View style={styles.captionButtonContent}>
+              <Ionicons
+                name="settings-outline"
+                size={20}
+                color={Colors.dark.videoControlIconColor}
+              />
+            </View>
+          </Pressable>
+        );
+      }
 
-                    {/* Style Options Section */}
-                    <View style={styles.sectionHeader}>
-                      <Text style={styles.sectionTitle}>Text Style</Text>
-                    </View>
-                    {SUBTITLE_STYLES.map((style) => (
-                      <Pressable
-                        key={style.id}
-                        style={({ focused, pressed }) => [
-                          styles.styleOption,
-                          selectedSubtitleStyle?.id === style.id &&
-                            styles.styleOptionSelected,
-                          focused && styles.styleOptionFocused,
-                          pressed && styles.captionButtonPressed,
-                        ]}
-                        onPress={() => handleStyleSelect(style)}
-                        focusable={true}
-                        isTVSelectable
-                      >
-                        <View style={styles.styleOptionContent}>
-                          <View style={styles.styleInfo}>
-                            <Text style={styles.styleName}>{style.name}</Text>
-                            <Text style={styles.styleDescription}>
-                              {style.description}
-                            </Text>
-                          </View>
-                          <View
-                            style={[
-                              styles.stylePreview,
-                              {
-                                backgroundColor:
-                                  selectedSubtitleBackground?.backgroundColor ||
-                                  Colors.dark.videoControlBackgroundPreviewBg,
-                              },
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.previewText,
-                                {
-                                  ...style.textStyle,
-                                  backgroundColor: Colors.dark.transparentBg,
-                                },
-                              ]}
-                            >
-                              Sample subtitle text
-                            </Text>
-                          </View>
-                          {selectedSubtitleStyle?.id === style.id && (
-                            <Ionicons
-                              name="checkmark"
-                              size={20}
-                              color={Colors.dark.videoControlIconColor}
-                              style={styles.styleCheckmark}
-                            />
-                          )}
-                        </View>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                </View>
-              </TVFocusGuideView>
-            )}
-          </View>
-        </View>
-      );
-    }
+      return null;
+    }, []);
 
-    // Show first 2 languages as buttons, rest in popover
-    const primaryLanguages = ["Off", ...availableLanguages.slice(0, 2)];
-    const additionalLanguages = availableLanguages.slice(2);
-    const hasMoreOptions = additionalLanguages.length > 0;
+    const keyExtractor = useCallback((item: ButtonData) => item.id, []);
+
+    // Calculate button width for getItemLayout optimization
+    const buttonDimensions = useMemo(() => {
+      const baseWidth = 60; // minWidth from styles
+      const margin = 12; // gap from original styles
+      return { buttonWidth: baseWidth, totalWidth: baseWidth + margin };
+    }, []);
+
+    const getItemLayout = useCallback(
+      (_data: ArrayLike<ButtonData> | null | undefined, index: number) => ({
+        length: buttonDimensions.totalWidth,
+        offset: buttonDimensions.totalWidth * index,
+        index,
+      }),
+      [buttonDimensions.totalWidth],
+    );
+
+    // Check if More options should be shown (keeping original logic)
+    const hasMoreOptions = availableLanguages.length > 2;
 
     const renderCaptionButton = (
       language: string | null,
@@ -450,56 +486,25 @@ const CaptionControls = memo(
       >
         <View style={styles.captionControlsContainer}>
           <View style={styles.captionControls}>
-            <View style={styles.primaryButtons}>
-              {primaryLanguages.map((lang) =>
-                renderCaptionButton(lang === "Off" ? null : lang, lang),
-              )}
-
-              {/* More Options Button */}
-              {hasMoreOptions && (
-                <Pressable
-                  style={({ focused, pressed }) => [
-                    styles.captionButton,
-                    styles.moreOptionsButton,
-                    focused && styles.captionButtonFocused,
-                    pressed && styles.captionButtonPressed,
-                  ]}
-                  onPress={toggleMoreOptions}
-                  focusable={true}
-                  isTVSelectable
-                >
-                  <View style={styles.captionButtonContent}>
-                    <Text style={styles.captionButtonText}>More</Text>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={16}
-                      color={Colors.dark.videoControlIconColor}
-                    />
-                  </View>
-                </Pressable>
-              )}
-
-              {/* Settings Cog - Always visible */}
-              <Pressable
-                style={({ focused, pressed }) => [
-                  styles.captionButton,
-                  styles.settingsButton,
-                  focused && styles.captionButtonFocused,
-                  pressed && styles.captionButtonPressed,
-                ]}
-                onPress={toggleStyleSettings}
-                focusable={true}
-                isTVSelectable
-              >
-                <View style={styles.captionButtonContent}>
-                  <Ionicons
-                    name="settings-outline"
-                    size={20}
-                    color={Colors.dark.videoControlIconColor}
-                  />
-                </View>
-              </Pressable>
-            </View>
+            <TVFocusGuideView
+              autoFocus
+              trapFocusLeft
+              trapFocusRight
+              trapFocusDown={shouldAllowFocusDown}
+            >
+              <FlatList
+                data={buttonData}
+                renderItem={renderButton}
+                keyExtractor={keyExtractor}
+                getItemLayout={getItemLayout}
+                horizontal
+                showsHorizontalScrollIndicator={Platform.isTV}
+                decelerationRate="fast"
+                scrollEventThrottle={16}
+                contentContainerStyle={styles.flatListContent}
+                style={styles.flatListContainer}
+              />
+            </TVFocusGuideView>
 
             {/* Modal for Caption Languages Popover */}
             <Modal
@@ -784,6 +789,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 2,
     minWidth: 60,
+    marginHorizontal: 6, // Half of the original gap: 12
     paddingHorizontal: 18,
     paddingLeft: 24,
     paddingVertical: 8,
@@ -930,10 +936,13 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
-  primaryButtons: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 12,
+  // FlatList styles
+  flatListContainer: {
+    flexGrow: 0,
+  },
+
+  flatListContent: {
+    paddingHorizontal: 6, // Half of the original gap for padding
   },
 
   // Section Header Styles
