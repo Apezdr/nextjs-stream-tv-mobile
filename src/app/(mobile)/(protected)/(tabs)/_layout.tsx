@@ -14,7 +14,7 @@ export default function TabsLayout() {
     <Tabs
       tabBar={(props) => <OptimizedTabBar {...props} />}
       screenOptions={{
-        animation: "shift",
+        animation: "none",
         headerShown: false,
         tabBarActiveTintColor: MOBILE_TAB_COLORS.ACTIVE_TINT,
         tabBarInactiveTintColor: MOBILE_TAB_COLORS.INACTIVE_TINT,

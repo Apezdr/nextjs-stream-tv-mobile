@@ -5,7 +5,6 @@ import {
   StyleSheet,
   View,
   Text,
-  Dimensions,
   Animated,
   TVFocusGuideView,
   Pressable,
@@ -14,6 +13,7 @@ import {
 import SeekBar from "@/src/components/Video/SeekBar";
 import { Colors } from "@/src/constants/Colors";
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface VideoControlsProps {
   isPlaying: boolean;
@@ -69,6 +69,9 @@ const VideoControls = memo(
     // audioTracks,
     // selectedAudioTrack,
   }: VideoControlsProps) => {
+    // Get dynamic dimensions
+    const { window } = useDimensions();
+
     // Get enhanced remote activity state from context
     const {
       isRemoteActive,
@@ -207,7 +210,15 @@ const VideoControls = memo(
       : styles.controls;
 
     return (
-      <Animated.View style={[controlsContainerStyle, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          controlsContainerStyle,
+          {
+            opacity: fadeAnim,
+            maxWidth: window.width,
+          },
+        ]}
+      >
         {/* 1. Top Section */}
         <View style={styles.topSection}>
           <View style={styles.topLeftSection}>{customButtons}</View>
@@ -435,7 +446,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     marginTop: "28%",
-    maxWidth: Dimensions.get("window").width,
     width: "100%",
   },
 

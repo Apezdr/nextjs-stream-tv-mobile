@@ -2,6 +2,8 @@
  * React Query client configuration with persistence and TV-specific optimizations
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+const QUERY_DEBUG_ENABLED =
+  __DEV__ && process.env.QUERY_DEBUG?.toLowerCase() === "true";
 import {
   QueryClient,
   QueryCache,
@@ -12,7 +14,7 @@ import { Platform } from "react-native";
 
 // Custom error handler
 const handleError = (error: unknown) => {
-  if (__DEV__) {
+  if (QUERY_DEBUG_ENABLED) {
     console.error("[React Query Error]:", error);
   }
 
@@ -90,7 +92,7 @@ export const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: handleError,
     onSuccess: (data, query) => {
-      if (__DEV__) {
+      if (QUERY_DEBUG_ENABLED) {
         console.log("[Query Success]:", query.queryKey);
       }
     },
@@ -98,7 +100,7 @@ export const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: handleError,
     onSuccess: (data, variables, context, mutation) => {
-      if (__DEV__) {
+      if (QUERY_DEBUG_ENABLED) {
         console.log("[Mutation Success]:", mutation.options.mutationKey);
       }
     },
@@ -161,7 +163,9 @@ export function invalidateQueries(pattern: string | RegExp) {
 export const tvQueryHelpers = {
   // Suspend background queries during watch mode
   suspendBackgroundQueries: () => {
-    console.log("[QueryClient] Suspending background queries for watch mode");
+    if (QUERY_DEBUG_ENABLED) {
+      console.log("[QueryClient] Suspending background queries for watch mode");
+    }
 
     // Cancel all infinite content queries
     queryClient.cancelQueries({
@@ -202,7 +206,9 @@ export const tvQueryHelpers = {
 
   // Clear old browse cache to free memory for video
   clearBrowseCache: () => {
-    console.log("[QueryClient] Clearing browse cache for watch mode");
+    if (QUERY_DEBUG_ENABLED) {
+      console.log("[QueryClient] Clearing browse cache for watch mode");
+    }
     queryClient.removeQueries({
       predicate: (query) => {
         const key = query.queryKey[0];

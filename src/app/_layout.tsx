@@ -45,7 +45,7 @@ function StackNavigator({ isTV = Platform.isTV }) {
       <Stack
         screenOptions={{
           headerShown: false,
-          animation: isTV ? "fade" : "default",
+          animation: isTV ? "ios_from_right" : "default",
           contentStyle: { backgroundColor: "#000" },
         }}
       >
@@ -54,7 +54,7 @@ function StackNavigator({ isTV = Platform.isTV }) {
             <SafeAreaView style={{ flex: 1, backgroundColor: "#000" }}>
               <Stack.Screen
                 name="(tv)"
-                options={{ headerShown: false, animation: "fade" }}
+                options={{ headerShown: false, animation: "ios_from_right" }}
               />
             </SafeAreaView>
           ) : (

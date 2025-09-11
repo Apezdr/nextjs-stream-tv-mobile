@@ -6,6 +6,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios, { AxiosInstance, AxiosError } from "axios";
 
 // Define common API error response structure
+const AXIOS_DEBUG_ENABLED =
+  __DEV__ && process.env.AXIOS_DEBUG?.toLowerCase() === "true";
 interface ApiErrorResponse {
   message?: string;
   error?: string;
@@ -42,7 +44,7 @@ function debouncedServerStatusCheck(): void {
 
   // If we've checked recently, don't check again
   if (now - lastServerStatusCheck < SERVER_STATUS_CHECK_DEBOUNCE) {
-    if (__DEV__) {
+    if (AXIOS_DEBUG_ENABLED) {
       console.log("[Axios] Server status check skipped - too recent");
     }
     return;
@@ -58,12 +60,14 @@ function debouncedServerStatusCheck(): void {
     if (globalServerStatusCheckFunction) {
       try {
         lastServerStatusCheck = Date.now();
-        if (__DEV__) {
+        if (AXIOS_DEBUG_ENABLED) {
           console.log("[Axios] Performing debounced server status check");
         }
         await globalServerStatusCheckFunction();
       } catch (error) {
-        console.warn("[Axios] Debounced server status check failed:", error);
+        if (AXIOS_DEBUG_ENABLED) {
+          console.warn("[Axios] Debounced server status check failed:", error);
+        }
       }
     }
     serverStatusCheckTimeout = null;
@@ -211,13 +215,15 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
           }
         }
       } catch (error) {
-        console.warn("Failed to retrieve auth data:", error);
+        if (AXIOS_DEBUG_ENABLED) {
+          console.warn("Failed to retrieve auth data:", error);
+        }
       }
 
       // Add request timestamp for logging
       config.metadata = { startTime: Date.now() };
 
-      if (__DEV__) {
+      if (AXIOS_DEBUG_ENABLED) {
         console.log(`[Axios] ${config.method?.toUpperCase()} ${config.url}`, {
           headers: {
             ...config.headers,
@@ -240,7 +246,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       const endpoint = response.config.url || "";
       circuitBreaker.recordSuccess(endpoint);
 
-      if (__DEV__ && response.config.metadata) {
+      if (AXIOS_DEBUG_ENABLED && response.config.metadata) {
         const duration = Date.now() - response.config.metadata.startTime;
         console.log(
           `[Axios] ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status} (${duration}ms)`,
@@ -258,7 +264,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
         circuitBreaker.recordFailure(endpoint);
 
         // Check server status for 5xx errors (debounced)
-        if (__DEV__) {
+        if (AXIOS_DEBUG_ENABLED) {
           console.log(
             `[Axios] Server error ${error.response.status} detected, scheduling server status check`,
           );
@@ -268,7 +274,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
 
       // Also check server status for network errors (debounced)
       if (!error.response) {
-        if (__DEV__) {
+        if (AXIOS_DEBUG_ENABLED) {
           console.log(
             "[Axios] Network error detected, scheduling server status check",
           );
@@ -287,14 +293,14 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
         // Try to refresh token using the callback from AuthProvider
         if (globalTokenRefreshFunction) {
           try {
-            if (__DEV__) {
+            if (AXIOS_DEBUG_ENABLED) {
               console.log("[Axios] Attempting token refresh for 401 error");
             }
 
             const refreshSuccessful = await globalTokenRefreshFunction();
 
             if (refreshSuccessful) {
-              if (__DEV__) {
+              if (AXIOS_DEBUG_ENABLED) {
                 console.log(
                   "[Axios] Token refresh successful, retrying original request",
                 );
@@ -324,7 +330,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
               }
               return Promise.reject(error);
             } else {
-              if (__DEV__) {
+              if (AXIOS_DEBUG_ENABLED) {
                 console.log(
                   "[Axios] Token refresh failed - AuthProvider should handle logout",
                 );
@@ -333,11 +339,13 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
               // The refreshToken function in AuthProvider will call signOut() if refresh fails
             }
           } catch (refreshError) {
-            console.error("[Axios] Token refresh error:", refreshError);
+            if (AXIOS_DEBUG_ENABLED) {
+              console.error("[Axios] Token refresh error:", refreshError);
+            }
             // Don't clear AsyncStorage here - let AuthProvider handle the logout
           }
         } else {
-          if (__DEV__) {
+          if (AXIOS_DEBUG_ENABLED) {
             console.log(
               "[Axios] No token refresh function available, clearing auth data",
             );
@@ -358,7 +366,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
           originalRequest._retryCount = retryCount + 1;
 
           const delay = RETRY_CONFIG.retryDelay(retryCount);
-          if (__DEV__) {
+          if (AXIOS_DEBUG_ENABLED) {
             console.log(
               `[Axios] Retrying request (${retryCount + 1}/${RETRY_CONFIG.retries}) after ${delay}ms`,
             );
@@ -370,7 +378,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       }
 
       // Log error details in development
-      if (__DEV__) {
+      if (AXIOS_DEBUG_ENABLED) {
         console.error(`[Axios] Request failed:`, {
           url: error.config?.url,
           status: error.response?.status,

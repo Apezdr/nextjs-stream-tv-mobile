@@ -6,20 +6,17 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Dimensions,
   Platform,
 } from "react-native";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
-import {
-  MobileActionSheet,
-  ActionSheetAction,
-} from "@/src/components/Mobile/ActionSheet";
+import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import { Colors } from "@/src/constants/Colors";
-import { useBackdropManager } from "@/src/hooks/useBackdrop";
-
-// Get screen width for responsive sizing
-const { width: screenWidth } = Dimensions.get("window");
+import {
+  useActionSheetConfig,
+  ActionSheetContentData,
+} from "@/src/hooks/useActionSheetConfig";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 export interface MobileContentCardData {
   id: string;
@@ -69,8 +66,12 @@ const MobileContentCard = ({
   layout = "grid",
   size = "medium",
 }: MobileContentCardProps) => {
-  const { show: showBackdrop } = useBackdropManager();
+  const { generateConfig } = useActionSheetConfig();
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
+
+  // Get responsive dimensions that will update with orientation changes
+  const { window } = useDimensions();
+  const screenWidth = window.width;
 
   // Calculate responsive dimensions
   const dimensions = useMemo(() => {
@@ -102,129 +103,73 @@ const MobileContentCard = ({
     setActionSheetVisible(true);
   }, []);
 
-  // Handle play action
-  const handlePlay = useCallback(() => {
-    // Show backdrop if available
-    if (item.backdropUrl) {
-      showBackdrop(item.backdropUrl, {
-        fade: true,
-        duration: 300,
-        blurhash: item.backdropBlurhash || item.thumbnailBlurhash,
-      });
+  // Create content data for action sheet
+  const contentData: ActionSheetContentData = useMemo(
+    () => ({
+      id: item.showId || item.id,
+      title: item.title,
+      mediaType: item.mediaType || "movie",
+      seasonNumber: item.seasonNumber,
+      episodeNumber: item.episodeNumber,
+      backdrop: item.backdropUrl,
+      backdropBlurhash: item.backdropBlurhash || item.thumbnailBlurhash,
+    }),
+    [item],
+  );
 
+  // Handle custom play action (for backwards compatibility)
+  const handleCustomPlay = useCallback(
+    (data: ActionSheetContentData) => {
       // Prefetch backdrop for smooth transition
-      Image.prefetch(item.backdropUrl).catch((err) =>
-        console.warn("[MobileContentCard] prefetch error:", err),
+      if (data.backdrop) {
+        Image.prefetch(data.backdrop).catch((err) =>
+          console.warn("[MobileContentCard] prefetch error:", err),
+        );
+      }
+
+      onPlay(
+        data.id,
+        data.seasonNumber,
+        data.episodeNumber,
+        data.mediaType,
+        data.backdrop,
+        data.backdropBlurhash,
       );
-    }
+    },
+    [onPlay],
+  );
 
-    onPlay(
-      item.showId || item.id,
-      item.seasonNumber,
-      item.episodeNumber,
-      item.mediaType || "movie",
-      item.backdropUrl,
-      item.backdropBlurhash || item.thumbnailBlurhash,
-    );
-  }, [
-    showBackdrop,
-    onPlay,
-    item.showId,
-    item.id,
-    item.seasonNumber,
-    item.episodeNumber,
-    item.mediaType,
-    item.backdropUrl,
-    item.backdropBlurhash,
-    item.thumbnailBlurhash,
-  ]);
-
-  // Handle info action
-  const handleInfo = useCallback(() => {
-    // Show backdrop if available
-    if (item.backdropUrl) {
-      showBackdrop(item.backdropUrl, {
-        fade: true,
-        duration: 300,
-        blurhash: item.backdropBlurhash || item.thumbnailBlurhash,
-      });
-
+  // Handle custom info action (for backwards compatibility)
+  const handleCustomInfo = useCallback(
+    (data: ActionSheetContentData) => {
       // Prefetch backdrop for smooth transition
-      Image.prefetch(item.backdropUrl).catch((err) =>
-        console.warn("[MobileContentCard] prefetch error:", err),
+      if (data.backdrop) {
+        Image.prefetch(data.backdrop).catch((err) =>
+          console.warn("[MobileContentCard] prefetch error:", err),
+        );
+      }
+
+      onInfo(
+        data.id,
+        data.seasonNumber,
+        data.episodeNumber,
+        data.mediaType,
+        data.backdrop,
+        data.backdropBlurhash,
       );
-    }
+    },
+    [onInfo],
+  );
 
-    onInfo(
-      item.showId || item.id,
-      item.seasonNumber,
-      item.episodeNumber,
-      item.mediaType || "movie",
-      item.backdropUrl,
-      item.backdropBlurhash || item.thumbnailBlurhash,
-    );
-  }, [
-    showBackdrop,
-    onInfo,
-    item.showId,
-    item.id,
-    item.seasonNumber,
-    item.episodeNumber,
-    item.mediaType,
-    item.backdropUrl,
-    item.backdropBlurhash,
-    item.thumbnailBlurhash,
-  ]);
-
-  // Generate action sheet actions
-  const actionSheetActions = useMemo((): ActionSheetAction[] => {
-    const actions: ActionSheetAction[] = [];
-
-    // Play action
-    actions.push({
-      id: "play",
-      title: "Play",
-      icon: "play",
-      variant: "primary",
-      onPress: handlePlay,
+  // Generate action sheet configuration
+  const actionSheetConfig = useMemo(() => {
+    return generateConfig(contentData, "card", {
+      onClose: () => setActionSheetVisible(false),
+      onPlay: handleCustomPlay,
+      onInfo: handleCustomInfo,
+      // onRestart uses default implementation from hook
     });
-
-    // Info action - varies based on content type
-    if (item.mediaType === "tv" && item.seasonNumber && item.episodeNumber) {
-      // Episode - go to episode info
-      actions.push({
-        id: "info",
-        title: "Episode Info",
-        icon: "information-circle",
-        onPress: handleInfo,
-      });
-    } else {
-      // Movie or show - go to media info
-      actions.push({
-        id: "info",
-        title: item.mediaType === "movie" ? "Movie Info" : "Show Info",
-        icon: "information-circle",
-        onPress: handleInfo,
-      });
-    }
-
-    return actions;
-  }, [
-    item.mediaType,
-    item.seasonNumber,
-    item.episodeNumber,
-    handlePlay,
-    handleInfo,
-  ]);
-
-  // Generate action sheet title and subtitle
-  const actionSheetTitle = item.title;
-  const actionSheetSubtitle = useMemo(() => {
-    if (item.mediaType === "tv" && item.seasonNumber && item.episodeNumber) {
-      return `S${item.seasonNumber}E${item.episodeNumber}`;
-    }
-    return item.mediaType === "movie" ? "Movie" : "TV Show";
-  }, [item.mediaType, item.seasonNumber, item.episodeNumber]);
+  }, [contentData, generateConfig, handleCustomPlay, handleCustomInfo]);
 
   if (layout === "list") {
     return (
@@ -310,6 +255,8 @@ const MobileContentCard = ({
               height: dimensions.imageHeight * 0.75, // Leave room for title
             },
           ]}
+          width={450}
+          quality={78}
           placeholder={{
             uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
           }}
@@ -355,9 +302,9 @@ const MobileContentCard = ({
       <MobileActionSheet
         visible={actionSheetVisible}
         onClose={() => setActionSheetVisible(false)}
-        title={actionSheetTitle}
-        subtitle={actionSheetSubtitle}
-        actions={actionSheetActions}
+        title={actionSheetConfig.title}
+        subtitle={actionSheetConfig.subtitle}
+        actions={actionSheetConfig.actions}
       />
     </>
   );

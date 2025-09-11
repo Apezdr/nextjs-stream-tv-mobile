@@ -6,13 +6,13 @@ import {
   FlatList,
   TouchableOpacity as RNTouchableOpacity,
   Platform,
-  Dimensions,
   TVFocusGuideView,
 } from "react-native";
 
 import ContentItem, {
   ContentItemData,
 } from "@/src/components/TV/Pages/ContentRow/ContentItem";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface TVTouchableProps
   extends React.ComponentProps<typeof RNTouchableOpacity> {
@@ -73,18 +73,20 @@ const ContentRow = ({
     }
   }, [isFetchingNextPage]);
 
+  // Get dynamic dimensions
+  const { window } = useDimensions();
+
   // calculate item width + total spacing
   const itemDimensions = useMemo(() => {
-    const { width } = Dimensions.get("window");
     const itemWidth =
       itemSize === "small"
-        ? width / 5
+        ? window.width / 5
         : itemSize === "large"
-          ? width / 2.7
-          : width / 3.5;
+          ? window.width / 2.7
+          : window.width / 3.5;
     const itemMargin = 16; // your 8px each side
     return { itemWidth, totalItemWidth: itemWidth + itemMargin };
-  }, [itemSize]);
+  }, [itemSize, window.width]);
 
   // Simplified and reliable end reached handler
   const handleEndReached = useCallback(() => {

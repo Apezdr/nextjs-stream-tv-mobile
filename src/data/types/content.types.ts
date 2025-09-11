@@ -90,6 +90,12 @@ export interface TVDeviceMetadata {
   rating: number;
   releaseDate: string;
   trailer_url: string;
+  cast?: Array<{
+    id: number;
+    name: string;
+    character: string;
+    profile_path: string;
+  }>;
 }
 
 export interface TVDeviceNavigation {
@@ -395,3 +401,45 @@ export interface GenresContentParams {
 
 // Combined genres API parameters
 export type GenresApiParams = GenresListParams | GenresContentParams;
+
+// Episode-specific API response (when fetching with episode parameter)
+export interface EpisodeSpecificResponse {
+  id: string;
+  title: string;
+  showTitle: string;
+  type: string;
+  posterURL: string;
+  backdrop: string;
+  posterBlurhash: string;
+  backdropBlurhash: string;
+  totalSeasons: number;
+  seasonNumber: number;
+  metadata: TVDeviceMetadata;
+  hdr?: string;
+  duration?: number;
+  watchHistory?: WatchHistory;
+  episode: {
+    episodeNumber: number;
+    title: string;
+    thumbnail: string;
+    thumbnailBlurhash: string;
+    duration: number;
+    description: string;
+    videoURL: string;
+    hdr: string;
+    dimensions: string;
+    watchHistory?: WatchHistory;
+  };
+  cast?: Array<{
+    id: number;
+    name: string;
+    character: string;
+    profile_path: string;
+  }>;
+  guestStars?: Array<{
+    id: number;
+    name: string;
+    character: string;
+    profile_path: string;
+  }>;
+}

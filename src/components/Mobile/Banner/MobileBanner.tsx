@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   ViewStyle,
   TouchableOpacity,
-  Dimensions,
   Platform,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -18,12 +17,13 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { runOnJS } from "react-native-worklets";
+import { scheduleOnRN } from "react-native-worklets";
 
 import { Colors } from "@/src/constants/Colors";
 import { useBanner } from "@/src/data/hooks/useContent";
 import { BannerItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface MobileBannerProps {
   style?: ViewStyle;
@@ -31,12 +31,7 @@ interface MobileBannerProps {
   autoScrollInterval?: number;
 }
 
-const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
-const { height: fullScreenHeight } = Dimensions.get("screen");
-const BANNER_HEIGHT = Math.min(screenHeight * 0.6, 540);
-
-// ✅ Tuning constants
-const SWIPE_THRESHOLD = screenWidth * 0.15;
+// Only the velocity threshold is constant
 const VELOCITY_THRESHOLD = 600;
 
 export default function MobileBanner({
@@ -47,6 +42,16 @@ export default function MobileBanner({
   const router = useRouter();
   const { show: showBackdrop } = useBackdropManager();
   const insets = useSafeAreaInsets();
+
+  // Get dynamic dimensions that will update on orientation changes
+  const { window, screen } = useDimensions();
+
+  // Calculate derived values based on current dimensions
+  const screenWidth = window.width;
+  const screenHeight = window.height;
+  const fullScreenHeight = screen.height;
+  const BANNER_HEIGHT = Math.min(screenHeight * 0.78, 540);
+  const SWIPE_THRESHOLD = screenWidth * 0.15;
 
   const {
     data: bannerData,
@@ -73,7 +78,7 @@ export default function MobileBanner({
 
       // Simplified fade sequence: fade out content, change banner, fade in content
       contentOpacity.value = withTiming(0, { duration: 200 }, () => {
-        runOnJS(setCurrentBannerIndex)(nextIndex);
+        scheduleOnRN(setCurrentBannerIndex, nextIndex);
         contentOpacity.value = withTiming(1, { duration: 220 });
       });
     },
@@ -149,10 +154,14 @@ export default function MobileBanner({
     }, 1200);
   }, [autoScroll, resetAutoScrollTimer]);
 
-  // Enhanced pan gesture with vertical scroll prevention
+  // Enhanced pan gesture with improved vertical scrolling support
   const pan = Gesture.Pan()
+    .shouldCancelWhenOutside(false) // Don't cancel when moving outside
+    .maxPointers(1) // Single finger only
+    .activeOffsetX([-2, 2]) // Activate after moving 2px horizontally
+    .failOffsetY([-20, 20]) // Fail if moving 20px vertically first
     .onBegin(() => {
-      runOnJS(pauseAutoScroll)();
+      scheduleOnRN(pauseAutoScroll);
       isHorizontalSwipe.value = false;
     })
     .onUpdate((e) => {
@@ -178,22 +187,20 @@ export default function MobileBanner({
         e.velocityX > VELOCITY_THRESHOLD || e.translationX > SWIPE_THRESHOLD;
 
       if (isHorizontalSwipe.value && shouldGoNext) {
-        runOnJS(navigateToNext)();
+        scheduleOnRN(navigateToNext);
       } else if (isHorizontalSwipe.value && shouldGoPrev) {
-        runOnJS(navigateToPrev)();
+        scheduleOnRN(navigateToPrev);
       } else {
         // Reset opacity if swipe wasn't sufficient
         contentOpacity.value = withTiming(1, { duration: 200 });
       }
 
       isHorizontalSwipe.value = false;
-      runOnJS(resumeAutoScrollSoon)();
+      scheduleOnRN(resumeAutoScrollSoon);
     })
     .onFinalize(() => {
       // Ensure content opacity is restored if gesture was cancelled
-      if (!isHorizontalSwipe.value) {
-        contentOpacity.value = withTiming(1, { duration: 150 });
-      }
+      contentOpacity.value = withTiming(1, { duration: 150 });
     });
 
   // Tap press still uses your TouchableOpacity handler
@@ -406,9 +413,8 @@ const styles = StyleSheet.create({
   bannerContainer: {
     borderBottomColor: Colors.dark.tint,
     borderBottomWidth: 3,
-    height: BANNER_HEIGHT,
     marginBottom: 28,
-    width: screenWidth,
+    width: "100%", // Use percentage width for responsiveness
   },
   bannerContent: { flex: 1 },
   bannerOverview: {

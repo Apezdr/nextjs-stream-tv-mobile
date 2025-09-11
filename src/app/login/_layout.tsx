@@ -16,7 +16,7 @@ export default function LoginLayout() {
         <Stack
           screenOptions={{
             headerShown: false,
-            animation: "fade",
+            animation: "ios_from_right",
             contentStyle: { backgroundColor: "transparent" },
           }}
         >

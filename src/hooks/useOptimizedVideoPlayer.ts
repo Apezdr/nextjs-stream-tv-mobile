@@ -1,6 +1,7 @@
 import { useIsFocused } from "@react-navigation/native";
 import { useVideoPlayer, VideoPlayer } from "expo-video";
 import { useRef, useEffect, useCallback } from "react";
+import { AppState, AppStateStatus } from "react-native";
 
 interface SavedPlayerState {
   url: string;
@@ -22,6 +23,10 @@ export function useOptimizedVideoPlayer(
 
   // Operation ID to guard against rapid focus flips
   const opIdRef = useRef(0);
+
+  // Track PiP state to avoid unnecessary cleanup/restore cycles
+  const isPiPModeRef = useRef(false);
+  const appStateRef = useRef(AppState.currentState);
 
   // Safely read player properties with defensive fallbacks
   const safeGetPlayerState = useCallback((player: VideoPlayer) => {
@@ -224,13 +229,72 @@ export function useOptimizedVideoPlayer(
     }
   }, [videoURL]);
 
-  // Only manage resources on focus transitions
+  // Track app state changes to detect PiP mode
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextAppState;
+
+      // Detect potential PiP transitions
+      if (
+        previousState === "active" &&
+        (nextAppState === "background" || nextAppState === "inactive")
+      ) {
+        // App going to background - might be PiP activation
+        // Set a flag and clear it after a delay to detect if we stay backgrounded (real background)
+        // vs quickly return to active (PiP mode)
+        isPiPModeRef.current = true;
+
+        setTimeout(() => {
+          if (appStateRef.current === "active") {
+            // We came back to active quickly, likely PiP mode
+            console.log(
+              "[useOptimizedVideoPlayer] Detected PiP mode transition",
+            );
+          } else {
+            // Still backgrounded, not PiP
+            isPiPModeRef.current = false;
+          }
+        }, 500); // 500ms delay to detect quick transitions
+      } else if (nextAppState === "active") {
+        // Coming back to foreground
+        setTimeout(() => {
+          isPiPModeRef.current = false;
+        }, 100);
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+    return () => subscription?.remove();
+  }, []);
+
+  // Only manage resources on focus transitions, but skip during PiP mode
   useEffect(() => {
     if (!isFocused) {
-      cleanup();
-    } else if (savedState.current) {
-      // Only restore if we previously cleaned up
+      // Don't cleanup if we're likely in PiP mode
+      if (!isPiPModeRef.current) {
+        console.log(
+          "[useOptimizedVideoPlayer] Screen unfocused - cleaning up resources",
+        );
+        cleanup();
+      } else {
+        console.log(
+          "[useOptimizedVideoPlayer] Screen unfocused but likely PiP mode - skipping cleanup",
+        );
+      }
+    } else if (savedState.current && !isPiPModeRef.current) {
+      // Only restore if we previously cleaned up and we're not coming back from PiP
+      console.log(
+        "[useOptimizedVideoPlayer] Screen focused - restoring resources",
+      );
       restore();
+    } else if (isPiPModeRef.current) {
+      console.log(
+        "[useOptimizedVideoPlayer] Screen focused from PiP mode - skipping restore",
+      );
     }
   }, [isFocused, cleanup, restore]);
 
@@ -239,6 +303,7 @@ export function useOptimizedVideoPlayer(
     return () => {
       savedState.current = null;
       opIdRef.current = 0;
+      isPiPModeRef.current = false;
     };
   }, []);
 

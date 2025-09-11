@@ -17,6 +17,7 @@ import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 type ViewMode = "genres" | "all";
 type SortOption = "newest" | "title" | "rating";
@@ -141,22 +142,14 @@ export default function MoviesPage() {
       }
 
       // Navigate directly to watch page
-      router.push(
-        {
-          pathname: "/(mobile)/(protected)/watch/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            ...(seasonNumber && { season: seasonNumber.toString() }),
-            ...(episodeNumber && { episode: episodeNumber.toString() }),
-            ...(backdropUrl && { backdrop: backdropUrl }),
-            ...(backdropBlurhash && { backdropBlurhash }),
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToWatch({
+        id: showId,
+        type: mediaType,
+        ...(seasonNumber && { season: seasonNumber }),
+        ...(episodeNumber && { episode: episodeNumber }),
+        ...(backdropUrl && { backdrop: backdropUrl }),
+        ...(backdropBlurhash && { backdropBlurhash }),
+      });
     },
     [router, showBackdrop],
   );
@@ -183,35 +176,18 @@ export default function MoviesPage() {
       // Navigate to appropriate info page
       if (mediaType === "tv" && seasonNumber && episodeNumber) {
         // Episode - go to episode info page
-        router.push(
-          {
-            pathname:
-              "/(mobile)/(protected)/episode-info/[showId]/[season]/[episode]",
-            params: {
-              showId,
-              season: seasonNumber.toString(),
-              episode: episodeNumber.toString(),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToEpisodeInfo({
+          showId,
+          season: seasonNumber,
+          episode: episodeNumber,
+        });
       } else {
         // Movie or TV show - go to media info page
-        router.push(
-          {
-            pathname: "/(mobile)/(protected)/media-info/[id]",
-            params: {
-              id: showId,
-              type: mediaType,
-              ...(seasonNumber && { season: seasonNumber.toString() }),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToMediaInfo({
+          id: showId,
+          type: mediaType,
+          ...(seasonNumber && { season: seasonNumber }),
+        });
       }
     },
     [router, showBackdrop],

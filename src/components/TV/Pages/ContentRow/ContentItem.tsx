@@ -7,12 +7,12 @@ import {
   Text,
   TouchableOpacity as RNTouchableOpacity,
   Platform,
-  Dimensions,
 } from "react-native";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 // Create a TV-compatible TouchableOpacity component
 interface TVTouchableProps
@@ -24,9 +24,6 @@ interface TVTouchableProps
 // Use TypeScript casting to create a TV-compatible TouchableOpacity
 const TouchableOpacity =
   RNTouchableOpacity as React.ComponentType<TVTouchableProps>;
-
-// Get screen width to calculate item size
-const { width } = Dimensions.get("window");
 
 export interface ContentItemData {
   id: string;
@@ -70,17 +67,20 @@ const ContentItem = ({
   // Use the new Zustand-based backdrop manager
   const { show: showBackdrop } = useBackdropManager();
 
+  // Get dynamic dimensions
+  const { window } = useDimensions();
+
   // Memoize dimensions calculation
   const dimensions = useMemo(() => {
     const getItemWidth = () => {
       switch (size) {
         case "small":
-          return width / 5;
+          return window.width / 5;
         case "large":
-          return width / 2.9;
+          return window.width / 2.9;
         case "medium":
         default:
-          return width / 3.5;
+          return window.width / 3.5;
       }
     };
 
@@ -88,7 +88,7 @@ const ContentItem = ({
     const itemHeight = itemWidth * 0.6; // 16:9 aspect ratio
 
     return { itemWidth, itemHeight };
-  }, [size]);
+  }, [size, window.width]);
 
   // Memoize press handler - MIGRATED to use Zustand
   const handlePress = useCallback(() => {
@@ -218,19 +218,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#333",
     borderRadius: 4,
     margin: 8,
-    overflow: "hidden",
-    opacity: 0.22, // Default 22% opacity
-  },
-  overlay: {
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-    bottom: 0,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    left: 0,
-    padding: 8,
-    position: "absolute",
-    right: 0,
+    opacity: 0.22,
+    overflow: "hidden", // Default 22% opacity
   },
   logoContainer: {
     alignItems: "center",
@@ -245,6 +234,17 @@ const styles = StyleSheet.create({
   logoImage: {
     height: 50,
     width: "90%",
+  },
+  overlay: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    bottom: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    left: 0,
+    padding: 8,
+    position: "absolute",
+    right: 0,
   },
   playButton: {
     alignItems: "center",

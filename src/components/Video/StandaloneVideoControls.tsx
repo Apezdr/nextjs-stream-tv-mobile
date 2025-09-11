@@ -10,7 +10,6 @@ import {
   View,
   Text,
   Pressable,
-  Dimensions,
   Animated,
   TVFocusGuideView,
 } from "react-native";
@@ -27,6 +26,7 @@ import SubtitlePlayer from "./SubtitlePlayer";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface StandaloneVideoControlsProps {
   player: VideoPlayer; // expo-video player instance
@@ -99,6 +99,8 @@ const StandaloneVideoControls = memo(
     isEpisodeSwitching = false,
     episodeSwitchError = null,
   }: StandaloneVideoControlsProps) => {
+    // Get dynamic dimensions
+    const { window } = useDimensions();
     // Get enhanced remote activity state from context
     const {
       isRemoteActive,
@@ -323,7 +325,15 @@ const StandaloneVideoControls = memo(
           selectedSubtitleStyle={selectedSubtitleStyle}
           selectedSubtitleBackground={selectedSubtitleBackground}
         />
-        <Animated.View style={[controlsContainerStyle, { opacity: fadeAnim }]}>
+        <Animated.View
+          style={[
+            controlsContainerStyle,
+            {
+              opacity: fadeAnim,
+              maxWidth: window.width,
+            },
+          ]}
+        >
           {/* Main Focus Guide for all controls */}
           <TVFocusGuideView autoFocus style={styles.mainControlsContainer}>
             {/* 1. Top Section */}
@@ -636,7 +646,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     marginTop: "28%",
-    maxWidth: Dimensions.get("window").width,
     width: "100%",
   },
 

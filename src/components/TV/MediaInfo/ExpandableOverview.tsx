@@ -5,13 +5,13 @@ import {
   Pressable,
   Modal,
   StyleSheet,
-  Dimensions,
   TextLayoutEventData,
   NativeSyntheticEvent,
   ScrollView,
 } from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface ExpandableOverviewProps {
   overview: string;
@@ -26,6 +26,9 @@ export default function ExpandableOverview({
 }: ExpandableOverviewProps) {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isTruncated, setIsTruncated] = useState(false);
+  const { window } = useDimensions();
+  const screenWidth = window.width;
+  const screenHeight = window.height;
 
   const handleTextLayout = useCallback(
     (event: NativeSyntheticEvent<TextLayoutEventData>) => {
@@ -84,7 +87,15 @@ export default function ExpandableOverview({
         onRequestClose={closeModal}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
+          <View
+            style={[
+              styles.modalContainer,
+              {
+                maxHeight: screenHeight * 0.8,
+                width: screenWidth * 0.7,
+              },
+            ]}
+          >
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Overview</Text>
               <Pressable
@@ -100,7 +111,7 @@ export default function ExpandableOverview({
               </Pressable>
             </View>
             <ScrollView
-              style={styles.modalContent}
+              style={[styles.modalContent, { maxHeight: screenHeight * 0.6 }]}
               contentContainerStyle={styles.modalContentContainer}
               showsVerticalScrollIndicator={true}
               focusable
@@ -113,8 +124,6 @@ export default function ExpandableOverview({
     </>
   );
 }
-
-const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
 
 const styles = StyleSheet.create({
   closeButton: {
@@ -139,12 +148,12 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   expandButton: {
+    alignSelf: "flex-start",
     backgroundColor: "rgba(255, 255, 255, 0.1)",
     borderRadius: 4,
     marginTop: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    alignSelf: "flex-start",
   },
   expandButtonFocused: {
     backgroundColor: Colors.dark.tint,
@@ -161,12 +170,8 @@ const styles = StyleSheet.create({
     borderColor: "#333333",
     borderRadius: 12,
     borderWidth: 1,
-    maxHeight: screenHeight * 0.8,
-    width: screenWidth * 0.7,
   },
-  modalContent: {
-    maxHeight: screenHeight * 0.6,
-  },
+  modalContent: {},
   modalContentContainer: {
     padding: 24,
   },

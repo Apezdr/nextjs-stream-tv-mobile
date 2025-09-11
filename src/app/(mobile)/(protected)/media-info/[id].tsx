@@ -1,32 +1,40 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ImageBackground } from "expo-image";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import {
   View,
   StyleSheet,
   Text,
   TouchableOpacity,
   ScrollView,
-  Dimensions,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import YoutubeSvg from "@/src/assets/third-party/youtube.svg";
 import OptimizedImage from "@/src/components/common/OptimizedImage";
-import MobileActionSheet, {
-  ActionSheetAction,
-} from "@/src/components/Mobile/ActionSheet/MobileActionSheet";
+import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import { Colors } from "@/src/constants/Colors";
 import {
   useTVMediaDetails,
   useMovieDetails,
 } from "@/src/data/hooks/useContent";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import {
+  useActionSheetConfig,
+  ActionSheetContentData,
+} from "@/src/hooks/useActionSheetConfig";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
-
-const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
+import { navigationHelper } from "@/src/utils/navigationHelper";
+import {
+  extractYouTubeVideoId,
+  getYouTubeThumbnailUrls,
+  isValidYouTubeUrl,
+} from "@/src/utils/youtubeUtils";
 
 /**
  * Format duration from milliseconds to readable time
@@ -54,14 +62,21 @@ export default function MobileMediaInfoPage() {
     season?: string;
   }>();
 
+  // Get dynamic dimensions
+  const { window } = useDimensions();
+  const { width: screenWidth, height: screenHeight } = window;
+
   const [selectedSeason, setSelectedSeason] = useState<number>(
     params.season ? parseInt(params.season) : 1,
   );
 
-  // Action sheet state for episodes
+  // Action sheet state
   const [selectedEpisode, setSelectedEpisode] =
     useState<TVDeviceEpisode | null>(null);
-  const [showEpisodeActionSheet, setShowEpisodeActionSheet] = useState(false);
+  const [showActionSheet, setShowActionSheet] = useState(false);
+  const [actionSheetContext, setActionSheetContext] = useState<
+    "episode" | "movie" | "show"
+  >("episode");
 
   // Use the backdrop manager
   const { show: showBackdrop } = useBackdropManager();
@@ -70,6 +85,12 @@ export default function MobileMediaInfoPage() {
   // Debounce refresh to prevent excessive API calls
   const lastRefreshRef = useRef<number>(0);
   const REFRESH_DEBOUNCE_MS = 5000;
+
+  // Ref for season picker ScrollView and button positions
+  const seasonScrollViewRef = useRef<ScrollView>(null);
+  const seasonButtonLayouts = useRef<{
+    [key: number]: { x: number; width: number };
+  }>({});
 
   // Conditional hook usage based on media type
   const movieData = useMovieDetails(
@@ -115,7 +136,7 @@ export default function MobileMediaInfoPage() {
         const { url: currentUrl, visible: isVisible } =
           useBackdropStore.getState();
         if (currentUrl !== backdropUrl || !isVisible) {
-          console.log("[MobileMediaInfo] Showing backdrop:", backdropUrl);
+          // console.log("[MobileMediaInfo] Showing backdrop:", backdropUrl);
           showBackdrop(backdropUrl, {
             fade: true,
             duration: 500,
@@ -146,16 +167,70 @@ export default function MobileMediaInfoPage() {
     ]),
   );
 
-  // Handle episode action sheet
-  const handleEpisodePress = useCallback((episode: TVDeviceEpisode) => {
-    setSelectedEpisode(episode);
-    setShowEpisodeActionSheet(true);
+  // Auto-scroll to selected season when data loads or layouts change
+  useEffect(() => {
+    if (
+      params.type === "tv" &&
+      mediaInfo?.availableSeasons &&
+      params.season &&
+      seasonScrollViewRef.current
+    ) {
+      const targetSeason = parseInt(params.season);
+      const buttonLayout = seasonButtonLayouts.current[targetSeason];
+
+      if (buttonLayout) {
+        // Center the button in the scroll view
+        const scrollX = Math.max(
+          0,
+          buttonLayout.x - (screenWidth - buttonLayout.width) / 2,
+        );
+
+        setTimeout(() => {
+          seasonScrollViewRef.current?.scrollTo({
+            x: scrollX,
+            y: 0,
+            animated: true,
+          });
+        }, 100);
+      }
+    }
+  }, [
+    params.type,
+    params.season,
+    mediaInfo?.availableSeasons,
+    seasonButtonLayouts.current,
+  ]);
+
+  const { generateConfig } = useActionSheetConfig();
+
+  // Handle season button layout
+  const handleSeasonButtonLayout = useCallback((season: number, event: any) => {
+    const { x, width } = event.nativeEvent.layout;
+    seasonButtonLayouts.current[season] = { x, width };
   }, []);
 
-  const handleCloseEpisodeActionSheet = useCallback(() => {
-    setShowEpisodeActionSheet(false);
-    setSelectedEpisode(null);
+  // Handle action sheet for episodes
+  const handleEpisodePress = useCallback((episode: TVDeviceEpisode) => {
+    setSelectedEpisode(episode);
+    setActionSheetContext("episode");
+    setShowActionSheet(true);
   }, []);
+
+  // Handle action sheet for movies
+  const handleMoviePress = useCallback(() => {
+    setSelectedEpisode(null);
+    setActionSheetContext("movie");
+    setShowActionSheet(true);
+  }, []);
+
+  const handleCloseActionSheet = useCallback(() => {
+    setShowActionSheet(false);
+    setSelectedEpisode(null);
+    setActionSheetContext("episode");
+  }, []);
+
+  // Legacy handler for backward compatibility
+  const handleCloseEpisodeActionSheet = handleCloseActionSheet;
 
   // Handle episode play action
   const handlePlayEpisode = useCallback(
@@ -169,28 +244,52 @@ export default function MobileMediaInfoPage() {
         });
       }
 
-      router.push(
-        {
-          pathname: "/(mobile)/(protected)/watch/[id]",
-          params: {
-            id: params.id,
-            type: params.type,
-            season: selectedSeason,
-            episode: episode.episodeNumber,
-            backdrop: mediaInfo?.backdrop,
-            backdropBlurhash: mediaInfo?.backdropBlurhash,
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToWatch({
+        id: params.id,
+        type: params.type,
+        season: selectedSeason,
+        episode: episode.episodeNumber,
+        backdrop: mediaInfo?.backdrop,
+        backdropBlurhash: mediaInfo?.backdropBlurhash,
+      });
     },
     [
       params.id,
       params.type,
       selectedSeason,
       router,
+      mediaInfo?.backdrop,
+      mediaInfo?.backdropBlurhash,
+      showBackdrop,
+    ],
+  );
+
+  // Handle episode restart action
+  const handleRestartEpisode = useCallback(
+    (episode: TVDeviceEpisode) => {
+      // Show backdrop immediately for smooth transition
+      if (mediaInfo?.backdrop) {
+        showBackdrop(mediaInfo.backdrop, {
+          fade: true,
+          duration: 300,
+          blurhash: mediaInfo?.backdropBlurhash,
+        });
+      }
+
+      navigationHelper.navigateToWatch({
+        id: params.id,
+        type: params.type,
+        season: selectedSeason,
+        episode: episode.episodeNumber,
+        backdrop: mediaInfo?.backdrop,
+        backdropBlurhash: mediaInfo?.backdropBlurhash,
+        restart: true, // Add restart parameter
+      });
+    },
+    [
+      params.id,
+      params.type,
+      selectedSeason,
       mediaInfo?.backdrop,
       mediaInfo?.backdropBlurhash,
       showBackdrop,
@@ -209,20 +308,11 @@ export default function MobileMediaInfoPage() {
         });
       }
 
-      router.push(
-        {
-          pathname:
-            "/(mobile)/(protected)/episode-info/[showId]/[season]/[episode]",
-          params: {
-            showId: params.id,
-            season: selectedSeason.toString(),
-            episode: episode.episodeNumber.toString(),
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToEpisodeInfo({
+        showId: params.id,
+        season: selectedSeason,
+        episode: episode.episodeNumber,
+      });
     },
     [
       params.id,
@@ -236,20 +326,12 @@ export default function MobileMediaInfoPage() {
 
   // Handle movie play
   const handlePlayMovie = useCallback(() => {
-    router.push(
-      {
-        pathname: "/(mobile)/(protected)/watch/[id]",
-        params: {
-          id: params.id,
-          type: params.type,
-          backdrop: mediaInfo?.backdrop,
-          backdropBlurhash: mediaInfo?.backdropBlurhash,
-        },
-      },
-      {
-        dangerouslySingular: true,
-      },
-    );
+    navigationHelper.navigateToWatch({
+      id: params.id,
+      type: params.type,
+      backdrop: mediaInfo?.backdrop,
+      backdropBlurhash: mediaInfo?.backdropBlurhash,
+    });
   }, [
     params.id,
     params.type,
@@ -257,6 +339,74 @@ export default function MobileMediaInfoPage() {
     mediaInfo?.backdrop,
     mediaInfo?.backdropBlurhash,
   ]);
+
+  // Handle movie restart
+  const handleRestartMovie = useCallback(() => {
+    navigationHelper.navigateToWatch({
+      id: params.id,
+      type: params.type,
+      backdrop: mediaInfo?.backdrop,
+      backdropBlurhash: mediaInfo?.backdropBlurhash,
+      restart: true,
+    });
+  }, [
+    params.id,
+    params.type,
+    mediaInfo?.backdrop,
+    mediaInfo?.backdropBlurhash,
+  ]);
+
+  // Handle show info navigation
+  const handleShowInfo = useCallback(() => {
+    // Navigate to show info (current page without specific episode)
+    navigationHelper.navigateToMediaInfo({
+      id: params.id,
+      type: params.type,
+      backdrop: mediaInfo?.backdrop,
+      backdropBlurhash: mediaInfo?.backdropBlurhash,
+    });
+  }, [
+    params.id,
+    params.type,
+    mediaInfo?.backdrop,
+    mediaInfo?.backdropBlurhash,
+  ]);
+
+  // Handle movie info navigation
+  const handleMovieInfo = useCallback(() => {
+    // For movies, this could navigate to a detailed info page or stay on current page
+    // For now, we'll just close the action sheet as the user is already on the info page
+    handleCloseEpisodeActionSheet();
+  }, []);
+
+  // Handle trailer press - open YouTube app or browser
+  const handleTrailerPress = useCallback(async () => {
+    const trailerUrl = mediaInfo?.metadata?.trailer_url;
+    if (!trailerUrl || !isValidYouTubeUrl(trailerUrl)) return;
+
+    try {
+      const videoId = extractYouTubeVideoId(trailerUrl);
+      if (!videoId) return;
+
+      // Try to open in YouTube app first, fallback to browser
+      const youtubeAppUrl = `youtube://watch?v=${videoId}`;
+      const canOpenYouTube = await Linking.canOpenURL(youtubeAppUrl);
+
+      if (canOpenYouTube) {
+        await Linking.openURL(youtubeAppUrl);
+      } else {
+        await Linking.openURL(trailerUrl);
+      }
+    } catch (error) {
+      console.error("Failed to open trailer:", error);
+      // Fallback to browser
+      try {
+        await Linking.openURL(trailerUrl);
+      } catch (fallbackError) {
+        console.error("Failed to open trailer in browser:", fallbackError);
+      }
+    }
+  }, [mediaInfo?.metadata?.trailer_url]);
 
   // Handle season change
   const handleSeasonChange = useCallback((newSeason: number) => {
@@ -268,36 +418,79 @@ export default function MobileMediaInfoPage() {
     router.back();
   }, [router]);
 
-  // Create action sheet actions for selected episode
-  const episodeActions: ActionSheetAction[] = selectedEpisode
-    ? [
-        {
-          id: "play",
-          title: "Play Episode",
-          icon: "play",
-          variant: "primary",
-          onPress: () => {
-            handleCloseEpisodeActionSheet();
-            handlePlayEpisode(selectedEpisode);
-          },
-        },
-        {
-          id: "info",
-          title: "Episode Info",
-          icon: "information-circle",
-          variant: "default",
-          onPress: () => {
-            handleCloseEpisodeActionSheet();
-            handleEpisodeInfo(selectedEpisode);
-          },
-        },
-      ]
-    : [];
+  // === ACTION SHEET LOGIC ===
+
+  // Create content data based on context
+  const createContentData = (): ActionSheetContentData => {
+    if (actionSheetContext === "episode" && selectedEpisode) {
+      return {
+        id: params.id,
+        title: selectedEpisode.title,
+        mediaType: "tv",
+        seasonNumber: selectedSeason,
+        episodeNumber: selectedEpisode.episodeNumber,
+        backdrop: mediaInfo?.backdrop,
+        backdropBlurhash: mediaInfo?.backdropBlurhash,
+      };
+    } else {
+      return {
+        id: params.id,
+        title: mediaInfo?.title || "Unknown",
+        mediaType: params.type,
+        seasonNumber: params.type === "tv" ? selectedSeason : undefined,
+        episodeNumber: undefined,
+        backdrop: mediaInfo?.backdrop,
+        backdropBlurhash: mediaInfo?.backdropBlurhash,
+      };
+    }
+  };
+
+  const contentData = createContentData();
+
+  // Custom handlers for backward compatibility and specific navigation needs
+  const customHandlers = {
+    onClose: handleCloseActionSheet,
+    onPlay: (data: ActionSheetContentData) => {
+      if (actionSheetContext === "episode" && selectedEpisode) {
+        handlePlayEpisode(selectedEpisode);
+      } else if (actionSheetContext === "movie") {
+        handlePlayMovie();
+      }
+    },
+    onRestart: (data: ActionSheetContentData) => {
+      if (actionSheetContext === "episode" && selectedEpisode) {
+        handleRestartEpisode(selectedEpisode);
+      } else if (actionSheetContext === "movie") {
+        handleRestartMovie();
+      }
+    },
+    onInfo: (data: ActionSheetContentData) => {
+      if (actionSheetContext === "episode" && selectedEpisode) {
+        handleEpisodeInfo(selectedEpisode);
+      } else if (actionSheetContext === "movie") {
+        handleMovieInfo();
+      } else if (actionSheetContext === "show") {
+        handleShowInfo();
+      }
+    },
+  };
+
+  // Generate action sheet configuration using centralized hook
+  const actionSheetConfig = generateConfig(
+    contentData,
+    actionSheetContext,
+    customHandlers,
+  );
 
   // Loading state
   if (isLoading) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View
+        style={[
+          styles.container,
+          { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
+      >
         <View style={styles.loadingContainer}>
           <ActivityIndicator color={Colors.dark.brandPrimary} size="large" />
           <Text style={styles.loadingText}>Loading media info...</Text>
@@ -309,7 +502,12 @@ export default function MobileMediaInfoPage() {
   // Error state
   if (error || !mediaInfo) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View
+        style={[
+          styles.container,
+          { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
+      >
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>
             {error || "Failed to load media information"}
@@ -323,7 +521,12 @@ export default function MobileMediaInfoPage() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View
+      style={[
+        styles.container,
+        { paddingTop: insets.top, paddingBottom: insets.bottom },
+      ]}
+    >
       {/* Header with back button */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -340,7 +543,7 @@ export default function MobileMediaInfoPage() {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Hero section with backdrop */}
-        <View style={styles.heroSection}>
+        <View style={[styles.heroSection, { height: screenHeight * 0.4 }]}>
           <ImageBackground
             source={{ uri: backdropUrl }}
             placeholder={{
@@ -433,9 +636,21 @@ export default function MobileMediaInfoPage() {
 
                           <Text style={styles.heroMetadataText}>
                             {mediaInfo.metadata.releaseDate
-                              ? new Date(
-                                  mediaInfo.metadata.releaseDate,
-                                ).getFullYear()
+                              ? (() => {
+                                  const d = new Date(
+                                    mediaInfo.metadata.releaseDate,
+                                  );
+                                  const mm = String(d.getMonth() + 1).padStart(
+                                    2,
+                                    "0",
+                                  );
+                                  const dd = String(d.getDate()).padStart(
+                                    2,
+                                    "0",
+                                  );
+                                  const yyyy = d.getFullYear();
+                                  return `${mm}-${dd}-${yyyy}`;
+                                })()
                               : ""}
                           </Text>
 
@@ -450,18 +665,33 @@ export default function MobileMediaInfoPage() {
                           </View>
                         </View>
 
-                        {/* Play button only for movies */}
-                        <TouchableOpacity
-                          style={styles.playButton}
-                          onPress={handlePlayMovie}
-                        >
-                          <Ionicons
-                            name="play"
-                            size={20}
-                            color={Colors.dark.whiteText}
-                          />
-                          <Text style={styles.playButtonText}>Play Movie</Text>
-                        </TouchableOpacity>
+                        {/* Play button with options for movies */}
+                        <View style={styles.movieButtonContainer}>
+                          <TouchableOpacity
+                            style={styles.playButton}
+                            onPress={handlePlayMovie}
+                          >
+                            <Ionicons
+                              name="play"
+                              size={20}
+                              color={Colors.dark.whiteText}
+                            />
+                            <Text style={styles.playButtonText}>
+                              Play Movie
+                            </Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={styles.movieOptionsButton}
+                            onPress={handleMoviePress}
+                          >
+                            <Ionicons
+                              name="ellipsis-horizontal"
+                              size={20}
+                              color={Colors.dark.whiteText}
+                            />
+                          </TouchableOpacity>
+                        </View>
                       </>
                     )}
                   </>
@@ -524,6 +754,112 @@ export default function MobileMediaInfoPage() {
             </View>
           )}
 
+          {/* Trailer Section */}
+          {mediaInfo.metadata.trailer_url &&
+            isValidYouTubeUrl(mediaInfo.metadata.trailer_url) && (
+              <View style={styles.trailerContainer}>
+                <Text style={styles.trailerTitle}>Trailer</Text>
+                <TouchableOpacity
+                  style={styles.trailerCard}
+                  onPress={handleTrailerPress}
+                >
+                  <View style={styles.trailerImageContainer}>
+                    <OptimizedImage
+                      source={{
+                        uri: getYouTubeThumbnailUrls(
+                          extractYouTubeVideoId(
+                            mediaInfo.metadata.trailer_url,
+                          )!,
+                        ).primary,
+                      }}
+                      style={styles.trailerImage}
+                      contentFit="cover"
+                      priority="normal"
+                      width={400}
+                      quality={85}
+                    />
+                    <View style={styles.trailerPlayOverlay}>
+                      <View style={styles.trailerPlayButton}>
+                        <Ionicons
+                          name="play"
+                          size={35}
+                          color={Colors.dark.tint}
+                        />
+                      </View>
+                    </View>
+                    <View style={styles.trailerYouTubeBadge}>
+                      <YoutubeSvg
+                        width={60}
+                        height={14}
+                        style={styles.youtubeSvgIcon}
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.trailerInfo}>
+                    <Text style={styles.trailerCardTitle}>Watch Trailer</Text>
+                    <Text style={styles.trailerDescription}>
+                      Tap to watch the official trailer on YouTube
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+            )}
+
+          {/* Cast Section */}
+          {(((mediaInfo as any).cast && (mediaInfo as any).cast.length > 0) ||
+            (mediaInfo.metadata.cast &&
+              mediaInfo.metadata.cast.length > 0)) && (
+            <View style={styles.castContainer}>
+              <Text style={styles.castTitle}>Cast</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.castList}
+              >
+                {((mediaInfo as any).cast || mediaInfo.metadata.cast)
+                  ?.slice(0, 10)
+                  .map((actor: any) => (
+                    <View key={actor.id} style={styles.castMember}>
+                      <View style={styles.castImageContainer}>
+                        {actor.profile_path &&
+                        actor.profile_path.trim() !== "" &&
+                        actor.profile_path !== null ? (
+                          <OptimizedImage
+                            source={{ uri: actor.profile_path }}
+                            style={styles.castImage}
+                            contentFit="cover"
+                            priority="normal"
+                            width={120}
+                            quality={85}
+                          />
+                        ) : (
+                          <View
+                            style={[styles.castImage, styles.castPlaceholder]}
+                          >
+                            <Ionicons
+                              name="person"
+                              size={40}
+                              color={Colors.dark.videoDescriptionText}
+                            />
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.castInfo}>
+                        <Text style={styles.castName} numberOfLines={2}>
+                          {actor.name}
+                        </Text>
+                        {actor.character && (
+                          <Text style={styles.castCharacter} numberOfLines={2}>
+                            {actor.character}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+              </ScrollView>
+            </View>
+          )}
+
           {/* TV Show specific: Season picker and episodes */}
           {params.type === "tv" &&
             mediaInfo.navigation &&
@@ -533,6 +869,7 @@ export default function MobileMediaInfoPage() {
                 <View style={styles.seasonSection}>
                   <Text style={styles.sectionTitle}>Seasons</Text>
                   <ScrollView
+                    ref={seasonScrollViewRef}
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.seasonsList}
@@ -545,6 +882,9 @@ export default function MobileMediaInfoPage() {
                           season === selectedSeason &&
                             styles.seasonButtonActive,
                         ]}
+                        onLayout={(event) =>
+                          handleSeasonButtonLayout(season, event)
+                        }
                         onPress={() => handleSeasonChange(season)}
                       >
                         <Text
@@ -597,7 +937,7 @@ export default function MobileMediaInfoPage() {
                             <View style={styles.episodePlayOverlay}>
                               <Ionicons
                                 name="play-circle"
-                                size={32}
+                                size={82}
                                 color="rgba(255, 255, 255, 0.9)"
                               />
                             </View>
@@ -612,7 +952,7 @@ export default function MobileMediaInfoPage() {
                                       {
                                         width: `${
                                           (episode.watchHistory.playbackTime /
-                                            (episode.duration * 1000)) *
+                                            (episode.duration / 1000)) *
                                           100
                                         }%`,
                                       },
@@ -653,17 +993,13 @@ export default function MobileMediaInfoPage() {
         </View>
       </ScrollView>
 
-      {/* Episode Action Sheet */}
+      {/* Action Sheet */}
       <MobileActionSheet
-        visible={showEpisodeActionSheet}
+        visible={showActionSheet}
         onClose={handleCloseEpisodeActionSheet}
-        title={
-          selectedEpisode
-            ? `Episode ${selectedEpisode.episodeNumber}`
-            : undefined
-        }
-        subtitle={selectedEpisode?.title}
-        actions={episodeActions}
+        title={actionSheetConfig.title}
+        subtitle={actionSheetConfig.subtitle}
+        actions={actionSheetConfig.actions}
         backdropDismiss={true}
       />
     </View>
@@ -706,7 +1042,6 @@ const styles = StyleSheet.create({
 
   // Hero section styles
   heroSection: {
-    height: screenHeight * 0.4,
     minHeight: 250,
   },
   heroBackground: {
@@ -794,9 +1129,14 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 4,
   },
-  playButton: {
+  movieButtonContainer: {
     alignItems: "center",
     alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: 12,
+  },
+  playButton: {
+    alignItems: "center",
     backgroundColor: Colors.dark.brandPrimary,
     borderRadius: 8,
     elevation: 4,
@@ -814,6 +1154,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     marginLeft: 8,
+  },
+  movieOptionsButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 8,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
   },
 
   // TV show hero styles
@@ -1087,5 +1435,134 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 16,
     fontWeight: "600",
+  },
+
+  // Trailer section styles
+  trailerContainer: {
+    marginBottom: 24,
+  },
+  trailerTitle: {
+    color: Colors.dark.whiteText,
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 16,
+  },
+  trailerCard: {
+    backgroundColor: Colors.dark.cardBackground,
+    borderRadius: 12,
+    elevation: 3,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  trailerImageContainer: {
+    height: 200,
+    position: "relative",
+    width: "100%",
+  },
+  trailerImage: {
+    height: "100%",
+    width: "100%",
+  },
+  trailerPlayOverlay: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    bottom: 0,
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  trailerPlayButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    borderRadius: 30,
+    height: 60,
+    justifyContent: "center",
+    width: 60,
+  },
+  trailerYouTubeBadge: {
+    alignItems: "center",
+    backgroundColor: "#ffffffff",
+    borderRadius: 4,
+    justifyContent: "center",
+    paddingVertical: 3,
+    position: "absolute",
+    right: 12,
+    top: 12,
+  },
+  youtubeSvgIcon: {
+    // The SVG will use its default colors
+  },
+  trailerInfo: {
+    padding: 16,
+  },
+  trailerCardTitle: {
+    color: Colors.dark.whiteText,
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  trailerDescription: {
+    color: Colors.dark.videoDescriptionText,
+    fontSize: 14,
+    lineHeight: 18,
+  },
+
+  // Cast section styles
+  castContainer: {
+    marginBottom: 24,
+  },
+  castTitle: {
+    color: Colors.dark.whiteText,
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 16,
+  },
+  castList: {
+    gap: 16,
+    paddingHorizontal: 4,
+  },
+  castMember: {
+    width: 80,
+  },
+  castImageContainer: {
+    borderRadius: 8,
+    elevation: 2,
+    height: 120,
+    marginBottom: 8,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    width: 80,
+  },
+  castImage: {
+    height: "100%",
+    width: "100%",
+  },
+  castInfo: {
+    alignItems: "center",
+  },
+  castName: {
+    color: Colors.dark.whiteText,
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 2,
+    textAlign: "center",
+  },
+  castCharacter: {
+    color: Colors.dark.videoDescriptionText,
+    fontSize: 11,
+    textAlign: "center",
+  },
+  castPlaceholder: {
+    alignItems: "center",
+    backgroundColor: Colors.dark.cardBackground,
+    justifyContent: "center",
   },
 });

@@ -8,7 +8,6 @@ import {
   Text,
   TouchableOpacity,
   ScrollView,
-  Dimensions,
   ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,10 +15,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { useTVMediaDetails } from "@/src/data/hooks/useContent";
+import { EpisodeSpecificResponse } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
-
-const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 /**
  * Format duration from seconds to readable time
@@ -46,6 +46,10 @@ export default function EpisodeInfoPage() {
     episode: string;
   }>();
 
+  // Get dynamic dimensions
+  const { window } = useDimensions();
+  const { width: screenWidth, height: screenHeight } = window;
+
   const seasonNumber = parseInt(params.season, 10);
   const episodeNumber = parseInt(params.episode, 10);
 
@@ -62,12 +66,12 @@ export default function EpisodeInfoPage() {
     mediaType: "tv",
     mediaId: params.showId,
     season: seasonNumber,
+    episode: episodeNumber,
   });
 
-  // Find the specific episode
-  const episode = tvData.data?.episodes?.find(
-    (ep) => ep.episodeNumber === episodeNumber,
-  );
+  // When fetching specific episode data, the episode is returned directly
+  // instead of being wrapped in an episodes array
+  const episode = tvData.data as EpisodeSpecificResponse | null;
 
   // Show backdrop when page comes into focus
   useFocusEffect(
@@ -76,9 +80,9 @@ export default function EpisodeInfoPage() {
       const timeSinceLastRefresh = now - lastRefreshRef.current;
 
       // Use episode thumbnail as backdrop, or fallback to show backdrop
-      const backdropUrl = episode?.thumbnail || tvData.data?.backdrop;
+      const backdropUrl = episode?.episode?.thumbnail || episode?.backdrop;
       const backdropBlurhash =
-        episode?.thumbnailBlurhash || tvData.data?.backdropBlurhash;
+        episode?.episode?.thumbnailBlurhash || episode?.backdropBlurhash;
 
       // Show backdrop when page comes into focus
       if (backdropUrl) {
@@ -97,17 +101,16 @@ export default function EpisodeInfoPage() {
       // Debounced refresh
       if (
         timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS &&
-        tvData.data &&
+        tvData &&
         tvData.refetch
       ) {
         lastRefreshRef.current = now;
         tvData.refetch();
       }
     }, [
-      tvData.data,
       tvData.refetch,
-      episode?.thumbnail,
-      episode?.thumbnailBlurhash,
+      episode?.episode?.thumbnail,
+      episode?.episode?.thumbnailBlurhash,
       showBackdrop,
     ]),
   );
@@ -116,23 +119,14 @@ export default function EpisodeInfoPage() {
   const handlePlayEpisode = useCallback(() => {
     if (!episode) return;
 
-    router.push(
-      {
-        pathname: "/(mobile)/(protected)/watch/[id]",
-        params: {
-          id: params.showId,
-          type: "tv",
-          season: seasonNumber,
-          episode: episodeNumber,
-          backdrop: episode.thumbnail || tvData.data?.backdrop,
-          backdropBlurhash:
-            episode.thumbnailBlurhash || tvData.data?.backdropBlurhash,
-        },
-      },
-      {
-        dangerouslySingular: true,
-      },
-    );
+    navigationHelper.navigateToWatch({
+      id: params.showId,
+      type: "tv",
+      season: seasonNumber,
+      episode: episodeNumber,
+      backdrop: episode?.episode?.thumbnail,
+      backdropBlurhash: episode?.episode?.thumbnailBlurhash,
+    });
   }, [
     episode,
     params.showId,
@@ -145,19 +139,14 @@ export default function EpisodeInfoPage() {
 
   // Handle go to show info
   const handleGoToShow = useCallback(() => {
-    router.push(
+    navigationHelper.navigateToMediaInfo(
       {
-        pathname: "/(mobile)/(protected)/media-info/[id]",
-        params: {
-          id: params.showId,
-          type: "tv",
-          season: seasonNumber,
-        },
+        id: params.showId,
+        type: "tv",
+        season: seasonNumber,
       },
-      {
-        dangerouslySingular: true,
-      },
-    );
+      true,
+    ); // fromEpisodeInfo = true to use dismissTo
   }, [router, params.showId, seasonNumber]);
 
   // Handle go back
@@ -193,15 +182,11 @@ export default function EpisodeInfoPage() {
     );
   }
 
-  const showData = tvData.data;
-  const watchProgress = (episode.watchHistory?.playbackTime || 0) * 1000;
-  const totalDuration = episode.duration || 0;
+  const showData = episode;
+  const watchProgress = (episode?.watchHistory?.playbackTime || 0) * 1000;
+  const totalDuration = episode?.duration || 0;
   const progressPercentage =
     totalDuration > 0 ? watchProgress / totalDuration : 0;
-
-  console.log("totalDuration", totalDuration);
-  console.log("watchProgress", watchProgress);
-  console.log("progressPercentage", progressPercentage);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -230,11 +215,11 @@ export default function EpisodeInfoPage() {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Hero section with episode thumbnail */}
-        <View style={styles.heroSection}>
+        <View style={[styles.heroSection, { height: screenHeight * 0.4 }]}>
           <ImageBackground
-            source={{ uri: episode.thumbnail }}
+            source={{ uri: episode?.episode?.thumbnail }}
             placeholder={{
-              uri: `data:image/png;base64,${episode.thumbnailBlurhash}`,
+              uri: `data:image/png;base64,${episode?.episode?.thumbnailBlurhash}`,
             }}
             style={styles.heroBackground}
             contentFit="cover"
@@ -250,9 +235,9 @@ export default function EpisodeInfoPage() {
                   <Text style={styles.episodeNumber}>
                     S{seasonNumber}E{episodeNumber}
                   </Text>
-                  {episode.hdr && (
+                  {episode?.hdr && (
                     <View style={styles.hdrBadge}>
-                      <Text style={styles.hdrText}>HDR</Text>
+                      <Text style={styles.hdrText}>{episode.hdr}</Text>
                     </View>
                   )}
                 </View>
@@ -276,8 +261,10 @@ export default function EpisodeInfoPage() {
                   )}
                   <Text style={styles.progressText}>
                     {progressPercentage > 0
-                      ? `${formatTimeFromSeconds(episode.watchHistory?.playbackTime || 0)} - ${formatTimeFromSeconds(episode.duration / 1000)}`
-                      : formatTimeFromSeconds(episode.duration / 1000)}
+                      ? `${formatTimeFromSeconds(episode?.watchHistory?.playbackTime || 0)} - ${formatTimeFromSeconds(episode?.duration ? episode.duration / 1000 : 0)}`
+                      : formatTimeFromSeconds(
+                          episode?.duration ? episode.duration / 1000 : 0,
+                        )}
                   </Text>
                 </View>
 
@@ -305,10 +292,12 @@ export default function EpisodeInfoPage() {
         {/* Info section */}
         <View style={styles.infoSection}>
           {/* Episode description */}
-          {episode.description && (
+          {episode?.episode?.description && (
             <View style={styles.descriptionContainer}>
               <Text style={styles.descriptionTitle}>Synopsis</Text>
-              <Text style={styles.descriptionText}>{episode.description}</Text>
+              <Text style={styles.descriptionText}>
+                {episode?.episode?.description}
+              </Text>
             </View>
           )}
 
@@ -334,7 +323,7 @@ export default function EpisodeInfoPage() {
 
               <View style={styles.showInfoContent}>
                 <Text style={styles.showTitle} numberOfLines={1}>
-                  {showData.title}
+                  {showData?.showTitle}
                 </Text>
                 <Text style={styles.showMetadata}>
                   Season {seasonNumber} • {showData.totalSeasons}{" "}
@@ -358,6 +347,112 @@ export default function EpisodeInfoPage() {
               />
             </TouchableOpacity>
           </View>
+
+          {/* Guest Stars Section */}
+          {episode?.guestStars && episode.guestStars.length > 0 && (
+            <View style={styles.castContainer}>
+              <Text style={styles.castTitle}>Guest Stars</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.castList}
+              >
+                {episode?.guestStars.map((actor) => (
+                  <View key={actor.id} style={styles.castMember}>
+                    <View style={styles.castImageContainer}>
+                      {actor.profile_path &&
+                      actor.profile_path.trim() !== "" &&
+                      actor.profile_path !== null ? (
+                        <OptimizedImage
+                          source={{
+                            uri: `https://image.tmdb.org/t/p/w500${actor.profile_path}`,
+                          }}
+                          style={styles.castImage}
+                          contentFit="cover"
+                          priority="normal"
+                          width={120}
+                          quality={85}
+                        />
+                      ) : (
+                        <View
+                          style={[styles.castImage, styles.castPlaceholder]}
+                        >
+                          <Ionicons
+                            name="person"
+                            size={40}
+                            color={Colors.dark.videoDescriptionText}
+                          />
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.castInfo}>
+                      <Text style={styles.castName} numberOfLines={2}>
+                        {actor.name}
+                      </Text>
+                      {actor.character && (
+                        <Text style={styles.castCharacter} numberOfLines={2}>
+                          {actor.character}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Cast Section */}
+          {episode?.cast && episode.cast.length > 0 && (
+            <View style={styles.castContainer}>
+              <Text style={styles.castTitle}>Cast</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.castList}
+              >
+                {episode?.cast.map((actor) => (
+                  <View key={actor.id} style={styles.castMember}>
+                    <View style={styles.castImageContainer}>
+                      {actor.profile_path &&
+                      actor.profile_path.trim() !== "" &&
+                      actor.profile_path !== null ? (
+                        <OptimizedImage
+                          source={{
+                            uri: `https://image.tmdb.org/t/p/w200${actor.profile_path}`,
+                          }}
+                          style={styles.castImage}
+                          contentFit="cover"
+                          priority="normal"
+                          width={120}
+                          quality={85}
+                        />
+                      ) : (
+                        <View
+                          style={[styles.castImage, styles.castPlaceholder]}
+                        >
+                          <Ionicons
+                            name="person"
+                            size={40}
+                            color={Colors.dark.videoDescriptionText}
+                          />
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.castInfo}>
+                      <Text style={styles.castName} numberOfLines={2}>
+                        {actor.name}
+                      </Text>
+                      {actor.character && (
+                        <Text style={styles.castCharacter} numberOfLines={2}>
+                          {actor.character}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -400,7 +495,6 @@ const styles = StyleSheet.create({
 
   // Hero section styles
   heroSection: {
-    height: screenHeight * 0.4,
     minHeight: 280,
   },
   heroBackground: {
@@ -603,5 +697,59 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 16,
     fontWeight: "600",
+  },
+
+  // Cast section styles
+  castContainer: {
+    marginBottom: 24,
+  },
+  castTitle: {
+    color: Colors.dark.whiteText,
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 16,
+  },
+  castList: {
+    gap: 16,
+    paddingHorizontal: 4,
+  },
+  castMember: {
+    width: 80,
+  },
+  castImageContainer: {
+    borderRadius: 8,
+    elevation: 2,
+    height: 120,
+    marginBottom: 8,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    width: 80,
+  },
+  castImage: {
+    height: "100%",
+    width: "100%",
+  },
+  castInfo: {
+    alignItems: "center",
+  },
+  castName: {
+    color: Colors.dark.whiteText,
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 2,
+    textAlign: "center",
+  },
+  castCharacter: {
+    color: Colors.dark.videoDescriptionText,
+    fontSize: 11,
+    textAlign: "center",
+  },
+  castPlaceholder: {
+    alignItems: "center",
+    backgroundColor: Colors.dark.cardBackground,
+    justifyContent: "center",
   },
 });

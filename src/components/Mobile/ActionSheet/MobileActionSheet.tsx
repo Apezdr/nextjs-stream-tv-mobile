@@ -6,8 +6,6 @@ import {
   Text,
   TouchableOpacity,
   Modal,
-  Dimensions,
-  StatusBar,
   Platform,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -18,13 +16,11 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { runOnJS } from "react-native-worklets";
+import { scheduleOnRN } from "react-native-worklets";
 
 import { usePortal } from "@/src/components/common/Portal";
 import { Colors } from "@/src/constants/Colors";
-
-const { height: screenHeight } = Dimensions.get("window");
-const { height: fullScreenHeight } = Dimensions.get("screen");
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 export interface ActionSheetAction {
   id: string;
@@ -53,6 +49,11 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const { addPortal, removePortal } = usePortal();
+
+  // Get dynamic dimensions that will update with orientation changes
+  const { window, screen } = useDimensions();
+  const screenHeight = window.height;
+  const fullScreenHeight = screen.height;
 
   // Calculate status bar height for full screen coverage like MobileBanner
   const statusBarHeight = fullScreenHeight - screenHeight;
@@ -86,8 +87,8 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
     .onEnd((event) => {
       if (event.translationY > 150 || event.velocityY > 500) {
         // Dismiss
-        runOnJS(removePortal)(portalKey);
-        runOnJS(onClose)();
+        scheduleOnRN(removePortal, portalKey);
+        scheduleOnRN(onClose);
       } else {
         // Snap back
         panTranslateY.value = withSpring(0);
@@ -128,7 +129,7 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
       });
       backdropOpacity.value = withTiming(0, { duration: 250 }, (finished) => {
         if (finished && callback) {
-          runOnJS(callback)();
+          scheduleOnRN(callback);
         }
       });
     },
@@ -205,14 +206,9 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
         <Modal
           transparent
           visible={true}
-          animationType="none"
+          animationType="fade"
           onRequestClose={handleClose}
         >
-          <StatusBar
-            backgroundColor="rgba(0, 0, 0, 0.5)"
-            barStyle="light-content"
-          />
-
           {/* Backdrop */}
           <Animated.View style={[styles.backdrop, backdropAnimatedStyle]}>
             <TouchableOpacity

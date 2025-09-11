@@ -1,5 +1,5 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
 import {
   useEffect,
@@ -15,6 +15,8 @@ import {
   Text,
   BackHandler,
   TouchableOpacity,
+  AppState,
+  AppStateStatus,
 } from "react-native";
 import { SystemBars } from "react-native-edge-to-edge";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -33,6 +35,7 @@ import {
 } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -408,6 +411,7 @@ export default function MobileWatchPage() {
     episode?: string;
     backdrop?: string; // Backdrop URL passed from navigation
     backdropBlurhash?: string; // Backdrop blurhash passed from navigation
+    restart?: string; // Restart from beginning flag
   }>();
   const router = useRouter();
 
@@ -484,19 +488,106 @@ export default function MobileWatchPage() {
     p.loop = false;
     p.bufferOptions = bufferOptions;
 
-    // Check if we have watch history and should resume
+    // Check if we should restart from beginning or resume from watch history
+    const shouldRestart = params.restart === "true";
     const watchHistory = effectiveVideoData?.watchHistory;
-    if (watchHistory && watchHistory.playbackTime > 0) {
+
+    if (!shouldRestart && watchHistory && watchHistory.playbackTime > 0) {
       // Resume from saved position (with a small buffer to account for seeking precision)
       const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
       console.log(
         `[MobileWatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
       );
       p.currentTime = resumeTime;
+    } else if (shouldRestart) {
+      p.currentTime = 0;
     }
 
     p.play();
   });
+
+  // Clear restart parameter after player is configured (prevent setState during render)
+  useEffect(() => {
+    if (params.restart === "true") {
+      const cleanParams = { ...params };
+      delete cleanParams.restart;
+      router.setParams(cleanParams);
+    }
+  }, [params.restart, router]);
+
+  // Refresh watch history when screen gets focus to sync with other instances
+  useFocusEffect(
+    useCallback(() => {
+      const refreshWatchHistory = async () => {
+        if (!player || !params.id || !params.type || !effectiveVideoURL) return;
+
+        // Don't refresh/override if we're in a restart scenario
+        if (params.restart === "true") {
+          console.log(
+            "[MobileWatchPage] Skipping watch history refresh due to restart parameter",
+          );
+          return;
+        }
+
+        try {
+          console.log(
+            "[MobileWatchPage] Screen focused - refreshing watch history",
+          );
+
+          // Fetch fresh media details with watch history
+          const freshData = await contentService.getMediaDetails({
+            mediaType: params.type,
+            mediaId: params.id,
+            season: parseNumericParam(params.season),
+            episode: parseNumericParam(params.episode),
+            includeWatchHistory: true,
+          });
+
+          if (
+            freshData?.watchHistory &&
+            freshData.watchHistory.playbackTime > 0
+          ) {
+            const currentPlayerTime = player.currentTime || 0;
+            const savedTime = freshData.watchHistory.playbackTime;
+
+            // Only update if the saved time is significantly different (more than 30 seconds)
+            // and the saved time is newer than current player time
+            if (
+              Math.abs(savedTime - currentPlayerTime) > 30 &&
+              savedTime > currentPlayerTime
+            ) {
+              const resumeTime = Math.max(0, savedTime - 2);
+              console.log(
+                `[MobileWatchPage] Updating player time from focus refresh: ${currentPlayerTime}s -> ${resumeTime}s`,
+              );
+              player.currentTime = resumeTime;
+            }
+          }
+        } catch (error) {
+          console.error(
+            "[MobileWatchPage] Error refreshing watch history on focus:",
+            error,
+          );
+        }
+      };
+
+      // Only refresh if we have essential data and player is ready
+      if (effectiveVideoData && !loading && !isEpisodeSwitching) {
+        refreshWatchHistory();
+      }
+    }, [
+      player,
+      params.id,
+      params.type,
+      params.season,
+      params.episode,
+      effectiveVideoURL,
+      effectiveVideoData,
+      loading,
+      isEpisodeSwitching,
+      params.restart, // Add restart parameter to dependencies
+    ]),
+  );
 
   // Video player loading state tracking
   useEffect(() => {
@@ -742,9 +833,11 @@ export default function MobileWatchPage() {
         setCurrentEpisodeData(newEpisodeData);
 
         // Update URL parameters without navigation using setParams
+        // Clear restart parameter to prevent accidental re-restarts
         router.setParams({
           season: currentSeasonNumber.toString(),
           episode: episode.episodeNumber.toString(),
+          // Explicitly omit restart parameter
         });
 
         // Phase 5: Update episode list to reflect any watch history changes
@@ -802,27 +895,54 @@ export default function MobileWatchPage() {
   // Separate initial loading from episode switching
   const showFullLoading = loading && !currentEpisodeData;
 
-  // Keep screen awake during video playback
+  // Keep screen awake during video playback and handle PiP state changes
   useEffect(() => {
     if (!player) return;
 
-    const sub = player.addListener("playingChange", ({ isPlaying }) => {
-      // Keep screen awake during video playback to prevent mobile screensaver
-      if (isPlaying) {
-        activateKeepAwakeAsync();
-        console.log(
-          "[MobileWatchPage] Activated keep awake for video playback",
-        );
-      } else {
-        deactivateKeepAwake();
-        console.log(
-          "[MobileWatchPage] Deactivated keep awake - video paused/stopped",
-        );
-      }
-    });
+    const listeners: { remove: () => void }[] = [];
+
+    try {
+      const playingChangeListener = player.addListener(
+        "playingChange",
+        ({ isPlaying }) => {
+          // Keep screen awake during video playback to prevent mobile screensaver
+          if (isPlaying) {
+            activateKeepAwakeAsync();
+            console.log(
+              "[MobileWatchPage] Activated keep awake for video playback",
+            );
+          } else {
+            deactivateKeepAwake();
+            console.log(
+              "[MobileWatchPage] Deactivated keep awake - video paused/stopped",
+            );
+          }
+        },
+      );
+
+      // Note: PiP status change events may not be available in current expo-video version
+      // The automatic PiP behavior is handled by startsPictureInPictureAutomatically={true}
+      // and the AppState change listeners below
+
+      listeners.push(playingChangeListener);
+    } catch (error) {
+      console.error(
+        "[MobileWatchPage] Error setting up video listeners:",
+        error,
+      );
+    }
 
     return () => {
-      sub.remove();
+      listeners.forEach((listener) => {
+        try {
+          listener.remove();
+        } catch (error) {
+          console.error(
+            "[MobileWatchPage] Error removing video listener:",
+            error,
+          );
+        }
+      });
       // Ensure keep awake is deactivated when component unmounts
       deactivateKeepAwake();
       console.log(
@@ -830,6 +950,41 @@ export default function MobileWatchPage() {
       );
     };
   }, [player]);
+
+  // Handle app state changes for automatic PiP behavior
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (!player || !isVideoPlaying) return;
+
+      console.log("[MobileWatchPage] App state changed:", nextAppState);
+
+      if (nextAppState === "background" || nextAppState === "inactive") {
+        // App is going to background - PiP should activate automatically due to startsPictureInPictureAutomatically
+        console.log(
+          "[MobileWatchPage] App backgrounded - PiP should activate automatically",
+        );
+
+        // Ensure video keeps playing for PiP
+        if (!player.playing) {
+          player.play();
+        }
+      } else if (nextAppState === "active") {
+        // App came back to foreground
+        console.log(
+          "[MobileWatchPage] App foregrounded - exiting PiP if active",
+        );
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [player, isVideoPlaying]);
 
   // Mobile-optimized exit handler
   const handleExit = useCallback(async () => {
@@ -863,20 +1018,16 @@ export default function MobileWatchPage() {
     // Restore system bars
     SystemBars.setHidden(false);
 
-    // Navigate to media info page
-    router.push(
+    // Navigate to media info page using replace to prevent Watch screen accumulation
+    navigationHelper.navigateToMediaInfo(
       {
-        pathname: "/(mobile)/(protected)/media-info/[id]",
-        params: {
-          id: params.id,
-          type: params.type,
-          ...(params.season && { season: params.season }),
-        },
+        id: params.id,
+        type: params.type,
+        ...(params.season && { season: parseInt(params.season, 10) }),
       },
-      {
-        dangerouslySingular: true,
-      },
-    );
+      false,
+      true,
+    ); // fromEpisodeInfo = false, fromWatch = true
   }, [flushCurrentProgress, router, params.id, params.type, params.season]);
 
   // Back handler for Android
@@ -1005,7 +1156,8 @@ export default function MobileWatchPage() {
         style={styles.video}
         player={player}
         allowsFullscreen={false}
-        allowsPictureInPicture={false}
+        startsPictureInPictureAutomatically={true}
+        allowsPictureInPicture={true}
         nativeControls={false}
       />
       <GestureHandlerRootView style={{ flex: 1 }}>
@@ -1020,6 +1172,7 @@ export default function MobileWatchPage() {
           isLoadingEpisodes={isLoadingEpisodes}
           isEpisodeSwitching={isEpisodeSwitching}
           episodeSwitchError={episodeSwitchError}
+          showCaptionControls={!!videoInfo?.captionURLs}
         />
       </GestureHandlerRootView>
     </View>

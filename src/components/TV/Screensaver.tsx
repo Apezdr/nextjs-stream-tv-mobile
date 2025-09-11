@@ -6,7 +6,6 @@ import {
   StyleSheet,
   View,
   Text,
-  Dimensions,
   Pressable,
   ViewStyle,
   useTVEventHandler,
@@ -27,16 +26,10 @@ import { Colors } from "@/src/constants/Colors";
 import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { ScreensaverResponse } from "@/src/data/types/content.types";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
-const { width, height } = Dimensions.get("window");
-// cycle length for each screensaver display (ms)
+// Fixed timing constants that don't depend on dimensions
 const VISIBLE_DURATION = 15_000; // 15 seconds
-const HORIZ_INSET = 800;
-const VERTICAL_INSET = 200;
-const TOP_INSET = height * 0.18;
-const BOTTOM_INSET = height * 0.18;
-const SAFE_INSET = 50;
-const NETWORK_WIDTH = Math.min(width * 0.15, 120);
 const INITIAL_DELAY = 500;
 const FADE_DURATION = 2800;
 const ZOOM_AMOUNT = 0.12;
@@ -52,6 +45,11 @@ const MINIMAL_INSTRUCTION_DELAY = 2000; // Show minimal instructions after 2 sec
 
 // Button timing - progressive disclosure pattern
 const BUTTONS_SHOW_DELAY = 300; // Quick show after interaction
+
+// Fixed size insets that don't depend on screen dimensions
+const HORIZ_INSET = 800;
+const VERTICAL_INSET = 200;
+const SAFE_INSET = 50;
 
 // Instruction text positions for burn-in prevention
 const INSTRUCTION_POSITIONS = [
@@ -71,6 +69,16 @@ const SCREENSAVER_BUTTONS = [
 ];
 
 export const Screensaver: React.FC = () => {
+  // Get dynamic dimensions that will update with orientation changes
+  const { window } = useDimensions();
+  const width = window.width;
+  const height = window.height;
+
+  // Dynamic constants that depend on screen dimensions
+  const TOP_INSET = height * 0.18;
+  const BOTTOM_INSET = height * 0.18;
+  const NETWORK_WIDTH = Math.min(width * 0.15, 120);
+
   const {
     isScreensaverActive,
     screensaverContent,
@@ -505,7 +513,7 @@ export const Screensaver: React.FC = () => {
         endY: 0, // Always animate to center
       };
     },
-    [],
+    [width, height],
   );
 
   // Get content positioning styles based on animationPlacement
@@ -1149,7 +1157,13 @@ export const Screensaver: React.FC = () => {
               <Image
                 source={{ uri: logo }}
                 contentFit="contain"
-                style={styles.logo}
+                style={[
+                  styles.logo,
+                  {
+                    height: height * 0.2,
+                    width: width * 0.4,
+                  },
+                ]}
               />
             ) : (
               <Text style={styles.title}>{title}</Text>
@@ -1269,7 +1283,13 @@ export const Screensaver: React.FC = () => {
           )}
 
           {network && (
-            <Reanimated.View style={[styles.networkContainer, badgeFadeStyle]}>
+            <Reanimated.View
+              style={[
+                styles.networkContainer,
+                badgeFadeStyle,
+                { width: NETWORK_WIDTH },
+              ]}
+            >
               {network.logo_url ? (
                 <Image
                   source={{ uri: network.logo_url }}
@@ -1402,10 +1422,8 @@ const styles = StyleSheet.create({
   },
 
   logo: {
-    height: height * 0.2,
     marginBottom: 20,
     maxHeight: 120,
-    width: width * 0.4,
   },
 
   networkContainer: {
@@ -1413,7 +1431,6 @@ const styles = StyleSheet.create({
     bottom: 17,
     position: "absolute",
     right: SAFE_INSET,
-    width: NETWORK_WIDTH,
   },
 
   networkLogo: { aspectRatio: 1, height: undefined, width: "100%" },

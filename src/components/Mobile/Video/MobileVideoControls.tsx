@@ -7,12 +7,22 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Dimensions,
   Animated,
 } from "react-native";
 import { GestureDetector, Gesture } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import SubtitlePlayer from "../../Video/SubtitlePlayer";
+
+import MobileCaptionControls, {
+  DEFAULT_SUBTITLE_STYLE,
+  DEFAULT_SUBTITLE_BACKGROUND,
+  SubtitleStyle,
+  SubtitleBackgroundOption,
+} from "./MobileCaptionControls";
 
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface MobileVideoControlsProps {
   player: VideoPlayer;
@@ -41,6 +51,7 @@ interface MobileVideoControlsProps {
   isLoadingEpisodes?: boolean;
   isEpisodeSwitching?: boolean;
   episodeSwitchError?: string | null;
+  showCaptionControls?: boolean; // New prop to control caption visibility
 }
 
 const formatTime = (seconds: number): string => {
@@ -69,9 +80,12 @@ const MobileVideoControls = memo(
     isLoadingEpisodes: _isLoadingEpisodes = false,
     isEpisodeSwitching = false,
     episodeSwitchError = null,
+    showCaptionControls = false,
   }: MobileVideoControlsProps) => {
-    // Get dynamic screen dimensions for orientation changes
-    const { width: screenWidth } = Dimensions.get("window");
+    // Get dynamic window dimensions that will update with orientation changes
+    const { window } = useDimensions();
+    const windowWidth = window.width;
+    const insets = useSafeAreaInsets();
 
     // Use expo-video's useEvent hook for player state
     const { isPlaying } = useEvent(player, "playingChange", {
@@ -99,6 +113,19 @@ const MobileVideoControls = memo(
       visible: boolean;
     }>({ seconds: 0, visible: false });
     const [totalSkipAmount, setTotalSkipAmount] = useState(0);
+
+    // Caption selection state - use undefined to distinguish from user selecting "Off" (null)
+    const [selectedCaptionLanguage, setSelectedCaptionLanguage] = useState<
+      string | null | undefined
+    >(undefined);
+
+    // Subtitle style state
+    const [selectedSubtitleStyle, setSelectedSubtitleStyle] =
+      useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+
+    // Subtitle background state
+    const [selectedSubtitleBackground, setSelectedSubtitleBackground] =
+      useState<SubtitleBackgroundOption>(DEFAULT_SUBTITLE_BACKGROUND);
 
     // Animation refs
     const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -270,6 +297,33 @@ const MobileVideoControls = memo(
       };
     }, []);
 
+    // Initialize default caption language (only once when captionURLs first become available)
+    useEffect(() => {
+      if (videoInfo?.captionURLs && selectedCaptionLanguage === undefined) {
+        const availableLanguages = Object.keys(videoInfo.captionURLs);
+
+        // First try to find English by name
+        if (availableLanguages.includes("English")) {
+          setSelectedCaptionLanguage("English");
+        } else {
+          // Then try to find English by srcLang code
+          const englishLang = availableLanguages.find(
+            (lang) =>
+              videoInfo.captionURLs &&
+              (videoInfo.captionURLs[lang].srcLang === "eng" ||
+                videoInfo.captionURLs[lang].srcLang === "en"),
+          );
+
+          if (englishLang) {
+            setSelectedCaptionLanguage(englishLang);
+          } else if (availableLanguages.length > 0) {
+            // Fallback to first available language
+            setSelectedCaptionLanguage(availableLanguages[0]);
+          }
+        }
+      }
+    }, [videoInfo?.captionURLs, selectedCaptionLanguage]);
+
     // Player control functions
     const handleTogglePlay = useCallback(() => {
       if (!player) return;
@@ -385,7 +439,7 @@ const MobileVideoControls = memo(
         .runOnJS(true)
         .onEnd((e) => {
           if (isInSeekBar(e)) return; // ignore taps on seek bar
-          const third = screenWidth / 3;
+          const third = windowWidth / 3;
           if (e.absoluteX < third) return handleDoubleTapSkip("left");
           if (e.absoluteX > 2 * third) return handleDoubleTapSkip("right");
           // center double-tap: no action (could add center skip if desired)
@@ -478,6 +532,17 @@ const MobileVideoControls = memo(
 
     return (
       <View style={styles.container}>
+        {/* Subtitle Player - positioned above controls */}
+        {showCaptionControls && (
+          <SubtitlePlayer
+            currentTime={currentTime}
+            captionURLs={videoInfo?.captionURLs}
+            selectedCaptionLanguage={selectedCaptionLanguage}
+            selectedSubtitleStyle={selectedSubtitleStyle}
+            selectedSubtitleBackground={selectedSubtitleBackground}
+          />
+        )}
+
         {/* Single region-aware gesture detector wraps entire container */}
         <GestureDetector gesture={regionTap}>
           <View style={styles.tapOverlay}></View>
@@ -561,13 +626,17 @@ const MobileVideoControls = memo(
           <View style={styles.bottomControls} pointerEvents="box-none">
             {/* Video title */}
             <Animated.View
-              style={[styles.titleSection, { opacity: titleOpacity }]}
+              style={[
+                styles.titleSection,
+                { opacity: titleOpacity, marginLeft: insets.left },
+              ]}
+              pointerEvents="box-none"
             >
               <Text style={styles.videoTitle} numberOfLines={2}>
                 {videoInfo?.title || ""}
               </Text>
               {videoInfo?.description && (
-                <Text style={styles.videoDescription} numberOfLines={2}>
+                <Text style={styles.videoDescription} numberOfLines={5}>
                   {videoInfo.description}
                 </Text>
               )}
@@ -629,6 +698,21 @@ const MobileVideoControls = memo(
                   </View>
                 </View>
               </GestureDetector>
+            </View>
+            <View>
+              {/* Caption Controls - positioned below seek bar */}
+              {showCaptionControls && (
+                <MobileCaptionControls
+                  captionURLs={videoInfo?.captionURLs}
+                  selectedCaptionLanguage={selectedCaptionLanguage}
+                  onCaptionLanguageChange={setSelectedCaptionLanguage}
+                  selectedSubtitleStyle={selectedSubtitleStyle}
+                  onSubtitleStyleChange={setSelectedSubtitleStyle}
+                  selectedSubtitleBackground={selectedSubtitleBackground}
+                  onSubtitleBackgroundChange={setSelectedSubtitleBackground}
+                  onShowControls={showControls}
+                />
+              )}
             </View>
           </View>
 

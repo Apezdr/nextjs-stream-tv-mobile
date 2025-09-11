@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRouter, useFocusEffect } from "expo-router";
-import React, { useCallback } from "react";
+import { useFocusEffect } from "expo-router";
+import { useCallback } from "react";
 import {
   StyleSheet,
   ScrollView,
   RefreshControl,
   SafeAreaView,
+  View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
@@ -16,9 +17,9 @@ import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 export default function MobileHomePage() {
-  const router = useRouter();
   const { show: showBackdrop } = useBackdropManager();
 
   // Fetch different content types for the home page
@@ -139,24 +140,16 @@ export default function MobileHomePage() {
       }
 
       // Navigate directly to watch page
-      router.push(
-        {
-          pathname: "/(mobile)/(protected)/watch/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            ...(seasonNumber && { season: seasonNumber.toString() }),
-            ...(episodeNumber && { episode: episodeNumber.toString() }),
-            ...(backdropUrl && { backdrop: backdropUrl }),
-            ...(backdropBlurhash && { backdropBlurhash }),
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToWatch({
+        id: showId,
+        type: mediaType,
+        ...(seasonNumber && { season: seasonNumber }),
+        ...(episodeNumber && { episode: episodeNumber }),
+        ...(backdropUrl && { backdrop: backdropUrl }),
+        ...(backdropBlurhash && { backdropBlurhash }),
+      });
     },
-    [router, showBackdrop],
+    [showBackdrop],
   );
 
   // Handle info content - navigate to appropriate info page
@@ -181,52 +174,31 @@ export default function MobileHomePage() {
       // Navigate to appropriate info page
       if (mediaType === "tv" && seasonNumber && episodeNumber) {
         // Episode - go to episode info page
-        router.push(
-          {
-            pathname:
-              "/(mobile)/(protected)/episode-info/[showId]/[season]/[episode]",
-            params: {
-              showId,
-              season: seasonNumber.toString(),
-              episode: episodeNumber.toString(),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToEpisodeInfo({
+          showId,
+          season: seasonNumber,
+          episode: episodeNumber,
+        });
       } else {
         // Movie or TV show - go to media info page
-        router.push(
-          {
-            pathname: "/(mobile)/(protected)/media-info/[id]",
-            params: {
-              id: showId,
-              type: mediaType,
-              ...(seasonNumber && { season: seasonNumber.toString() }),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToMediaInfo({
+          id: showId,
+          type: mediaType,
+          ...(seasonNumber && { season: seasonNumber }),
+        });
       }
     },
-    [router, showBackdrop],
+    [showBackdrop],
   );
 
   // Handle "See All" navigation
   const handleSeeAllMovies = useCallback(() => {
-    router.push("/(mobile)/(protected)/(tabs)/movies", {
-      dangerouslySingular: true,
-    });
-  }, [router]);
+    navigationHelper.navigateToTab("movies");
+  }, []);
 
   const handleSeeAllShows = useCallback(() => {
-    router.push("/(mobile)/(protected)/(tabs)/shows", {
-      dangerouslySingular: true,
-    });
-  }, [router]);
+    navigationHelper.navigateToTab("shows");
+  }, []);
 
   // Pull to refresh
   const isRefreshing =
@@ -256,72 +228,74 @@ export default function MobileHomePage() {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={Colors.dark.brandPrimary}
-            colors={[Colors.dark.brandPrimary]}
-          />
-        }
-      >
-        {/* Featured Banner */}
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <MobileBanner />
-        </GestureHandlerRootView>
-        {/* Continue Watching */}
-        {recentlyWatched?.currentItems &&
-          recentlyWatched.currentItems.length > 0 && (
-            <MobileContentRow
-              title="Continue Watching"
-              data={transformMediaItems(recentlyWatched.currentItems)}
-              onPlayContent={handlePlayContent}
-              onInfoContent={handleInfoContent}
-              cardSize="medium"
-              loading={recentlyWatchedLoading}
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.container}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              tintColor={Colors.dark.brandPrimary}
+              colors={[Colors.dark.brandPrimary]}
             />
-          )}
+          }
+        >
+          {/* Featured Banner with gesture control */}
+          <View style={{ flex: 1 }}>
+            <MobileBanner />
+          </View>
+          {/* Continue Watching */}
+          {recentlyWatched?.currentItems &&
+            recentlyWatched.currentItems.length > 0 && (
+              <MobileContentRow
+                title="Continue Watching"
+                data={transformMediaItems(recentlyWatched.currentItems)}
+                onPlayContent={handlePlayContent}
+                onInfoContent={handleInfoContent}
+                cardSize="medium"
+                loading={recentlyWatchedLoading}
+              />
+            )}
 
-        {/* Recently Added */}
-        <MobileContentRow
-          title="Recently Added"
-          data={transformMediaItems(recentlyAdded?.currentItems)}
-          onPlayContent={handlePlayContent}
-          onInfoContent={handleInfoContent}
-          cardSize="medium"
-          loading={recentlyAddedLoading}
-        />
+          {/* Recently Added */}
+          <MobileContentRow
+            title="Recently Added"
+            data={transformMediaItems(recentlyAdded?.currentItems)}
+            onPlayContent={handlePlayContent}
+            onInfoContent={handleInfoContent}
+            cardSize="medium"
+            loading={recentlyAddedLoading}
+          />
 
-        {/* Movies */}
-        <MobileContentRow
-          title="Movies"
-          data={transformMediaItems(movies?.currentItems)}
-          onPlayContent={handlePlayContent}
-          onInfoContent={handleInfoContent}
-          cardSize="medium"
-          showMoreButton
-          onShowMore={handleSeeAllMovies}
-          loading={moviesLoading}
-        />
+          {/* Movies */}
+          <MobileContentRow
+            title="Movies"
+            data={transformMediaItems(movies?.currentItems)}
+            onPlayContent={handlePlayContent}
+            onInfoContent={handleInfoContent}
+            cardSize="medium"
+            showMoreButton
+            onShowMore={handleSeeAllMovies}
+            loading={moviesLoading}
+          />
 
-        {/* TV Shows */}
-        <MobileContentRow
-          title="TV Shows"
-          data={transformMediaItems(tvShows?.currentItems)}
-          onPlayContent={handlePlayContent}
-          onInfoContent={handleInfoContent}
-          cardSize="medium"
-          showMoreButton
-          onShowMore={handleSeeAllShows}
-          loading={tvShowsLoading}
-        />
-      </ScrollView>
-    </SafeAreaView>
+          {/* TV Shows */}
+          <MobileContentRow
+            title="TV Shows"
+            data={transformMediaItems(tvShows?.currentItems)}
+            onPlayContent={handlePlayContent}
+            onInfoContent={handleInfoContent}
+            cardSize="medium"
+            showMoreButton
+            onShowMore={handleSeeAllShows}
+            loading={tvShowsLoading}
+          />
+        </ScrollView>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 

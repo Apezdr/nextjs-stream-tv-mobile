@@ -164,6 +164,8 @@ export const contentService = {
       includeWatchHistory,
     });
 
+    console.log(':::::', `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`)
+
     // Use regular get method - React Query will handle caching
     return enhancedApiClient.get<TVDeviceMediaResponse>(
       `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,

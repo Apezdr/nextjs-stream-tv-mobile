@@ -6,7 +6,6 @@ import {
   View,
   Text,
   Pressable,
-  Dimensions,
   TVFocusGuideView,
   ScrollView,
   Modal,
@@ -15,6 +14,7 @@ import {
 } from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface CaptionTrack {
   srcLang: string;
@@ -182,6 +182,10 @@ const CaptionControls = memo(
   }: CaptionControlsProps) => {
     const [showMoreOptions, setShowMoreOptions] = useState(false);
     const [showStyleSettings, setShowStyleSettings] = useState(false);
+
+    // Get dynamic dimensions
+    const { window } = useDimensions();
+    const windowHeight = window.height;
 
     const handleCaptionLanguageSelect = useCallback(
       (language: string | null) => {
@@ -521,7 +525,12 @@ const CaptionControls = memo(
                 trapFocusRight
                 style={styles.modalOverlay}
               >
-                <View style={styles.popoverMenu}>
+                <View
+                  style={[
+                    styles.popoverMenu,
+                    { maxHeight: window.height * 0.7 },
+                  ]}
+                >
                   <View style={styles.popoverHeader}>
                     <Text style={styles.popoverTitle}>Caption Languages</Text>
                     <Pressable
@@ -545,7 +554,10 @@ const CaptionControls = memo(
 
                   <TVFocusGuideView autoFocus>
                     <ScrollView
-                      style={styles.captionScrollView}
+                      style={[
+                        styles.captionScrollView,
+                        { maxHeight: window.height * 0.5 },
+                      ]}
                       showsVerticalScrollIndicator={false}
                     >
                       {/* All Options in Popover */}
@@ -574,7 +586,12 @@ const CaptionControls = memo(
                 trapFocusRight
                 style={styles.modalOverlay}
               >
-                <View style={styles.styleSettingsMenu}>
+                <View
+                  style={[
+                    styles.styleSettingsMenu,
+                    { maxHeight: window.height * 0.8 },
+                  ]}
+                >
                   <View style={styles.popoverHeader}>
                     <Text style={styles.popoverTitle}>Subtitle Settings</Text>
                     <Pressable
@@ -598,7 +615,10 @@ const CaptionControls = memo(
 
                   <TVFocusGuideView autoFocus>
                     <ScrollView
-                      style={styles.styleScrollView}
+                      style={[
+                        styles.styleScrollView,
+                        { maxHeight: window.height * 0.6 },
+                      ]}
                       showsVerticalScrollIndicator={false}
                     >
                       {/* Background Options Section */}
@@ -842,7 +862,6 @@ const styles = StyleSheet.create({
   },
 
   captionScrollView: {
-    maxHeight: Dimensions.get("window").height * 0.5,
     paddingVertical: 8,
   },
 
@@ -896,7 +915,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     elevation: 20,
-    maxHeight: Dimensions.get("window").height * 0.7,
     shadowColor: Colors.dark.videoControlPopoverShadow,
     shadowOffset: { width: -2, height: 4 },
     shadowOpacity: 0.3,
@@ -1032,7 +1050,7 @@ const styles = StyleSheet.create({
   },
 
   styleScrollView: {
-    maxHeight: Dimensions.get("window").height * 0.6,
+    // Dynamic height set inline
   },
 
   // Style Settings Styles
@@ -1042,7 +1060,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     elevation: 20,
-    maxHeight: Dimensions.get("window").height * 0.8,
     shadowColor: Colors.dark.videoControlPopoverShadow,
     shadowOffset: { width: -2, height: 4 },
     shadowOpacity: 0.3,

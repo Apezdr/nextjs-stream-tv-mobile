@@ -1,6 +1,8 @@
 // src/stores/backdropStore.ts
 
 import { create } from "zustand";
+const BACKDROP_DEBUG_ENABLED =
+  __DEV__ && process.env.BACKDROP_DEBUG?.toLowerCase() === "true";
 import { subscribeWithSelector } from "zustand/middleware";
 
 // Types for backdrop options
@@ -102,9 +104,11 @@ export const useBackdropStore = create<BackdropStore>()(
 
       // If everything is the same and already visible, don't update
       if (isSameUrl && isSameBlurhash && isSameMessage && isAlreadyVisible) {
-        console.log(
-          "[BackdropStore] show() - already showing same backdrop, skipping update",
-        );
+        if (BACKDROP_DEBUG_ENABLED) {
+          console.log(
+            "[BackdropStore] show() - already showing same backdrop, skipping update",
+          );
+        }
         return;
       }
 
@@ -130,7 +134,9 @@ export const useBackdropStore = create<BackdropStore>()(
         };
       });
 
-      console.log("[BackdropStore] show():", url, options);
+      if (BACKDROP_DEBUG_ENABLED) {
+        console.log("[BackdropStore] show():", url, options);
+      }
     },
 
     hide: (options?: HideOptions) => {
@@ -173,7 +179,9 @@ export const useBackdropStore = create<BackdropStore>()(
         };
       });
 
-      console.log("[BackdropStore] hide():", options);
+      if (BACKDROP_DEBUG_ENABLED) {
+        console.log("[BackdropStore] hide():", options);
+      }
     },
 
     update: (url: string, blurhash?: string) => {
@@ -192,7 +200,9 @@ export const useBackdropStore = create<BackdropStore>()(
         };
       });
 
-      console.log("[BackdropStore] update():", url, blurhash);
+      if (BACKDROP_DEBUG_ENABLED) {
+        console.log("[BackdropStore] update():", url, blurhash);
+      }
     },
 
     setMessage: (message?: string) => {
@@ -208,7 +218,9 @@ export const useBackdropStore = create<BackdropStore>()(
         };
       });
 
-      console.log("[BackdropStore] setMessage():", message);
+      if (BACKDROP_DEBUG_ENABLED) {
+        console.log("[BackdropStore] setMessage():", message);
+      }
     },
 
     reset: () => {
@@ -217,7 +229,9 @@ export const useBackdropStore = create<BackdropStore>()(
         clearTimeout(state._hideTimeoutId);
       }
       set(initialState);
-      console.log("[BackdropStore] reset()");
+      if (BACKDROP_DEBUG_ENABLED) {
+        console.log("[BackdropStore] reset()");
+      }
     },
 
     // Animation actions
@@ -269,7 +283,7 @@ export const backdropSelectors = {
 };
 
 // Performance monitoring subscription
-if (__DEV__) {
+if (BACKDROP_DEBUG_ENABLED) {
   useBackdropStore.subscribe(backdropSelectors.performance, (performance) => {
     console.log("[BackdropStore] Performance:", performance);
   });
