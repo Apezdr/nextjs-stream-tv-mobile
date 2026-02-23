@@ -26,3 +26,5 @@ expo-env.d.ts
 
 .env*.local
 *.bak
+
+CLAUDE.md
