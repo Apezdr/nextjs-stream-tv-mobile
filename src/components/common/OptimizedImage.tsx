@@ -12,6 +12,8 @@ interface OptimizedImageProps extends Omit<ImageProps, "source"> {
   quality?: number;
   /** Whether to use optimization (defaults to true) */
   optimize?: boolean;
+  /** Priority for loading (defaults to normal) */
+  priority?: "low" | "normal" | "high";
 }
 
 // Next.js standard width values - moved outside component to avoid recreation
@@ -26,8 +28,9 @@ const VALID_WIDTHS = [
 const OptimizedImage: React.FC<OptimizedImageProps> = ({
   source,
   width = 256,
-  quality = 80,
+  quality = 75,
   optimize = true,
+  priority = "normal",
   ...imageProps
 }) => {
   // Extract URI from source - memoized
@@ -77,9 +80,18 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
     }
   }, [finalSource]);
 
+  // Create a stable recycling key based on the URI to help with caching
+  const recyclingKey = useMemo(() => {
+    if (!finalSource) return undefined;
+    return finalSource;
+  }, [finalSource]);
+
   return (
     <Image
       source={finalSource ? { uri: finalSource } : undefined}
+      recyclingKey={recyclingKey}
+      priority={priority}
+      transition={300}
       {...imageProps}
     />
   );

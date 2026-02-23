@@ -17,14 +17,24 @@ export interface MediaItem {
   posterURL?: string;
   posterBlurhash?: string; // data:image/png;base64, encoded blurhash for poster
   thumbnail?: string; // Thumbnail URL (optional, for episodes)
+  thumbnailUrl?: string; // Thumbnail/poster URL (new API key)
   thumbnailBlurhash?: string; // data:image/png;base64, encoded blurhash for thumbnail
   type: "movie" | "tv";
-  backdrop: string;
+  backdrop?: string;
+  backdropUrl?: string; // Backdrop URL (new API key)
   backdropBlurhash?: string; // data:image/png;base64, encoded blurhash for backdrop
   lastWatchedDate: string;
   link: string;
   hdr?: string; // HDR format (e.g., "HDR10", "10-bit SDR (BT.709)")
   logo?: string; // Logo URL (typically for TV shows)
+  releaseDate?: string; // Release date (from metadata)
+  metadata?: {
+    release_date?: string;
+    first_air_date?: string;
+    overview?: string;
+    genres?: Array<{ id: number; name: string }>;
+    [key: string]: unknown;
+  };
   episodeNumber?: number; // For TV shows
   seasonNumber?: number; // For TV shows
   watchHistory?: WatchHistory; // Optional watch history data
@@ -71,8 +81,8 @@ export interface EpisodePickerParams {
 export interface TVDeviceEpisode {
   episodeNumber: number;
   title: string;
-  thumbnail: string;
-  thumbnailBlurhash: string;
+  thumbnail?: string;
+  thumbnailBlurhash?: string;
   duration: number;
   description: string;
   videoURL: string;
@@ -87,7 +97,8 @@ export interface TVDeviceMetadata {
     id: number;
     name: string;
   }>;
-  rating: number;
+  rating: string; // Content rating (e.g., "R", "PG-13", "TV-MA")
+  vote_average: number; // Popularity rating (0-10 scale)
   releaseDate: string;
   trailer_url: string;
   cast?: Array<{
@@ -96,6 +107,8 @@ export interface TVDeviceMetadata {
     character: string;
     profile_path: string;
   }>;
+  // Added for dual overview support
+  showOverview?: string; // Show-level overview (separate from season overview)
 }
 
 export interface TVDeviceNavigation {
@@ -415,14 +428,15 @@ export interface EpisodeSpecificResponse {
   totalSeasons: number;
   seasonNumber: number;
   metadata: TVDeviceMetadata;
+  logo?: string;
   hdr?: string;
   duration?: number;
   watchHistory?: WatchHistory;
   episode: {
     episodeNumber: number;
     title: string;
-    thumbnail: string;
-    thumbnailBlurhash: string;
+    thumbnail?: string;
+    thumbnailBlurhash?: string;
     duration: number;
     description: string;
     videoURL: string;

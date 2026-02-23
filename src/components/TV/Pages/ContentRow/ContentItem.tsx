@@ -15,8 +15,9 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
 
 // Create a TV-compatible TouchableOpacity component
-interface TVTouchableProps
-  extends React.ComponentProps<typeof RNTouchableOpacity> {
+interface TVTouchableProps extends React.ComponentProps<
+  typeof RNTouchableOpacity
+> {
   isTVSelectable?: boolean;
   hasTVPreferredFocus?: boolean;
 }
@@ -42,6 +43,7 @@ export interface ContentItemData {
   backdropBlurhash?: string;
   hdr?: string;
   logo?: string;
+  year?: string;
 }
 
 interface ContentItemProps {
@@ -55,6 +57,7 @@ interface ContentItemProps {
     backdropBlurhash?: string, // Optional backdrop blurhash for video player
   ) => void;
   size?: "small" | "medium" | "large";
+  customWidth?: number;
   hasTVPreferredFocus?: boolean;
 }
 
@@ -62,6 +65,7 @@ const ContentItem = ({
   item,
   onSelect,
   size = "medium",
+  customWidth,
   hasTVPreferredFocus = false,
 }: ContentItemProps) => {
   // Use the new Zustand-based backdrop manager
@@ -73,6 +77,7 @@ const ContentItem = ({
   // Memoize dimensions calculation
   const dimensions = useMemo(() => {
     const getItemWidth = () => {
+      if (customWidth) return customWidth;
       switch (size) {
         case "small":
           return window.width / 5;
@@ -88,7 +93,7 @@ const ContentItem = ({
     const itemHeight = itemWidth * 0.6; // 16:9 aspect ratio
 
     return { itemWidth, itemHeight };
-  }, [size, window.width]);
+  }, [size, customWidth, window.width]);
 
   // Memoize press handler - MIGRATED to use Zustand
   const handlePress = useCallback(() => {
@@ -289,6 +294,7 @@ const areEqual = (prevProps: ContentItemProps, nextProps: ContentItemProps) => {
   return (
     prevProps.item.id === nextProps.item.id &&
     prevProps.size === nextProps.size &&
+    prevProps.customWidth === nextProps.customWidth &&
     prevProps.hasTVPreferredFocus === nextProps.hasTVPreferredFocus
   );
 };

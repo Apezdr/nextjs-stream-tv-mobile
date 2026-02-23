@@ -3,8 +3,6 @@ import "expo-dev-client";
 import { Stack } from "expo-router";
 import { Platform, View, StyleSheet } from "react-native";
 
-import GlobalBackdrop from "@/src/components/TV/GlobalBackdrop";
-
 // Login layout with backdrop
 export default function LoginLayout() {
   const isTV = Platform.isTV;
@@ -12,7 +10,6 @@ export default function LoginLayout() {
   if (isTV) {
     return (
       <View style={styles.container}>
-        <GlobalBackdrop />
         <Stack
           screenOptions={{
             headerShown: false,
@@ -28,7 +25,6 @@ export default function LoginLayout() {
 
   return (
     <View style={styles.container}>
-      <GlobalBackdrop />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -44,7 +40,7 @@ export default function LoginLayout() {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#141414",
+    backgroundColor: "transparent",
     flex: 1,
   },
 });

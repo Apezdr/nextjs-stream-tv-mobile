@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, ActivityIndicator, View } from "react-native";
 
 import DiscordIcon from "@/src/assets/provider-icons/discord-icon.svg";
 import GoogleIcon from "@/src/assets/provider-icons/google-icon.svg";
@@ -14,6 +14,8 @@ interface ProviderButtonProps {
   style?: any;
   textStyle?: any;
   focusedStyle?: any;
+  isLoading?: boolean; // True if this specific provider is loading
+  isAnyProviderLoading?: boolean; // True if any provider is loading (for graying out)
 }
 
 const ProviderButton: React.FC<ProviderButtonProps> = ({
@@ -24,6 +26,8 @@ const ProviderButton: React.FC<ProviderButtonProps> = ({
   style,
   textStyle,
   focusedStyle,
+  isLoading = false,
+  isAnyProviderLoading = false,
 }) => {
   const getProviderData = () => {
     switch (providerId.toLowerCase()) {
@@ -53,29 +57,62 @@ const ProviderButton: React.FC<ProviderButtonProps> = ({
 
   const providerData = getProviderData();
 
+  // Determine styling based on loading states
+  const isGrayedOut = isAnyProviderLoading && !isLoading;
+  const dynamicStyle = isGrayedOut ? styles.grayedOut : {};
+  const dynamicTextStyle = isGrayedOut ? styles.grayedOutText : {};
+
   return (
-    <FocusableButton
-      title={`Sign in with ${providerName}`}
-      onPress={onPress}
-      style={[styles.baseButton, providerData.button, style]}
-      textStyle={[styles.baseText, providerData.text, textStyle]}
-      focusedStyle={[styles.baseFocused, providerData.focused, focusedStyle]}
-      leftIcon={providerData.IconComponent || undefined}
-      iconSize={24}
-      hasTVPreferredFocus={hasTVPreferredFocus}
-    />
+    <View style={styles.buttonContainer}>
+      <FocusableButton
+        title={isLoading ? `Signing in...` : `Sign in with ${providerName}`}
+        onPress={isLoading ? () => {} : onPress} // Disable onPress when loading
+        style={[
+          styles.baseButton,
+          providerData.button,
+          style,
+          dynamicStyle,
+          isLoading && styles.loadingButton,
+        ]}
+        textStyle={[
+          styles.baseText,
+          providerData.text,
+          textStyle,
+          dynamicTextStyle,
+          isLoading && styles.loadingText,
+        ]}
+        focusedStyle={[
+          styles.baseFocused,
+          providerData.focused,
+          focusedStyle,
+          isLoading && styles.loadingFocused,
+        ]}
+        leftIcon={
+          isLoading ? undefined : providerData.IconComponent || undefined
+        }
+        iconSize={24}
+        hasTVPreferredFocus={hasTVPreferredFocus && !isLoading}
+      />
+
+      {/* Loading indicator overlay */}
+      {isLoading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="small" color={Colors.dark.text} />
+        </View>
+      )}
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   baseButton: {
+    alignSelf: "center",
     borderRadius: 14,
     borderWidth: 1,
     height: 32,
     marginVertical: 2,
-    width: "54%",
-    alignSelf: "center",
     opacity: 0.3,
+    width: "54%",
   },
   baseText: {
     fontSize: 16,
@@ -84,11 +121,11 @@ const styles = StyleSheet.create({
   },
   baseFocused: {
     elevation: 8,
+    opacity: 1,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 1,
     shadowRadius: 12,
     transform: [{ scale: 1.06 }],
-    opacity: 1,
   },
   // Google styles
   googleButton: {
@@ -125,6 +162,38 @@ const styles = StyleSheet.create({
   defaultFocused: {
     borderColor: Colors.dark.outlineFocused,
     shadowColor: Colors.dark.focusGlow,
+  },
+  // Container for button and loading overlay
+  buttonContainer: {
+    position: "relative",
+  },
+  // Loading state styles
+  loadingButton: {
+    opacity: 0.8,
+  },
+  loadingText: {
+    opacity: 0.7,
+  },
+  loadingFocused: {
+    transform: [{ scale: 1.02 }], // Reduced scale when loading
+  },
+  loadingOverlay: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.2)",
+    borderRadius: 14,
+    bottom: 0,
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  // Grayed out styles for other providers
+  grayedOut: {
+    opacity: 0.3,
+  },
+  grayedOutText: {
+    opacity: 0.5,
   },
 });
 

@@ -1,4 +1,4 @@
-import React, { memo, useCallback } from "react";
+import React, { memo, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
@@ -12,6 +12,7 @@ import MobileContentCard, {
   MobileContentCardData,
 } from "@/src/components/Mobile/Cards/MobileContentCard";
 import { Colors } from "@/src/constants/Colors";
+import { useDimensions } from "@/src/hooks/useDimensions";
 
 interface MobileContentRowProps {
   title: string;
@@ -104,6 +105,20 @@ const MobileContentRow = ({
   );
 
   // Render individual content card
+  // Get screen dimensions to detect orientation changes
+  const { window } = useDimensions();
+  const screenWidth = window.width;
+  const screenHeight = window.height;
+  const isLandscape = screenWidth > screenHeight;
+
+  // Create a unique orientation key that changes when orientation changes
+  const orientationKey = useMemo(
+    () =>
+      `orientation-${isLandscape ? "landscape" : "portrait"}-${screenWidth}x${screenHeight}`,
+    [screenWidth, screenHeight, isLandscape],
+  );
+
+  // Render individual content card with orientation awareness
   const renderItem: ListRenderItem<MobileContentCardData> = useCallback(
     ({ item, index }) => (
       <View style={[styles.cardContainer, index === 0 && styles.firstCard]}>
@@ -113,10 +128,12 @@ const MobileContentRow = ({
           onInfo={handleInfoContent}
           layout="grid"
           size={cardSize}
+          // Pass a key that changes with orientation to force re-render
+          orientationKey={orientationKey}
         />
       </View>
     ),
-    [handlePlayContent, handleInfoContent, cardSize],
+    [handlePlayContent, handleInfoContent, cardSize, orientationKey],
   );
 
   // Handle end reached for infinite scroll
@@ -137,11 +154,11 @@ const MobileContentRow = ({
     );
   }, [isFetchingNextPage]);
 
-  // Key extractor
+  // Key extractor - include orientation in the key to force re-render on orientation change
   const keyExtractor = useCallback(
     (item: MobileContentCardData, index: number) =>
-      `${title}-${item.id}-${index}`,
-    [title],
+      `${title}-${item.id}-${index}-${orientationKey}`,
+    [title, orientationKey],
   );
 
   // Loading state
@@ -201,15 +218,10 @@ const MobileContentRow = ({
         maxToRenderPerBatch={8}
         windowSize={21}
         initialNumToRender={4}
-        getItemLayout={(data, index) => {
-          const itemWidth =
-            cardSize === "small" ? 120 : cardSize === "large" ? 160 : 140;
-          return {
-            length: itemWidth,
-            offset: itemWidth * index,
-            index,
-          };
-        }}
+        // Force re-render when orientation changes
+        extraData={orientationKey}
+        // Key that changes with orientation to force component recreation
+        key={`row-${title}-${orientationKey}`}
       />
     </View>
   );
@@ -288,11 +300,16 @@ const styles = StyleSheet.create({
   },
 });
 
-// Only re-render when essential props change
+// Only re-render when essential props change or dimensions change
 const areEqual = (
   prevProps: MobileContentRowProps,
   nextProps: MobileContentRowProps,
 ) => {
+  // Always re-render if data reference changes
+  if (prevProps.data !== nextProps.data) {
+    return false;
+  }
+
   // Fast-fail on props that definitely require re-render
   if (
     prevProps.title !== nextProps.title ||
@@ -304,8 +321,8 @@ const areEqual = (
     return false;
   }
 
-  // Compare data array reference — if parent created a new array, re-render.
-  return prevProps.data === nextProps.data;
+  // Consider equal (no re-render needed)
+  return true;
 };
 
 export default memo(MobileContentRow, areEqual);

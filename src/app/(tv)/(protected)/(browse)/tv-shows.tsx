@@ -1,29 +1,50 @@
-import React from "react";
-import { View, StyleSheet, Text } from "react-native";
+import { lazy, Suspense } from "react";
+import { View, StyleSheet, Text, ActivityIndicator } from "react-native";
+
+import { Colors } from "@/src/constants/Colors";
+
+// Lazy load the heavy TV shows page content for code-splitting
+const LazyTVShowsPageContent = lazy(
+  () => import("@/src/components/TV/Pages/TVShows/TVShowsPageContent"),
+);
+
+// Lightweight fallback for the entire page
+const TVShowsPageFallback = () => (
+  <View style={styles.container}>
+    <View style={styles.fallbackContainer}>
+      <Text style={styles.title}>TV Shows</Text>
+      <ActivityIndicator color="#FFFFFF" size="large" />
+      <Text style={styles.fallbackText}>Loading TV shows page...</Text>
+    </View>
+  </View>
+);
 
 export default function TVShowsPage() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>TV Shows</Text>
-      <Text style={styles.subtitle}>Browse your favorite series</Text>
-    </View>
+    <Suspense fallback={<TVShowsPageFallback />}>
+      <LazyTVShowsPageContent />
+    </Suspense>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    alignItems: "center",
     backgroundColor: "#141414",
     flex: 1,
-    justifyContent: "center",
-    padding: 20,
   },
-  subtitle: {
+  fallbackContainer: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    paddingVertical: 50,
+  },
+  fallbackText: {
     color: "#CCCCCC",
-    fontSize: 18,
+    fontSize: 16,
+    marginTop: 15,
   },
   title: {
-    color: "#FFFFFF",
+    color: Colors.dark.whiteText,
     fontSize: 32,
     fontWeight: "bold",
     marginBottom: 10,

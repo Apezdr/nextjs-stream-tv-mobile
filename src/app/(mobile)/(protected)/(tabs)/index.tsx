@@ -1,6 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   StyleSheet,
   ScrollView,
@@ -14,7 +13,10 @@ import MobileBanner from "@/src/components/Mobile/Banner/MobileBanner";
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
 import MobileContentRow from "@/src/components/Mobile/Rows/MobileContentRow";
 import { Colors } from "@/src/constants/Colors";
-import { contentService } from "@/src/data/services/contentService";
+import {
+  useInfiniteContentList,
+  getFlattenedInfiniteData,
+} from "@/src/data/hooks/queries/useInfiniteContentQueries";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { navigationHelper } from "@/src/utils/navigationHelper";
@@ -22,82 +24,120 @@ import { navigationHelper } from "@/src/utils/navigationHelper";
 export default function MobileHomePage() {
   const { show: showBackdrop } = useBackdropManager();
 
-  // Fetch different content types for the home page
+  // Fetch different content types for the home page with infinite scrolling
   const {
-    data: recentlyWatched,
+    data: recentlyWatchedData,
     isLoading: recentlyWatchedLoading,
+    fetchNextPage: fetchNextRecentlyWatched,
+    hasNextPage: hasNextRecentlyWatchedPage,
+    isFetchingNextPage: isFetchingNextRecentlyWatchedPage,
     refetch: refetchRecentlyWatched,
-  } = useQuery({
-    queryKey: [
-      "content",
-      "recentlyWatched",
-      { type: "recentlyWatched", limit: 20 },
-    ],
-    queryFn: () =>
-      contentService.getContentList({
-        type: "recentlyWatched",
-        limit: 20,
-        includeWatchHistory: true,
-        isTVdevice: false,
-      }),
-    refetchInterval: 8000, // Refetch every 8 seconds
-    refetchIntervalInBackground: true, // Continue refetching when app is in background
+  } = useInfiniteContentList({
+    type: "recentlyWatched",
+    limit: 20,
+    includeWatchHistory: true,
+    isTVdevice: false,
   });
 
+  // Flatten the paginated data
+  const recentlyWatchedItems = useMemo(() => {
+    return getFlattenedInfiniteData(recentlyWatchedData);
+  }, [recentlyWatchedData]);
+
+  // Handle loading more recently watched content
+  const handleLoadMoreRecentlyWatched = useCallback(() => {
+    if (hasNextRecentlyWatchedPage && !isFetchingNextRecentlyWatchedPage) {
+      fetchNextRecentlyWatched();
+    }
+  }, [
+    hasNextRecentlyWatchedPage,
+    isFetchingNextRecentlyWatchedPage,
+    fetchNextRecentlyWatched,
+  ]);
+
   const {
-    data: recentlyAdded,
+    data: recentlyAddedData,
     isLoading: recentlyAddedLoading,
+    fetchNextPage: fetchNextRecentlyAdded,
+    hasNextPage: hasNextRecentlyAddedPage,
+    isFetchingNextPage: isFetchingNextRecentlyAddedPage,
     refetch: refetchRecentlyAdded,
-  } = useQuery({
-    queryKey: [
-      "content",
-      "recentlyAdded",
-      { type: "recentlyAdded", limit: 20 },
-    ],
-    queryFn: () =>
-      contentService.getContentList({
-        type: "recentlyAdded",
-        limit: 20,
-        includeWatchHistory: true,
-        isTVdevice: false,
-      }),
-    refetchInterval: 8000, // Refetch every 8 seconds
-    refetchIntervalInBackground: true, // Continue refetching when app is in background
+  } = useInfiniteContentList({
+    type: "recentlyAdded",
+    limit: 20,
+    includeWatchHistory: true,
+    isTVdevice: false,
   });
 
+  // Flatten the paginated data
+  const recentlyAddedItems = useMemo(() => {
+    return getFlattenedInfiniteData(recentlyAddedData);
+  }, [recentlyAddedData]);
+
+  // Handle loading more recently added content
+  const handleLoadMoreRecentlyAdded = useCallback(() => {
+    if (hasNextRecentlyAddedPage && !isFetchingNextRecentlyAddedPage) {
+      fetchNextRecentlyAdded();
+    }
+  }, [
+    hasNextRecentlyAddedPage,
+    isFetchingNextRecentlyAddedPage,
+    fetchNextRecentlyAdded,
+  ]);
+
+  // Use infinite query for movies with pagination support
   const {
-    data: movies,
+    data: moviesData,
     isLoading: moviesLoading,
+    fetchNextPage: fetchNextMovies,
+    hasNextPage: hasNextMoviesPage,
+    isFetchingNextPage: isFetchingNextMoviesPage,
     refetch: refetchMovies,
-  } = useQuery({
-    queryKey: ["content", "movies", { type: "movie", limit: 20 }],
-    queryFn: () =>
-      contentService.getContentList({
-        type: "movie",
-        limit: 20,
-        includeWatchHistory: true,
-        isTVdevice: false,
-      }),
-    refetchInterval: 8000, // Refetch every 8 seconds
-    refetchIntervalInBackground: true, // Continue refetching when app is in background
+  } = useInfiniteContentList({
+    type: "movie",
+    limit: 20,
+    includeWatchHistory: true,
+    isTVdevice: false,
   });
 
+  // Flatten the paginated data
+  const movies = useMemo(() => {
+    return getFlattenedInfiniteData(moviesData);
+  }, [moviesData]);
+
+  // Handle loading more movies
+  const handleLoadMoreMovies = useCallback(() => {
+    if (hasNextMoviesPage && !isFetchingNextMoviesPage) {
+      fetchNextMovies();
+    }
+  }, [hasNextMoviesPage, isFetchingNextMoviesPage, fetchNextMovies]);
+
+  // Use infinite query for TV shows with pagination support
   const {
-    data: tvShows,
+    data: tvShowsData,
     isLoading: tvShowsLoading,
+    fetchNextPage: fetchNextTvShows,
+    hasNextPage: hasNextTvShowsPage,
+    isFetchingNextPage: isFetchingNextTvShowsPage,
     refetch: refetchTvShows,
-  } = useQuery({
-    queryKey: ["content", "tvShows", { type: "tv", limit: 20 }],
-    queryFn: () =>
-      contentService.getContentList({
-        type: "tv",
-        limit: 20,
-        includeWatchHistory: true,
-        isTVdevice: false,
-      }),
-    refetchInterval: 8000, // Refetch every 8 seconds
-    refetchIntervalInBackground: true, // Continue refetching when app is in background
+  } = useInfiniteContentList({
+    type: "tv",
+    limit: 20,
+    includeWatchHistory: true,
+    isTVdevice: false,
   });
+
+  // Flatten the paginated data
+  const tvShows = useMemo(() => {
+    return getFlattenedInfiniteData(tvShowsData);
+  }, [tvShowsData]);
+
+  // Handle loading more TV shows
+  const handleLoadMoreTvShows = useCallback(() => {
+    if (hasNextTvShowsPage && !isFetchingNextTvShowsPage) {
+      fetchNextTvShows();
+    }
+  }, [hasNextTvShowsPage, isFetchingNextTvShowsPage, fetchNextTvShows]);
 
   // Convert MediaItem to MobileContentCardData
   const transformMediaItems = useCallback(
@@ -205,7 +245,11 @@ export default function MobileHomePage() {
     recentlyWatchedLoading ||
     recentlyAddedLoading ||
     moviesLoading ||
-    tvShowsLoading;
+    tvShowsLoading ||
+    isFetchingNextRecentlyWatchedPage ||
+    isFetchingNextRecentlyAddedPage ||
+    isFetchingNextMoviesPage ||
+    isFetchingNextTvShowsPage;
 
   const handleRefresh = useCallback(() => {
     refetchRecentlyWatched();
@@ -247,51 +291,62 @@ export default function MobileHomePage() {
           <View style={{ flex: 1 }}>
             <MobileBanner />
           </View>
-          {/* Continue Watching */}
-          {recentlyWatched?.currentItems &&
-            recentlyWatched.currentItems.length > 0 && (
-              <MobileContentRow
-                title="Continue Watching"
-                data={transformMediaItems(recentlyWatched.currentItems)}
-                onPlayContent={handlePlayContent}
-                onInfoContent={handleInfoContent}
-                cardSize="medium"
-                loading={recentlyWatchedLoading}
-              />
-            )}
+          {/* Continue Watching with infinite scrolling */}
+          {recentlyWatchedItems && recentlyWatchedItems.length > 0 && (
+            <MobileContentRow
+              title="Continue Watching"
+              data={transformMediaItems(recentlyWatchedItems)}
+              onPlayContent={handlePlayContent}
+              onInfoContent={handleInfoContent}
+              cardSize="medium"
+              loading={recentlyWatchedLoading}
+              hasNextPage={hasNextRecentlyWatchedPage}
+              isFetchingNextPage={isFetchingNextRecentlyWatchedPage}
+              onLoadMore={handleLoadMoreRecentlyWatched}
+            />
+          )}
 
-          {/* Recently Added */}
+          {/* Recently Added with infinite scrolling */}
           <MobileContentRow
             title="Recently Added"
-            data={transformMediaItems(recentlyAdded?.currentItems)}
+            data={transformMediaItems(recentlyAddedItems)}
             onPlayContent={handlePlayContent}
             onInfoContent={handleInfoContent}
             cardSize="medium"
             loading={recentlyAddedLoading}
+            hasNextPage={hasNextRecentlyAddedPage}
+            isFetchingNextPage={isFetchingNextRecentlyAddedPage}
+            onLoadMore={handleLoadMoreRecentlyAdded}
           />
 
-          {/* Movies */}
+          {/* Movies with infinite scrolling */}
           <MobileContentRow
             title="Movies"
-            data={transformMediaItems(movies?.currentItems)}
+            data={transformMediaItems(movies)}
             onPlayContent={handlePlayContent}
             onInfoContent={handleInfoContent}
             cardSize="medium"
             showMoreButton
             onShowMore={handleSeeAllMovies}
             loading={moviesLoading}
+            hasNextPage={hasNextMoviesPage}
+            isFetchingNextPage={isFetchingNextMoviesPage}
+            onLoadMore={handleLoadMoreMovies}
           />
 
-          {/* TV Shows */}
+          {/* TV Shows with infinite scrolling */}
           <MobileContentRow
             title="TV Shows"
-            data={transformMediaItems(tvShows?.currentItems)}
+            data={transformMediaItems(tvShows)}
             onPlayContent={handlePlayContent}
             onInfoContent={handleInfoContent}
             cardSize="medium"
             showMoreButton
             onShowMore={handleSeeAllShows}
             loading={tvShowsLoading}
+            hasNextPage={hasNextTvShowsPage}
+            isFetchingNextPage={isFetchingNextTvShowsPage}
+            onLoadMore={handleLoadMoreTvShows}
           />
         </ScrollView>
       </SafeAreaView>

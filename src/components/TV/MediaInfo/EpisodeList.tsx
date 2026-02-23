@@ -9,11 +9,17 @@ import { TVDeviceEpisode } from "@/src/data/types/content.types";
 interface EpisodeListProps {
   episodes: TVDeviceEpisode[];
   onEpisodePress: (episode: TVDeviceEpisode) => void;
+  fallbackBackdrop?: string;
+  fallbackBackdropBlurhash?: string;
+  logo?: string;
 }
 
 export default function EpisodeList({
   episodes,
   onEpisodePress,
+  fallbackBackdrop,
+  fallbackBackdropBlurhash,
+  logo,
 }: EpisodeListProps) {
   const formatDuration = (milliseconds: number): string => {
     const seconds = Math.floor(milliseconds / 1000);
@@ -46,16 +52,27 @@ export default function EpisodeList({
             {/* Thumbnail with episode number overlay */}
             <View style={styles.thumbnailContainer}>
               <OptimizedImage
-                source={episode.thumbnail}
-                placeholder={{
-                  uri: `data:image/png;base64,${episode.thumbnailBlurhash}`,
+                source={{
+                  uri:
+                    episode.thumbnail && episode.thumbnail.trim() !== ""
+                      ? episode.thumbnail
+                      : (fallbackBackdrop ?? ""),
                 }}
+                placeholder={
+                  episode.thumbnailBlurhash || fallbackBackdropBlurhash
+                    ? {
+                        uri: `data:image/png;base64,${
+                          episode.thumbnailBlurhash || fallbackBackdropBlurhash
+                        }`,
+                      }
+                    : undefined
+                }
                 placeholderContentFit="cover"
                 style={styles.thumbnail}
                 contentFit="cover"
                 transition={1000}
                 width={640}
-                quality={85}
+                quality={75}
               />
               <View style={styles.episodeNumberOverlay}>
                 <Text style={styles.episodeNumberText}>
@@ -65,6 +82,18 @@ export default function EpisodeList({
               {episode.hdr && episode.hdr !== "10-bit SDR (BT.709)" && (
                 <View style={styles.hdrBadge}>
                   <Text style={styles.hdrText}>HDR</Text>
+                </View>
+              )}
+              {!episode.title?.trim() && !!logo && (
+                <View style={styles.logoOverlay}>
+                  <OptimizedImage
+                    source={logo}
+                    contentFit="contain"
+                    style={styles.logoOverlayImage}
+                    priority="high"
+                    width={320}
+                    quality={100}
+                  />
                 </View>
               )}
             </View>
@@ -162,6 +191,18 @@ const styles = StyleSheet.create({
     color: "#000000",
     fontSize: 10,
     fontWeight: "bold",
+  },
+  logoOverlay: {
+    bottom: 6,
+    maxHeight: 40,
+    maxWidth: 120,
+    position: "absolute",
+    right: 6,
+  },
+  logoOverlayImage: {
+    height: 40,
+    opacity: 0.95,
+    width: 120,
   },
   thumbnail: {
     borderRadius: 8,

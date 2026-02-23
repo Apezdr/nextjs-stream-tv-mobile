@@ -16,6 +16,34 @@ import type {
   GenresContentParams,
 } from "@/src/data/types/content.types";
 
+// Environment-controlled debug logging for horizontal list fetches
+const HORIZONTAL_LIST_DEBUG_ENABLED =
+  process.env.EXPO_PUBLIC_HORIZONTAL_LIST_DEBUG === "true";
+
+/**
+ * Debug logger for horizontal list requests
+ */
+function logHorizontalListRequest(
+  hookName: string,
+  endpoint: string,
+  queryParams: string,
+  params: unknown,
+) {
+  if (!HORIZONTAL_LIST_DEBUG_ENABLED) return;
+
+  const baseURL = enhancedApiClient.getBaseUrl();
+  const fullURL = `${baseURL}${endpoint}${queryParams}`;
+
+  console.log(`[${hookName}] Horizontal List Request:`, {
+    baseURL,
+    endpoint,
+    queryParams,
+    fullURL,
+    requestParams: params,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 /**
  * Hook for infinite content loading with pagination and predictive prefetching
  */
@@ -32,14 +60,24 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       isTVdevice: true,
     }),
     queryFn: async ({ pageParam = 0 }) => {
-      const queryParams = buildQueryParams({
+      const requestParams = {
         type,
         sort,
         sortOrder,
         page: pageParam,
         limit,
-        isTVdevice: "true",
-      });
+        isTVdevice: true,
+      };
+      const queryParams = buildQueryParams(requestParams);
+
+      // Debug logging for infinite horizontal list requests
+      logHorizontalListRequest(
+        "useInfiniteContentList",
+        API_ENDPOINTS.CONTENT.HORIZONTAL_LIST,
+        queryParams,
+        requestParams,
+      );
+
       return enhancedApiClient.get<ContentListResponse>(
         `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
       );
@@ -286,14 +324,24 @@ export const infiniteContentPrefetch = {
         isTVdevice: isTVdevice,
       }),
       queryFn: () => {
-        const queryParams = buildQueryParams({
+        const requestParams = {
           type,
           sort,
           sortOrder,
           page: currentPageCount,
           limit,
           isTVdevice: isTVdevice,
-        });
+        };
+        const queryParams = buildQueryParams(requestParams);
+
+        // Debug logging for prefetch requests
+        logHorizontalListRequest(
+          "infiniteContentPrefetch.prefetchNextPage",
+          API_ENDPOINTS.CONTENT.HORIZONTAL_LIST,
+          queryParams,
+          requestParams,
+        );
+
         return enhancedApiClient.get<ContentListResponse>(
           `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
         );

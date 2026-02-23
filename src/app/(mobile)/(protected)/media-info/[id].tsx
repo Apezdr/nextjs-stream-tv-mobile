@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ImageBackground } from "expo-image";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { useCallback, useState, useRef, useEffect } from "react";
+import { useCallback, useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   StyleSheet,
@@ -66,8 +66,8 @@ export default function MobileMediaInfoPage() {
   const { window } = useDimensions();
   const { width: screenWidth, height: screenHeight } = window;
 
-  const [selectedSeason, setSelectedSeason] = useState<number>(
-    params.season ? parseInt(params.season) : 1,
+  const [selectedSeason, setSelectedSeason] = useState<number | undefined>(
+    params.season ? parseInt(params.season) : undefined,
   );
 
   // Action sheet state
@@ -109,6 +109,31 @@ export default function MobileMediaInfoPage() {
       : null,
   );
 
+  // Derive initial season from root TV media response when none is provided
+  useEffect(() => {
+    if (params.type !== "tv") return;
+    if (!tvData.data) return;
+    if (selectedSeason !== undefined) return;
+
+    const availableSeasons = tvData.data.availableSeasons || [];
+    const navCurrent = tvData.data.navigation?.seasons?.current;
+
+    let derived: number | undefined;
+    if (
+      typeof navCurrent === "number" &&
+      Array.isArray(availableSeasons) &&
+      availableSeasons.includes(navCurrent)
+    ) {
+      derived = navCurrent;
+    } else if (Array.isArray(availableSeasons) && availableSeasons.length > 0) {
+      derived = Math.min(...availableSeasons);
+    }
+
+    if (derived !== undefined) {
+      setSelectedSeason(derived);
+    }
+  }, [params.type, tvData.data, selectedSeason]);
+
   // Use the appropriate data based on media type
   const mediaInfo = params.type === "movie" ? movieData.data : tvData.data;
   const isLoading =
@@ -116,6 +141,34 @@ export default function MobileMediaInfoPage() {
   const isLoadingEpisodes =
     params.type === "movie" ? false : tvData.isLoadingEpisodes;
   const error = params.type === "movie" ? movieData.error : tvData.error;
+
+  // Compute merged display fields for TV shows
+  const mergedDisplayFields = useMemo(() => {
+    if (params.type !== "tv" || !mediaInfo) {
+      return {
+        displayGenres: mediaInfo?.metadata?.genres || [],
+        displayCast:
+          (mediaInfo as any)?.cast || mediaInfo?.metadata?.cast || [],
+        seasonOverview: mediaInfo?.metadata?.overview,
+        showOverview: undefined,
+      };
+    }
+
+    // Use the new showOverview field from our enhanced hook
+    const currentGenres = mediaInfo.metadata?.genres;
+    const currentCast = (mediaInfo as any)?.cast || mediaInfo.metadata?.cast;
+    const currentOverview = mediaInfo.metadata?.overview;
+    const showOverview = mediaInfo.metadata?.showOverview;
+
+    return {
+      displayGenres: currentGenres || [],
+      displayCast: currentCast || [],
+      // Season overview is in the standard location
+      seasonOverview: currentOverview,
+      // Show overview is in the new field
+      showOverview: showOverview,
+    };
+  }, [params.type, mediaInfo]);
 
   // Extract backdrop values - fallback to poster for TV shows if no backdrop
   const backdropUrl =
@@ -247,7 +300,7 @@ export default function MobileMediaInfoPage() {
       navigationHelper.navigateToWatch({
         id: params.id,
         type: params.type,
-        season: selectedSeason,
+        season: selectedSeason ?? (mediaInfo as any)?.seasonNumber,
         episode: episode.episodeNumber,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
@@ -279,7 +332,7 @@ export default function MobileMediaInfoPage() {
       navigationHelper.navigateToWatch({
         id: params.id,
         type: params.type,
-        season: selectedSeason,
+        season: selectedSeason ?? (mediaInfo as any)?.seasonNumber,
         episode: episode.episodeNumber,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
@@ -310,7 +363,7 @@ export default function MobileMediaInfoPage() {
 
       navigationHelper.navigateToEpisodeInfo({
         showId: params.id,
-        season: selectedSeason,
+        season: selectedSeason ?? (mediaInfo as any)?.seasonNumber,
         episode: episode.episodeNumber,
       });
     },
@@ -437,7 +490,10 @@ export default function MobileMediaInfoPage() {
         id: params.id,
         title: mediaInfo?.title || "Unknown",
         mediaType: params.type,
-        seasonNumber: params.type === "tv" ? selectedSeason : undefined,
+        seasonNumber:
+          params.type === "tv"
+            ? (selectedSeason ?? (mediaInfo as any)?.seasonNumber)
+            : undefined,
         episodeNumber: undefined,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
@@ -576,7 +632,7 @@ export default function MobileMediaInfoPage() {
                         placeholderContentFit="cover"
                         priority="high"
                         width={150}
-                        quality={90}
+                        quality={75}
                       />
                     </View>
 
@@ -626,13 +682,17 @@ export default function MobileMediaInfoPage() {
                       <>
                         {/* Quick metadata in hero */}
                         <View style={styles.heroMetadata}>
-                          {mediaInfo.metadata.rating && (
-                            <View style={styles.heroRatingContainer}>
-                              <Text style={styles.heroRatingText}>
-                                ⭐ {mediaInfo.metadata.rating.toFixed(1)}
-                              </Text>
-                            </View>
-                          )}
+                          {mediaInfo.metadata.vote_average != null &&
+                            typeof mediaInfo.metadata.vote_average ===
+                              "number" &&
+                            mediaInfo.metadata.vote_average > 0 && (
+                              <View style={styles.heroRatingContainer}>
+                                <Text style={styles.heroRatingText}>
+                                  ⭐{" "}
+                                  {mediaInfo.metadata.vote_average.toFixed(1)}
+                                </Text>
+                              </View>
+                            )}
 
                           <Text style={styles.heroMetadataText}>
                             {mediaInfo.metadata.releaseDate
@@ -660,9 +720,14 @@ export default function MobileMediaInfoPage() {
                             </Text>
                           )}
 
-                          <View style={styles.heroRatingBadge}>
-                            <Text style={styles.heroRatingBadgeText}>R</Text>
-                          </View>
+                          {mediaInfo.metadata.rating &&
+                            typeof mediaInfo.metadata.rating === "string" && (
+                              <View style={styles.heroRatingBadge}>
+                                <Text style={styles.heroRatingBadgeText}>
+                                  {mediaInfo.metadata.rating}
+                                </Text>
+                              </View>
+                            )}
                         </View>
 
                         {/* Play button with options for movies */}
@@ -706,13 +771,14 @@ export default function MobileMediaInfoPage() {
           {/* Metadata - show for all content, but don't duplicate for movies */}
           {params.type === "tv" && (
             <View style={styles.metadataContainer}>
-              {mediaInfo.metadata.rating && (
-                <View style={styles.ratingContainer}>
-                  <Text style={styles.ratingText}>
-                    ⭐ {mediaInfo.metadata.rating.toFixed(1)}
-                  </Text>
-                </View>
-              )}
+              {mediaInfo.metadata.vote_average != null &&
+                typeof mediaInfo.metadata.vote_average === "number" && (
+                  <View style={styles.ratingContainer}>
+                    <Text style={styles.ratingText}>
+                      ⭐ {mediaInfo.metadata.vote_average.toFixed(1)}
+                    </Text>
+                  </View>
+                )}
 
               <Text style={styles.metadataText}>
                 {mediaInfo.airDate
@@ -726,33 +792,43 @@ export default function MobileMediaInfoPage() {
                   : `${mediaInfo.totalSeasons} Seasons`}
               </Text>
 
-              <View style={styles.ratingBadge}>
-                <Text style={styles.ratingBadgeText}>TV-MA</Text>
-              </View>
+              {mediaInfo.metadata.rating &&
+                typeof mediaInfo.metadata.rating === "string" && (
+                  <View style={styles.ratingBadge}>
+                    <Text style={styles.ratingBadgeText}>
+                      {mediaInfo.metadata.rating}
+                    </Text>
+                  </View>
+                )}
             </View>
           )}
 
           {/* Genres */}
-          {mediaInfo.metadata.genres &&
-            mediaInfo.metadata.genres.length > 0 && (
+          {mergedDisplayFields.displayGenres &&
+            mergedDisplayFields.displayGenres.length > 0 && (
               <View style={styles.genresContainer}>
-                {mediaInfo.metadata.genres.slice(0, 4).map((genre: any) => (
-                  <View key={genre.id} style={styles.genreChip}>
-                    <Text style={styles.genreText}>{genre.name}</Text>
-                  </View>
-                ))}
+                {mergedDisplayFields.displayGenres
+                  .slice(0, 4)
+                  .map((genre: any) => (
+                    <View key={genre.id} style={styles.genreChip}>
+                      <Text style={styles.genreText}>{genre.name}</Text>
+                    </View>
+                  ))}
               </View>
             )}
 
-          {/* Overview */}
-          {mediaInfo.metadata.overview && (
-            <View style={styles.overviewContainer}>
-              <Text style={styles.overviewTitle}>Overview</Text>
-              <Text style={styles.overviewText}>
-                {mediaInfo.metadata.overview}
-              </Text>
-            </View>
-          )}
+          {/* Overview Sections */}
+          {/* Show the show overview if available and different from season overview */}
+          {mergedDisplayFields.showOverview &&
+            mergedDisplayFields.showOverview !==
+              mergedDisplayFields.seasonOverview && (
+              <View style={styles.overviewContainer}>
+                <Text style={styles.overviewTitle}>Show Overview</Text>
+                <Text style={styles.overviewText}>
+                  {mergedDisplayFields.showOverview}
+                </Text>
+              </View>
+            )}
 
           {/* Trailer Section */}
           {mediaInfo.metadata.trailer_url &&
@@ -776,7 +852,7 @@ export default function MobileMediaInfoPage() {
                       contentFit="cover"
                       priority="normal"
                       width={400}
-                      quality={85}
+                      quality={75}
                     />
                     <View style={styles.trailerPlayOverlay}>
                       <View style={styles.trailerPlayButton}>
@@ -806,59 +882,61 @@ export default function MobileMediaInfoPage() {
             )}
 
           {/* Cast Section */}
-          {(((mediaInfo as any).cast && (mediaInfo as any).cast.length > 0) ||
-            (mediaInfo.metadata.cast &&
-              mediaInfo.metadata.cast.length > 0)) && (
-            <View style={styles.castContainer}>
-              <Text style={styles.castTitle}>Cast</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.castList}
-              >
-                {((mediaInfo as any).cast || mediaInfo.metadata.cast)
-                  ?.slice(0, 10)
-                  .map((actor: any) => (
-                    <View key={actor.id} style={styles.castMember}>
-                      <View style={styles.castImageContainer}>
-                        {actor.profile_path &&
-                        actor.profile_path.trim() !== "" &&
-                        actor.profile_path !== null ? (
-                          <OptimizedImage
-                            source={{ uri: actor.profile_path }}
-                            style={styles.castImage}
-                            contentFit="cover"
-                            priority="normal"
-                            width={120}
-                            quality={85}
-                          />
-                        ) : (
-                          <View
-                            style={[styles.castImage, styles.castPlaceholder]}
-                          >
-                            <Ionicons
-                              name="person"
-                              size={40}
-                              color={Colors.dark.videoDescriptionText}
+          {mergedDisplayFields.displayCast &&
+            mergedDisplayFields.displayCast.length > 0 && (
+              <View style={styles.castContainer}>
+                <Text style={styles.castTitle}>Cast</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.castList}
+                >
+                  {mergedDisplayFields.displayCast
+                    ?.slice(0, 10)
+                    .map((actor: any) => (
+                      <View key={actor.id} style={styles.castMember}>
+                        <View style={styles.castImageContainer}>
+                          {actor.profile_path &&
+                          actor.profile_path.trim() !== "" &&
+                          actor.profile_path !== null ? (
+                            <OptimizedImage
+                              source={{ uri: actor.profile_path }}
+                              style={styles.castImage}
+                              contentFit="cover"
+                              priority="normal"
+                              width={120}
+                              quality={75}
                             />
-                          </View>
-                        )}
-                      </View>
-                      <View style={styles.castInfo}>
-                        <Text style={styles.castName} numberOfLines={2}>
-                          {actor.name}
-                        </Text>
-                        {actor.character && (
-                          <Text style={styles.castCharacter} numberOfLines={2}>
-                            {actor.character}
+                          ) : (
+                            <View
+                              style={[styles.castImage, styles.castPlaceholder]}
+                            >
+                              <Ionicons
+                                name="person"
+                                size={40}
+                                color={Colors.dark.videoDescriptionText}
+                              />
+                            </View>
+                          )}
+                        </View>
+                        <View style={styles.castInfo}>
+                          <Text style={styles.castName} numberOfLines={2}>
+                            {actor.name}
                           </Text>
-                        )}
+                          {actor.character && (
+                            <Text
+                              style={styles.castCharacter}
+                              numberOfLines={2}
+                            >
+                              {actor.character}
+                            </Text>
+                          )}
+                        </View>
                       </View>
-                    </View>
-                  ))}
-              </ScrollView>
-            </View>
-          )}
+                    ))}
+                </ScrollView>
+              </View>
+            )}
 
           {/* TV Show specific: Season picker and episodes */}
           {params.type === "tv" &&
@@ -899,12 +977,26 @@ export default function MobileMediaInfoPage() {
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
+                  {/* Show season overview if available */}
+                  {mergedDisplayFields.seasonOverview && (
+                    <View style={styles.seasonOverviewContainer}>
+                      <Text style={styles.overviewTitle}>
+                        {mergedDisplayFields.showOverview
+                          ? `Season ${selectedSeason} Overview`
+                          : "Overview"}
+                      </Text>
+                      <Text style={styles.overviewText}>
+                        {mergedDisplayFields.seasonOverview}
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
                 {/* Episodes list */}
                 <View style={styles.episodesSection}>
                   <Text style={styles.sectionTitle}>
-                    Season {selectedSeason} Episodes
+                    Season {selectedSeason ?? (mediaInfo as any).seasonNumber}{" "}
+                    Episodes
                   </Text>
 
                   {isLoadingEpisodes ? (
@@ -924,15 +1016,29 @@ export default function MobileMediaInfoPage() {
                         >
                           <View style={styles.episodeImageContainer}>
                             <OptimizedImage
-                              source={episode.thumbnail}
-                              placeholder={{
-                                uri: `data:image/png;base64,${episode.thumbnailBlurhash}`,
+                              source={{
+                                uri:
+                                  episode.thumbnail &&
+                                  episode.thumbnail.trim() !== ""
+                                    ? episode.thumbnail
+                                    : (mediaInfo?.backdrop ?? ""),
                               }}
+                              placeholder={
+                                episode.thumbnailBlurhash ||
+                                mediaInfo?.backdropBlurhash
+                                  ? {
+                                      uri: `data:image/png;base64,${
+                                        episode.thumbnailBlurhash ||
+                                        mediaInfo?.backdropBlurhash
+                                      }`,
+                                    }
+                                  : undefined
+                              }
                               style={styles.episodeImage}
                               contentFit="cover"
                               placeholderContentFit="cover"
                               width={440}
-                              quality={85}
+                              quality={75}
                             />
                             <View style={styles.episodePlayOverlay}>
                               <Ionicons
@@ -941,6 +1047,19 @@ export default function MobileMediaInfoPage() {
                                 color="rgba(255, 255, 255, 0.9)"
                               />
                             </View>
+                            {(!episode.title || episode.title.trim() === "") &&
+                              mediaInfo.logo && (
+                                <View style={styles.episodeLogoOverlay}>
+                                  <OptimizedImage
+                                    source={mediaInfo.logo}
+                                    contentFit="contain"
+                                    style={styles.episodeLogoOverlayImage}
+                                    priority="high"
+                                    width={200}
+                                    quality={100}
+                                  />
+                                </View>
+                              )}
 
                             {/* Watch progress if available */}
                             {episode.watchHistory &&
@@ -1269,6 +1388,9 @@ const styles = StyleSheet.create({
   overviewContainer: {
     marginBottom: 24,
   },
+  seasonOverviewContainer: {
+    marginTop: 24,
+  },
   overviewTitle: {
     color: Colors.dark.whiteText,
     fontSize: 20,
@@ -1357,6 +1479,18 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 0,
     top: 0,
+  },
+  episodeLogoOverlay: {
+    bottom: 8,
+    maxHeight: 50,
+    maxWidth: 160,
+    position: "absolute",
+    right: 8,
+  },
+  episodeLogoOverlayImage: {
+    height: 50,
+    opacity: 0.95,
+    width: 160,
   },
   episodeProgressContainer: {
     backgroundColor: "rgba(255, 255, 255, 0.3)",

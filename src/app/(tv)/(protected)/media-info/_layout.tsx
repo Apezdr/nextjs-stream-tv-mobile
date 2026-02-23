@@ -1,10 +1,39 @@
-import { Slot } from "expo-router";
+import { RelativePathString, Slot, usePathname, useRouter } from "expo-router";
 import { View, StyleSheet } from "react-native";
 
+import ErrorBoundary from "@/src/components/common/ErrorBoundary";
+
 export default function MediaInfoLayout() {
+  const router = useRouter();
+  const pathname = usePathname() as RelativePathString;
+
+  const handleError = (error: Error, errorInfo: any) => {
+    console.error("[TVMediaInfoLayout] Error caught by boundary:", error);
+    // TODO: Send to error reporting service
+  };
+
+  const errorActions = [
+    {
+      label: "Try Again",
+      onPress: () => {
+        // Force a re-render by reloading the route
+        router.replace(pathname);
+      },
+      primary: true,
+    },
+    {
+      label: "Go Back",
+      onPress: () => {
+        router.back();
+      },
+    },
+  ];
+
   return (
     <View style={styles.container}>
-      <Slot />
+      <ErrorBoundary variant="tv" actions={errorActions} onError={handleError}>
+        <Slot />
+      </ErrorBoundary>
     </View>
   );
 }

@@ -17,15 +17,18 @@ interface ExpandableOverviewProps {
   overview: string;
   maxLines?: number;
   onTruncationChange?: (isTruncated: boolean) => void;
+  overviewType?: string;
 }
 
 export default function ExpandableOverview({
   overview,
   maxLines = 4,
   onTruncationChange,
+  overviewType = "Overview",
 }: ExpandableOverviewProps) {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isTruncated, setIsTruncated] = useState(false);
+  const [showReadMore, setShowReadMore] = useState(false);
   const { window } = useDimensions();
   const screenWidth = window.width;
   const screenHeight = window.height;
@@ -35,6 +38,7 @@ export default function ExpandableOverview({
       const { lines } = event.nativeEvent;
       const truncated = lines.length > maxLines;
       setIsTruncated(truncated);
+      setShowReadMore(truncated);
       onTruncationChange?.(truncated);
     },
     [maxLines, onTruncationChange],
@@ -51,31 +55,25 @@ export default function ExpandableOverview({
   return (
     <>
       <View style={styles.container}>
-        {isTruncated ? (
-          <>
-            <Text
-              style={styles.overviewText}
-              numberOfLines={maxLines}
-              onTextLayout={handleTextLayout}
-              ellipsizeMode="tail"
-            >
-              {overview}
-            </Text>
-            <Pressable
-              focusable
-              style={({ focused }) => [
-                styles.expandButton,
-                focused && styles.expandButtonFocused,
-              ]}
-              onPress={openModal}
-            >
-              <Text style={styles.expandButtonText}>... Read More</Text>
-            </Pressable>
-          </>
-        ) : (
-          <Text style={styles.overviewText} onTextLayout={handleTextLayout}>
-            {overview}
-          </Text>
+        <Text
+          style={styles.overviewText}
+          numberOfLines={maxLines}
+          onTextLayout={handleTextLayout}
+          ellipsizeMode="tail"
+        >
+          {overview}
+        </Text>
+        {showReadMore && (
+          <Pressable
+            focusable
+            style={({ focused }) => [
+              styles.expandButton,
+              focused && styles.expandButtonFocused,
+            ]}
+            onPress={openModal}
+          >
+            <Text style={styles.expandButtonText}>... Read More</Text>
+          </Pressable>
         )}
       </View>
 
@@ -97,7 +95,7 @@ export default function ExpandableOverview({
             ]}
           >
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Overview</Text>
+              <Text style={styles.modalTitle}>{overviewType}</Text>
               <Pressable
                 focusable
                 hasTVPreferredFocus
@@ -162,7 +160,7 @@ const styles = StyleSheet.create({
   },
   expandButtonText: {
     color: Colors.dark.whiteText,
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: "bold",
   },
   modalContainer: {
@@ -201,7 +199,7 @@ const styles = StyleSheet.create({
   },
   overviewText: {
     color: Colors.dark.whiteText,
-    fontSize: 12,
-    lineHeight: 13,
+    fontSize: 11,
+    lineHeight: 11,
   },
 });

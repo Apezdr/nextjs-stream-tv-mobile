@@ -11,13 +11,20 @@ import {
 import { MediaItem } from "@/src/data/types/content.types";
 
 export interface UseGenreContentParams {
-  genre: { id: number; name: string; movieCount?: number };
+  genre: {
+    id: number;
+    name: string;
+    movieCount?: number;
+    tvShowCount?: number;
+  };
+  contentType?: "movie" | "tv";
   transformMediaItems: (items: MediaItem[]) => any[];
   loadDelay?: number; // Delay before starting to load this genre's content
 }
 
 export function useGenreContentData({
   genre,
+  contentType = "movie",
   transformMediaItems,
   loadDelay = 0,
 }: UseGenreContentParams) {
@@ -46,7 +53,7 @@ export function useGenreContentData({
   } = useInfiniteGenreContent({
     action: "content",
     genre: shouldLoad ? genre.name : "", // Only pass genre name when we should load
-    type: "movie",
+    type: contentType,
     limit: 12, // Smaller initial load for TV navigation
     sort: "newest",
     sortOrder: "desc",

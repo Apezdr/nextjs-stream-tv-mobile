@@ -15,6 +15,10 @@ interface RemoteActivityContextType {
   resetActivityTimer: () => void;
   startContinuousActivity: () => void; // New: for hold/seek
   stopContinuousActivity: () => void; // New: when releasing
+  registerPlayPauseHandler: (handler: () => void) => void;
+  unregisterPlayPauseHandler: () => void;
+  registerSeekHandler: (handler: (seconds: number) => void) => void;
+  unregisterSeekHandler: () => void;
 }
 
 const RemoteActivityContext = createContext<RemoteActivityContextType | null>(
@@ -39,6 +43,8 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
   const [isUserInteracting, setIsUserInteracting] = useState(false);
   const activityTimerRef = useRef<NodeJS.Timeout | null>(null);
   const continuousTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const playPauseHandlerRef = useRef<(() => void) | null>(null);
+  const seekHandlerRef = useRef<((seconds: number) => void) | null>(null);
   const timeout = customTimeout || REMOTE_ACTIVITY_TIMEOUT;
 
   // Clear all timers
@@ -97,6 +103,27 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
     resetActivityTimer();
   }, [resetActivityTimer]);
 
+  // Play/pause handler registration
+  const registerPlayPauseHandler = useCallback((handler: () => void) => {
+    playPauseHandlerRef.current = handler;
+  }, []);
+
+  const unregisterPlayPauseHandler = useCallback(() => {
+    playPauseHandlerRef.current = null;
+  }, []);
+
+  // Seek (rewind/fast-forward) handler registration
+  const registerSeekHandler = useCallback(
+    (handler: (seconds: number) => void) => {
+      seekHandlerRef.current = handler;
+    },
+    [],
+  );
+
+  const unregisterSeekHandler = useCallback(() => {
+    seekHandlerRef.current = null;
+  }, []);
+
   // Listen for TV remote control events using React Native's useTVEventHandler
   useTVEventHandler((event) => {
     if (!event) return;
@@ -110,6 +137,25 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
     );
     // Reset activity timer for most events
     resetActivityTimer();
+
+    // Handle play/pause event (fires on key up = 1)
+    if (eventType === "playPause" && eventKeyAction === 1) {
+      if (playPauseHandlerRef.current) {
+        playPauseHandlerRef.current();
+      }
+    }
+
+    // Handle rewind/fast-forward events (skip 10s on key up)
+    if (eventType === "rewind" && eventKeyAction === 1) {
+      if (seekHandlerRef.current) {
+        seekHandlerRef.current(-10);
+      }
+    }
+    if (eventType === "fastForward" && eventKeyAction === 1) {
+      if (seekHandlerRef.current) {
+        seekHandlerRef.current(10);
+      }
+    }
 
     // Handle long press events (seeking)
     if (eventType === "longLeft" || eventType === "longRight") {
@@ -147,6 +193,10 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
     resetActivityTimer,
     startContinuousActivity,
     stopContinuousActivity,
+    registerPlayPauseHandler,
+    unregisterPlayPauseHandler,
+    registerSeekHandler,
+    unregisterSeekHandler,
   };
 
   return (

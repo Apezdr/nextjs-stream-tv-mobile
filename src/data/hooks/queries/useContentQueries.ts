@@ -27,6 +27,34 @@ import type {
   GenresContentParams,
 } from "@/src/data/types/content.types";
 
+// Environment-controlled debug logging for horizontal list fetches
+const HORIZONTAL_LIST_DEBUG_ENABLED =
+  process.env.EXPO_PUBLIC_HORIZONTAL_LIST_DEBUG === "true";
+
+/**
+ * Debug logger for horizontal list requests
+ */
+function logHorizontalListRequest(
+  hookName: string,
+  endpoint: string,
+  queryParams: string,
+  params: unknown,
+) {
+  if (!HORIZONTAL_LIST_DEBUG_ENABLED) return;
+
+  const baseURL = enhancedApiClient.getBaseUrl();
+  const fullURL = `${baseURL}${endpoint}${queryParams}`;
+
+  console.log(`[${hookName}] Horizontal List Request:`, {
+    baseURL,
+    endpoint,
+    queryParams,
+    fullURL,
+    requestParams: params,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 /**
  * Hook to fetch horizontal content list
  */
@@ -42,13 +70,23 @@ export function useContentList(params: HorizontalListParams = {}) {
   return useQuery({
     queryKey: queryKeys.contentList({ type, sort, sortOrder, page, limit }),
     queryFn: () => {
-      const queryParams = buildQueryParams({
+      const requestParams = {
         type,
         sort,
         sortOrder,
         page,
         limit,
-      });
+      };
+      const queryParams = buildQueryParams(requestParams);
+
+      // Debug logging for horizontal list requests
+      logHorizontalListRequest(
+        "useContentList",
+        API_ENDPOINTS.CONTENT.HORIZONTAL_LIST,
+        queryParams,
+        requestParams,
+      );
+
       return enhancedApiClient.get<ContentListResponse>(
         `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
       );
@@ -323,6 +361,15 @@ export const contentPrefetch = {
       queryKey: queryKeys.contentList(params),
       queryFn: () => {
         const queryParams = buildQueryParams({ ...params });
+
+        // Debug logging for prefetch requests
+        logHorizontalListRequest(
+          "contentPrefetch.prefetchContentList",
+          API_ENDPOINTS.CONTENT.HORIZONTAL_LIST,
+          queryParams,
+          params,
+        );
+
         return enhancedApiClient.get<ContentListResponse>(
           `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
         );

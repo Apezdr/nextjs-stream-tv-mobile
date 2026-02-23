@@ -21,8 +21,8 @@ import type {
   QRSessionResponse,
   QRTokenCheckResponse,
 } from "@/src/data/types/auth.types";
-import { getDeviceInfo, getDeviceType } from "@/src/utils/deviceInfo";
 import { useBackdropStore } from "@/src/stores/backdropStore";
+import { getDeviceInfo, getDeviceType } from "@/src/utils/deviceInfo";
 
 type User = {
   id: string;

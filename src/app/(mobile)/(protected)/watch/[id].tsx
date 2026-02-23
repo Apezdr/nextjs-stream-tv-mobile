@@ -418,6 +418,13 @@ export default function MobileWatchPage() {
   const [isEpisodeSwitching, setIsEpisodeSwitching] = useState(false);
   const isEpisodeSwitchingRef = useRef(false);
 
+  // Track PiP state
+  const pipActiveRef = useRef(false);
+  const pipWasPlayingRef = useRef(false);
+  const lastPipStopAtRef = useRef<number | null>(null);
+  // Tunable: how soon after PiP stop we consider "restore"
+  const PIP_RESTORE_WINDOW_MS = 1500;
+
   // Use the backdrop manager
   const { show: showBackdrop, hide: hideBackdrop } = useBackdropManager();
 
@@ -951,29 +958,32 @@ export default function MobileWatchPage() {
     };
   }, [player]);
 
-  // Handle app state changes for automatic PiP behavior
+  // Handle app state changes - only used to resume on restore
   useEffect(() => {
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
-      if (!player || !isVideoPlaying) return;
+      if (!player) return;
 
-      console.log("[MobileWatchPage] App state changed:", nextAppState);
+      if (nextAppState === "active") {
+        const stoppedAt = lastPipStopAtRef.current;
+        const withinRestoreWindow =
+          typeof stoppedAt === "number" &&
+          Date.now() - stoppedAt < PIP_RESTORE_WINDOW_MS;
 
-      if (nextAppState === "background" || nextAppState === "inactive") {
-        // App is going to background - PiP should activate automatically due to startsPictureInPictureAutomatically
-        console.log(
-          "[MobileWatchPage] App backgrounded - PiP should activate automatically",
-        );
-
-        // Ensure video keeps playing for PiP
-        if (!player.playing) {
-          player.play();
+        if (withinRestoreWindow && pipWasPlayingRef.current) {
+          console.log("[MobileWatchPage] Likely PiP restore -> resuming");
+          try {
+            player.play();
+          } catch (error) {
+            console.warn("[MobileWatchPage] Error resuming on restore:", error);
+          }
         }
-      } else if (nextAppState === "active") {
-        // App came back to foreground
-        console.log(
-          "[MobileWatchPage] App foregrounded - exiting PiP if active",
-        );
+
+        // Clear the marker either way so we don't auto-resume later
+        lastPipStopAtRef.current = null;
       }
+
+      // Note: Removed "if background then player.play()" logic that was causing
+      // video to keep playing after PiP close
     };
 
     const subscription = AppState.addEventListener(
@@ -984,7 +994,7 @@ export default function MobileWatchPage() {
     return () => {
       subscription?.remove();
     };
-  }, [player, isVideoPlaying]);
+  }, [player, PIP_RESTORE_WINDOW_MS]);
 
   // Mobile-optimized exit handler
   const handleExit = useCallback(async () => {
@@ -1029,6 +1039,53 @@ export default function MobileWatchPage() {
       true,
     ); // fromEpisodeInfo = false, fromWatch = true
   }, [flushCurrentProgress, router, params.id, params.type, params.season]);
+
+  // Handle PiP start
+  const handlePiPStart = useCallback(() => {
+    pipActiveRef.current = true;
+    pipWasPlayingRef.current = !!player?.playing;
+    lastPipStopAtRef.current = null;
+
+    console.log(
+      "[MobileWatchPage] Entered PiP, wasPlaying:",
+      pipWasPlayingRef.current,
+    );
+
+    // Optional: some devices pause when entering PiP — kick it back on
+    try {
+      if (pipWasPlayingRef.current && player && !player.playing) {
+        player.play();
+      }
+    } catch (error) {
+      console.warn("[MobileWatchPage] Error resuming on PiP start:", error);
+    }
+  }, [player]);
+
+  // Handle PiP stop - pause immediately (no timer)
+  const handlePiPStop = useCallback(async () => {
+    pipActiveRef.current = false;
+    lastPipStopAtRef.current = Date.now();
+
+    console.log("[MobileWatchPage] Exited PiP -> pausing immediately");
+
+    // Pause immediately (no setTimeout)
+    try {
+      await flushCurrentProgress();
+    } catch (error) {
+      console.warn(
+        "[MobileWatchPage] flushCurrentProgress failed on PiP stop:",
+        error,
+      );
+    }
+
+    try {
+      player?.pause();
+    } catch (error) {
+      console.warn("[MobileWatchPage] player.pause failed on PiP stop:", error);
+    }
+
+    deactivateKeepAwake();
+  }, [player, flushCurrentProgress]);
 
   // Back handler for Android
   useEffect(() => {
@@ -1159,6 +1216,8 @@ export default function MobileWatchPage() {
         startsPictureInPictureAutomatically={true}
         allowsPictureInPicture={true}
         nativeControls={false}
+        onPictureInPictureStart={handlePiPStart}
+        onPictureInPictureStop={handlePiPStop}
       />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <MobileVideoControls

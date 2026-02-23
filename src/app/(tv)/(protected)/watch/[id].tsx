@@ -30,6 +30,7 @@ import {
 } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
+import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -498,25 +499,38 @@ export default function WatchPage() {
     [],
   );
 
-  // Create optimized player with focus-aware resource management
-  const { player } = useOptimizedVideoPlayer(effectiveVideoURL, (p) => {
-    p.timeUpdateEventInterval = 1;
-    p.loop = false;
-    p.bufferOptions = bufferOptions;
+  // Step 1: Create optimized player with deferred setup (no automatic watch history application)
+  const { player, setupPlayer } = useOptimizedVideoPlayer(
+    loading ? null : effectiveVideoURL, // Only create player when content is loaded
+    undefined, // No setup callback - we'll use setupPlayer manually
+    true, // deferSetup = true
+  );
 
-    // Check if we have watch history and should resume
-    const watchHistory = effectiveVideoData?.watchHistory;
-    if (watchHistory && watchHistory.playbackTime > 0) {
-      // Resume from saved position (with a small buffer to account for seeking precision)
-      const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
-      console.log(
-        `[WatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
-      );
-      p.currentTime = resumeTime;
+  // Step 2: Use watch history application hook to manage the stepped process
+  const { status: watchHistoryStatus, isControlsReady } =
+    useWatchHistoryApplication({
+      player,
+      videoData: effectiveVideoData,
+      contentLoading: loading,
+    });
+
+  // Step 3: Setup player once watch history application is complete
+  useEffect(() => {
+    if (player && watchHistoryStatus === "success" && effectiveVideoData) {
+      setupPlayer((p) => {
+        p.timeUpdateEventInterval = 1;
+        p.loop = false;
+        p.bufferOptions = bufferOptions;
+        p.play();
+      });
     }
-
-    p.play();
-  });
+  }, [
+    player,
+    watchHistoryStatus,
+    effectiveVideoData,
+    setupPlayer,
+    bufferOptions,
+  ]);
 
   // Video player loading state tracking
   useEffect(() => {
@@ -988,9 +1002,9 @@ export default function WatchPage() {
 
   // Optimized backdrop management - only show when actually visible to user
   useEffect(() => {
-    // Only show backdrop during initial loading or episode switching
-    // Don't show/hide backdrop during video buffering since it's behind the video player
-    const shouldShowBackdrop = showFullLoading || isEpisodeSwitching;
+    // Show backdrop during initial loading, episode switching, or watch history application
+    const shouldShowBackdrop =
+      showFullLoading || isEpisodeSwitching || !isControlsReady;
 
     if (shouldShowBackdrop && effectiveBackdropURL) {
       console.log(
@@ -998,10 +1012,20 @@ export default function WatchPage() {
         effectiveBackdropURL,
       );
 
-      // Determine loading message
+      // Determine loading message based on current status
       let message: string | undefined;
-      if (showFullLoading) message = "Loading video...";
-      else if (isEpisodeSwitching) message = "Switching episode...";
+      if (showFullLoading) {
+        message = "Loading video...";
+      } else if (isEpisodeSwitching) {
+        message = "Switching episode...";
+      } else if (watchHistoryStatus === "applying") {
+        message = "Restoring your playback position...";
+      } else if (
+        watchHistoryStatus === "loading" ||
+        watchHistoryStatus === "ready"
+      ) {
+        message = "Loading playback position...";
+      }
 
       showBackdrop(effectiveBackdropURL, {
         fade: true,
@@ -1011,9 +1035,9 @@ export default function WatchPage() {
       });
     }
 
-    // Hide backdrop when we're done with initial loading or episode switching
-    if (!shouldShowBackdrop && !showFullLoading && !isEpisodeSwitching) {
-      console.log("[WatchPage] Hiding backdrop - video interface ready");
+    // Hide backdrop when controls are ready
+    if (!shouldShowBackdrop && isControlsReady) {
+      console.log("[WatchPage] Hiding backdrop - controls are ready");
       hideBackdrop({ fade: true, duration: 500 });
     }
 
@@ -1027,6 +1051,8 @@ export default function WatchPage() {
     effectiveBackdropBlurhash,
     showFullLoading,
     isEpisodeSwitching,
+    isControlsReady,
+    watchHistoryStatus,
     showBackdrop,
     hideBackdrop,
   ]);
@@ -1086,20 +1112,23 @@ export default function WatchPage() {
         nativeControls={false}
       />
 
-      <StandaloneVideoControls
-        player={player}
-        videoInfo={videoInfo}
-        overlayMode
-        onExitWatchMode={handleExit}
-        onInfoPress={handleInfoPress}
-        showCaptionControls={!!videoInfo?.captionURLs}
-        episodes={params.type === "tv" ? episodes : undefined}
-        currentEpisodeNumber={effectiveEpisodeNumber}
-        onEpisodeSelect={handleEpisodeSelect}
-        isLoadingEpisodes={isLoadingEpisodes}
-        isEpisodeSwitching={isEpisodeSwitching}
-        episodeSwitchError={episodeSwitchError}
-      />
+      {isControlsReady ? (
+        <StandaloneVideoControls
+          player={player}
+          videoInfo={videoInfo}
+          overlayMode
+          onExitWatchMode={handleExit}
+          onInfoPress={handleInfoPress}
+          showCaptionControls={!!videoInfo?.captionURLs}
+          episodes={params.type === "tv" ? episodes : undefined}
+          currentEpisodeNumber={effectiveEpisodeNumber}
+          onEpisodeSelect={handleEpisodeSelect}
+          isLoadingEpisodes={isLoadingEpisodes}
+          isEpisodeSwitching={isEpisodeSwitching}
+          episodeSwitchError={episodeSwitchError}
+        />
+      ) : /* Keep backdrop visible with loading message - controls will appear after watch history is applied */
+      null}
     </View>
   );
 }

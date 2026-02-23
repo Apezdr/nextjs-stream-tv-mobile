@@ -14,8 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
-import { useTVMediaDetails } from "@/src/data/hooks/useContent";
-import { EpisodeSpecificResponse } from "@/src/data/types/content.types";
+import { useShowEpisode } from "@/src/data/hooks/useContent";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
@@ -61,17 +60,15 @@ export default function EpisodeInfoPage() {
   const lastRefreshRef = useRef<number>(0);
   const REFRESH_DEBOUNCE_MS = 5000;
 
-  // Fetch TV show data to get episode details
-  const tvData = useTVMediaDetails({
-    mediaType: "tv",
-    mediaId: params.showId,
+  // Fetch episode-specific data using our dedicated hook
+  const episodeData = useShowEpisode({
+    showId: params.showId,
     season: seasonNumber,
     episode: episodeNumber,
   });
 
-  // When fetching specific episode data, the episode is returned directly
-  // instead of being wrapped in an episodes array
-  const episode = tvData.data as EpisodeSpecificResponse | null;
+  // The data is already in the correct format, no type casting needed
+  const episode = episodeData.data;
 
   // Show backdrop when page comes into focus
   useFocusEffect(
@@ -101,14 +98,14 @@ export default function EpisodeInfoPage() {
       // Debounced refresh
       if (
         timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS &&
-        tvData &&
-        tvData.refetch
+        episodeData &&
+        episodeData.refetch
       ) {
         lastRefreshRef.current = now;
-        tvData.refetch();
+        episodeData.refetch();
       }
     }, [
-      tvData.refetch,
+      episodeData.refetch,
       episode?.episode?.thumbnail,
       episode?.episode?.thumbnailBlurhash,
       showBackdrop,
@@ -133,8 +130,8 @@ export default function EpisodeInfoPage() {
     seasonNumber,
     episodeNumber,
     router,
-    tvData.data?.backdrop,
-    tvData.data?.backdropBlurhash,
+    episode?.backdrop,
+    episode?.backdropBlurhash,
   ]);
 
   // Handle go to show info
@@ -155,7 +152,7 @@ export default function EpisodeInfoPage() {
   }, [router]);
 
   // Loading state
-  if (tvData.isLoading) {
+  if (episodeData.isLoading) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
@@ -167,12 +164,12 @@ export default function EpisodeInfoPage() {
   }
 
   // Error state or episode not found
-  if (tvData.error || !tvData.data || !episode) {
+  if (episodeData.error || !episodeData.data || !episode) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>
-            {tvData.error || "Episode not found"}
+            {episodeData.error || "Episode not found"}
           </Text>
           <TouchableOpacity style={styles.backButton} onPress={handleGoBack}>
             <Text style={styles.backButtonText}>Go Back</Text>
@@ -217,10 +214,23 @@ export default function EpisodeInfoPage() {
         {/* Hero section with episode thumbnail */}
         <View style={[styles.heroSection, { height: screenHeight * 0.4 }]}>
           <ImageBackground
-            source={{ uri: episode?.episode?.thumbnail }}
-            placeholder={{
-              uri: `data:image/png;base64,${episode?.episode?.thumbnailBlurhash}`,
+            source={{
+              uri:
+                episode?.episode?.thumbnail &&
+                episode.episode.thumbnail.trim() !== ""
+                  ? episode.episode.thumbnail
+                  : (episode?.backdrop ?? ""),
             }}
+            placeholder={
+              episode?.episode?.thumbnailBlurhash || episode?.backdropBlurhash
+                ? {
+                    uri: `data:image/png;base64,${
+                      episode?.episode?.thumbnailBlurhash ||
+                      episode?.backdropBlurhash
+                    }`,
+                  }
+                : undefined
+            }
             style={styles.heroBackground}
             contentFit="cover"
             placeholderContentFit="cover"
@@ -242,10 +252,27 @@ export default function EpisodeInfoPage() {
                   )}
                 </View>
 
-                {/* Episode title */}
-                <Text style={styles.episodeTitle} numberOfLines={2}>
-                  {episode.title}
-                </Text>
+                {/* Episode title or logo fallback */}
+                {episode?.episode?.title ? (
+                  <Text style={styles.episodeTitle} numberOfLines={2}>
+                    {episode.episode.title}
+                  </Text>
+                ) : episode?.logo ? (
+                  <View style={styles.logoContainer}>
+                    <OptimizedImage
+                      source={episode.logo}
+                      contentFit="contain"
+                      style={styles.logoImage}
+                      priority="high"
+                      width={300}
+                      quality={100}
+                    />
+                  </View>
+                ) : (
+                  <Text style={styles.episodeTitle} numberOfLines={2}>
+                    {episode?.showTitle || "Episode"}
+                  </Text>
+                )}
 
                 {/* Duration and watch progress */}
                 <View style={styles.progressContainer}>
@@ -291,12 +318,12 @@ export default function EpisodeInfoPage() {
 
         {/* Info section */}
         <View style={styles.infoSection}>
-          {/* Episode description */}
-          {episode?.episode?.description && (
+          {/* Episode description - fallback to metadata overview */}
+          {(episode?.episode?.description || episode?.metadata?.overview) && (
             <View style={styles.descriptionContainer}>
               <Text style={styles.descriptionTitle}>Synopsis</Text>
               <Text style={styles.descriptionText}>
-                {episode?.episode?.description}
+                {episode?.episode?.description || episode?.metadata?.overview}
               </Text>
             </View>
           )}
@@ -318,7 +345,7 @@ export default function EpisodeInfoPage() {
                 contentFit="cover"
                 placeholderContentFit="cover"
                 width={80}
-                quality={85}
+                quality={75}
               />
 
               <View style={styles.showInfoContent}>
@@ -371,7 +398,7 @@ export default function EpisodeInfoPage() {
                           contentFit="cover"
                           priority="normal"
                           width={120}
-                          quality={85}
+                          quality={75}
                         />
                       ) : (
                         <View
@@ -424,7 +451,7 @@ export default function EpisodeInfoPage() {
                           contentFit="cover"
                           priority="normal"
                           width={120}
-                          quality={85}
+                          quality={75}
                         />
                       ) : (
                         <View
@@ -598,6 +625,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     marginLeft: 8,
+  },
+  logoContainer: {
+    height: 60,
+    marginBottom: 20,
+    width: 300,
+  },
+  logoImage: {
+    height: "100%",
+    width: "100%",
   },
 
   // Info section styles

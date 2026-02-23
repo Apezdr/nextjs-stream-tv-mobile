@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
 import MobileContentList from "@/src/components/Mobile/Lists/MobileContentList";
-import MobileContentRow from "@/src/components/Mobile/Rows/MobileContentRow";
+import MobileGenreRow from "@/src/components/Mobile/Rows/MobileGenreRow";
 import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
@@ -66,44 +66,15 @@ export default function MoviesPage() {
     enabled: viewMode === "all",
   });
 
-  // Fetch movies by genre
-  const genreMoviesQueries = useQuery({
-    queryKey: ["genreMovies", "preview"],
-    queryFn: async () => {
-      if (!genresData?.availableGenres) return [];
-
-      // Fetch a small sample from each genre for the genre view
-      const genrePromises = genresData.availableGenres
-        .slice(0, 6)
-        .map(async (genre) => {
-          const content = await contentService.getGenreContent({
-            action: "content",
-            genre: genre.name,
-            type: "movie",
-            limit: 10,
-            includeWatchHistory: true,
-            isTVdevice: false,
-          });
-          return {
-            genre: genre.name,
-            items: content.currentItems,
-          };
-        });
-
-      return Promise.all(genrePromises);
-    },
-    enabled: viewMode === "genres" && !!genresData?.availableGenres,
-  });
-
   // Transform MediaItem to MobileContentCardData
   const transformMediaItems = useCallback(
     (items: MediaItem[] = []): MobileContentCardData[] => {
       return items.map((item) => ({
         id: item.id,
         title: item.title,
-        thumbnailUrl: item.posterURL,
-        thumbnailBlurhash: item.posterBlurhash,
-        backdropUrl: item.backdrop,
+        thumbnailUrl: item.thumbnailUrl || item.posterURL,
+        thumbnailBlurhash: item.thumbnailBlurhash || item.posterBlurhash,
+        backdropUrl: item.backdropUrl || item.backdrop,
         backdropBlurhash: item.backdropBlurhash,
         mediaType: item.type,
         seasonNumber: item.seasonNumber,
@@ -121,6 +92,11 @@ export default function MoviesPage() {
     if (!allMoviesData) return [];
     return allMoviesData.pages.flatMap((page) => page?.currentItems || []);
   }, [allMoviesData]);
+
+  // Handle show more for genre
+  const handleShowMore = useCallback((genre: string) => {
+    console.log(`See all ${genre} movies`);
+  }, []);
 
   // Handle play content - direct to watch page
   const handlePlayContent = useCallback(
@@ -208,7 +184,7 @@ export default function MoviesPage() {
   // Focus-aware data refresh - refetch data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      // Refresh data when screen becomes focused
+      // Refresh all movies data when screen becomes focused
       refetchAllMovies();
     }, [refetchAllMovies]),
   );
@@ -257,18 +233,18 @@ export default function MoviesPage() {
       {/* Content */}
       {viewMode === "genres" ? (
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {genreMoviesQueries.data?.map((genreData) => (
-            <MobileContentRow
-              key={genreData.genre}
-              title={genreData.genre}
-              data={transformMediaItems(genreData.items)}
+          {genresData?.availableGenres?.map((genreInfo) => (
+            <MobileGenreRow
+              key={genreInfo.name}
+              genre={genreInfo.name}
+              type="movie"
               onPlayContent={handlePlayContent}
               onInfoContent={handleInfoContent}
               cardSize="medium"
               showMoreButton
-              onShowMore={() =>
-                console.log(`See all ${genreData.genre} movies`)
-              }
+              onShowMore={handleShowMore}
+              enabled={viewMode === "genres"}
+              limit={20}
             />
           ))}
         </ScrollView>

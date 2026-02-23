@@ -61,8 +61,8 @@ export function isValidYouTubeUrl(url: string): boolean {
  */
 export function getYouTubeThumbnailUrls(videoId: string) {
   return {
-    primary: getYouTubeThumbnailUrl(videoId, "maxresdefault"),
-    fallback: getYouTubeThumbnailUrl(videoId, "hqdefault"),
+    primary: getYouTubeThumbnailUrl(videoId, "hqdefault"),
+    fallback: getYouTubeThumbnailUrl(videoId, "maxresdefault"),
     medium: getYouTubeThumbnailUrl(videoId, "mqdefault"),
     standard: getYouTubeThumbnailUrl(videoId, "sddefault"),
   };

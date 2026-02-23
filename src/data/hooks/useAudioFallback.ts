@@ -86,15 +86,31 @@ export function useAudioFallback({
     setError(null);
 
     try {
+      // Preserve current playback position before replace
+      const currentTime = player.currentTime || 0;
+      console.log(
+        `[useAudioFallback] Preserving current time: ${currentTime}s before audio track fallback`,
+      );
+
       player.audioTrack = next;
       if (urlRef.current) {
         await player.replaceAsync({ uri: urlRef.current });
+
+        // Restore the position after replace
+        if (currentTime > 0) {
+          player.currentTime = currentTime;
+          console.log(
+            `[useAudioFallback] Restored current time: ${currentTime}s after audio track fallback`,
+          );
+        }
+
         player.play();
       } else {
         setError("No video URL available for playback.");
         return;
       }
-    } catch {
+    } catch (error) {
+      console.error(`[useAudioFallback] Error during fallback:`, error);
       // immediate retry on replace/play failure
       return doFallback();
     }

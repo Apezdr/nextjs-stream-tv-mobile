@@ -21,12 +21,13 @@ import CaptionControls, {
   SUBTITLE_BACKGROUND_OPTIONS,
 } from "./CaptionControls";
 import EpisodeCarousel from "./EpisodeCarousel";
-import SeekBar from "./SeekBar";
+import SeekBar, { type PlayerState } from "./SeekBar";
 import SubtitlePlayer from "./SubtitlePlayer";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
 
 interface StandaloneVideoControlsProps {
   player: VideoPlayer; // expo-video player instance
@@ -108,15 +109,41 @@ const StandaloneVideoControls = memo(
       resetActivityTimer,
       startContinuousActivity,
       stopContinuousActivity,
+      registerPlayPauseHandler,
+      unregisterPlayPauseHandler,
+      registerSeekHandler,
+      unregisterSeekHandler,
     } = useRemoteActivity();
 
     // State for SeekBar preferred focus management
     const [seekBarShouldFocus, setSeekBarShouldFocus] = useState(true); // Initially true for first load
 
+    // Subtitle preferences (persisted)
+    const subtitlesEnabled = useSubtitlePreferencesStore((s) => s.subtitlesEnabled);
+    const preferredLanguage = useSubtitlePreferencesStore((s) => s.preferredLanguage);
+    const setSubtitlesEnabled = useSubtitlePreferencesStore((s) => s.setSubtitlesEnabled);
+    const setPreferredLanguage = useSubtitlePreferencesStore((s) => s.setPreferredLanguage);
+
     // Caption selection state - use undefined to distinguish from user selecting "Off" (null)
-    const [selectedCaptionLanguage, setSelectedCaptionLanguage] = useState<
+    const [selectedCaptionLanguage, setSelectedCaptionLanguageRaw] = useState<
       string | null | undefined
     >(undefined);
+
+    // Wrap setter to persist preference changes
+    const setSelectedCaptionLanguage = useCallback(
+      (language: string | null | undefined) => {
+        setSelectedCaptionLanguageRaw(language);
+        if (language === null) {
+          // User explicitly turned subtitles off
+          setSubtitlesEnabled(false);
+        } else if (typeof language === "string") {
+          // User selected a language
+          setSubtitlesEnabled(true);
+          setPreferredLanguage(language);
+        }
+      },
+      [setSubtitlesEnabled, setPreferredLanguage],
+    );
 
     // Subtitle style state
     const [selectedSubtitleStyle, setSelectedSubtitleStyle] =
@@ -142,6 +169,76 @@ const StandaloneVideoControls = memo(
 
     // Local state for duration (doesn't change frequently)
     const [duration, setDuration] = useState(0);
+
+    // Player state detection for unified state management
+    const [playerState, setPlayerState] = useState<PlayerState>("normal");
+    const [watchHistoryState, setWatchHistoryState] = useState<
+      "loading" | "applying" | "normal"
+    >("normal");
+
+    // Determine current player state based on various conditions
+    useEffect(() => {
+      // Watch history states take priority
+      if (watchHistoryState === "loading") {
+        setPlayerState("watch-history-loading");
+        return;
+      }
+      if (watchHistoryState === "applying") {
+        setPlayerState("watch-history-applying");
+        return;
+      }
+
+      // Episode switching state
+      if (isEpisodeSwitching) {
+        setPlayerState("buffering");
+        return;
+      }
+
+      // Initial loading state - when we have no duration yet, we're loading
+      if (duration <= 0) {
+        setPlayerState("buffering");
+        return;
+      }
+
+      // Player status-based states
+      switch (status) {
+        case "loading":
+          setPlayerState("buffering");
+          break;
+        case "readyToPlay":
+          if (currentTime === 0 && !isPlaying) {
+            // Ready but not started yet
+            setPlayerState("buffering");
+          } else {
+            setPlayerState("normal");
+          }
+          break;
+        case "error":
+          setPlayerState("error");
+          break;
+        case "idle":
+          if (duration > 0) {
+            setPlayerState("normal");
+          } else {
+            setPlayerState("buffering");
+          }
+          break;
+        default:
+          // For unknown status, check if we have valid duration
+          if (duration > 0) {
+            setPlayerState("normal");
+          } else {
+            setPlayerState("buffering");
+          }
+      }
+    }, [
+      status,
+      currentTime,
+      isPlaying,
+      isEpisodeSwitching,
+      watchHistoryState,
+      duration,
+    ]);
 
     // Create animated value for opacity
     const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -244,6 +341,18 @@ const StandaloneVideoControls = memo(
       }
     }, [player, currentTime, duration]);
 
+    // Register play/pause handler for TV remote
+    useEffect(() => {
+      registerPlayPauseHandler(handleTogglePlay);
+      return () => unregisterPlayPauseHandler();
+    }, [handleTogglePlay, registerPlayPauseHandler, unregisterPlayPauseHandler]);
+
+    // Register seek handler for TV remote rewind/fast-forward
+    useEffect(() => {
+      registerSeekHandler(handleSeekBy);
+      return () => unregisterSeekHandler();
+    }, [handleSeekBy, registerSeekHandler, unregisterSeekHandler]);
+
     const handleSeek = useCallback(
       (time: number) => {
         if (!player) return;
@@ -268,32 +377,43 @@ const StandaloneVideoControls = memo(
       [player],
     );
 
-    // Initialize default caption language (only once when captionURLs first become available)
+    // Initialize caption language from persisted preferences
     useEffect(() => {
       if (videoInfo?.captionURLs && selectedCaptionLanguage === undefined) {
+        // If user previously turned subtitles off, respect that
+        if (!subtitlesEnabled) {
+          setSelectedCaptionLanguageRaw(null);
+          return;
+        }
+
         const availableLanguages = Object.keys(videoInfo.captionURLs);
 
-        // First try to find English by name
-        if (availableLanguages.includes("English")) {
-          setSelectedCaptionLanguage("English");
+        // Try the user's preferred language first
+        if (preferredLanguage && availableLanguages.includes(preferredLanguage)) {
+          setSelectedCaptionLanguageRaw(preferredLanguage);
         } else {
-          // Then try to find English by srcLang code
-          const englishLang = availableLanguages.find(
-            (lang) =>
-              videoInfo.captionURLs &&
-              (videoInfo.captionURLs[lang].srcLang === "eng" ||
-                videoInfo.captionURLs[lang].srcLang === "en"),
-          );
+          // Fallback: try to find English by name
+          if (availableLanguages.includes("English")) {
+            setSelectedCaptionLanguageRaw("English");
+          } else {
+            // Then try to find English by srcLang code
+            const englishLang = availableLanguages.find(
+              (lang) =>
+                videoInfo.captionURLs &&
+                (videoInfo.captionURLs[lang].srcLang === "eng" ||
+                  videoInfo.captionURLs[lang].srcLang === "en"),
+            );
 
-          if (englishLang) {
-            setSelectedCaptionLanguage(englishLang);
-          } else if (availableLanguages.length > 0) {
-            // Fallback to first available language
-            setSelectedCaptionLanguage(availableLanguages[0]);
+            if (englishLang) {
+              setSelectedCaptionLanguageRaw(englishLang);
+            } else if (availableLanguages.length > 0) {
+              // Fallback to first available language
+              setSelectedCaptionLanguageRaw(availableLanguages[0]);
+            }
           }
         }
       }
-    }, [videoInfo?.captionURLs, selectedCaptionLanguage]);
+    }, [videoInfo?.captionURLs, selectedCaptionLanguage, subtitlesEnabled, preferredLanguage]);
 
     // Reset SeekBar focus state after it's been applied (for initial load and episode changes)
     useEffect(() => {
@@ -522,84 +642,87 @@ const StandaloneVideoControls = memo(
               </View>
             )}
 
-            {/* 4. Seek Bar Section */}
+            {/* 4. Seek Bar Section - Always show, even during loading */}
             <View style={styles.seekBarSection}>
-              {duration > 0 && (
-                <>
-                  <SeekBar
-                    currentTime={currentTime}
-                    duration={duration}
-                    onSeek={handleSeek}
-                    onSeekBy={handleSeekBy}
-                    onTogglePlay={handleTogglePlay}
-                    isPlaying={isPlaying}
-                    onStartSeeking={startContinuousActivity}
-                    onStopSeeking={stopContinuousActivity}
-                    hasTVPreferredFocus={!seekBarShouldFocus}
-                  />
+              <SeekBar
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={handleSeek}
+                onSeekBy={handleSeekBy}
+                onTogglePlay={handleTogglePlay}
+                isPlaying={isPlaying}
+                onStartSeeking={startContinuousActivity}
+                onStopSeeking={stopContinuousActivity}
+                hasTVPreferredFocus={!seekBarShouldFocus}
+                playerState={playerState}
+                stateMessage={
+                  episodeSwitchError
+                    ? `Error: ${episodeSwitchError}`
+                    : undefined
+                }
+              />
 
-                  {/* Caption Controls */}
-                  {showCaptionControls && (
-                    <CaptionControls
-                      captionURLs={videoInfo?.captionURLs}
-                      selectedCaptionLanguage={selectedCaptionLanguage}
-                      onCaptionLanguageChange={setSelectedCaptionLanguage}
-                      selectedSubtitleStyle={selectedSubtitleStyle}
-                      onSubtitleStyleChange={setSelectedSubtitleStyle}
-                      selectedSubtitleBackground={selectedSubtitleBackground}
-                      onSubtitleBackgroundChange={setSelectedSubtitleBackground}
-                      onActivityReset={resetActivityTimer}
-                      shouldAllowFocusDown={
-                        videoInfo?.type !== "tv" &&
-                        (!episodes || episodes.length === 0)
-                      } // Allow focus to move down to the next control
+              {/* Caption Controls - only show when duration is available */}
+              {duration > 0 && showCaptionControls && (
+                <CaptionControls
+                  captionURLs={videoInfo?.captionURLs}
+                  selectedCaptionLanguage={selectedCaptionLanguage}
+                  onCaptionLanguageChange={setSelectedCaptionLanguage}
+                  selectedSubtitleStyle={selectedSubtitleStyle}
+                  onSubtitleStyleChange={setSelectedSubtitleStyle}
+                  selectedSubtitleBackground={selectedSubtitleBackground}
+                  onSubtitleBackgroundChange={setSelectedSubtitleBackground}
+                  onActivityReset={resetActivityTimer}
+                  shouldAllowFocusDown={
+                    videoInfo?.type !== "tv" &&
+                    (!episodes || episodes.length === 0)
+                  } // Allow focus to move down to the next control
+                />
+              )}
+
+              {/* 5. Episode Carousel Section - only show when duration is available */}
+              {duration > 0 &&
+                videoInfo?.type === "tv" &&
+                episodes &&
+                episodes.length > 0 && (
+                  <View style={styles.episodeCarouselInFlow}>
+                    <EpisodeCarousel
+                      episodes={episodes}
+                      currentEpisodeNumber={currentEpisodeNumber || 1}
+                      onEpisodeSelect={(episode) => {
+                        resetActivityTimer();
+                        if (onEpisodeSelect) {
+                          onEpisodeSelect(episode);
+                          // Transfer focus to SeekBar using hasTVPreferredFocus toggle
+                          setSeekBarShouldFocus(true);
+                        }
+                      }}
+                      isLoading={isLoadingEpisodes}
+                      disabled={isEpisodeSwitching}
                     />
-                  )}
+                  </View>
+                )}
 
-                  {/* 5. Episode Carousel Section - Part of main focus flow */}
-                  {videoInfo?.type === "tv" &&
-                    episodes &&
-                    episodes.length > 0 && (
-                      <View style={styles.episodeCarouselInFlow}>
-                        <EpisodeCarousel
-                          episodes={episodes}
-                          currentEpisodeNumber={currentEpisodeNumber || 1}
-                          onEpisodeSelect={(episode) => {
-                            resetActivityTimer();
-                            if (onEpisodeSelect) {
-                              onEpisodeSelect(episode);
-                              // Transfer focus to SeekBar using hasTVPreferredFocus toggle
-                              setSeekBarShouldFocus(true);
-                            }
-                          }}
-                          isLoading={isLoadingEpisodes}
-                          disabled={isEpisodeSwitching}
-                        />
-                      </View>
-                    )}
-
-                  {/* Episode switching error display */}
-                  {episodeSwitchError && (
-                    <View style={styles.errorContainer}>
-                      <Text style={styles.errorText}>
-                        Episode switch failed: {episodeSwitchError}
-                      </Text>
-                      <Pressable
-                        style={({ focused }) => [
-                          styles.retryButton,
-                          focused && styles.retryButtonFocused,
-                        ]}
-                        onPress={() => {
-                          resetActivityTimer();
-                          // Could implement retry logic here if needed
-                        }}
-                        focusable={true}
-                      >
-                        <Text style={styles.retryButtonText}>Dismiss</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                </>
+              {/* Episode switching error display */}
+              {episodeSwitchError && (
+                <View style={styles.errorContainer}>
+                  <Text style={styles.errorText}>
+                    Episode switch failed: {episodeSwitchError}
+                  </Text>
+                  <Pressable
+                    style={({ focused }) => [
+                      styles.retryButton,
+                      focused && styles.retryButtonFocused,
+                    ]}
+                    onPress={() => {
+                      resetActivityTimer();
+                      // Could implement retry logic here if needed
+                    }}
+                    focusable={true}
+                  >
+                    <Text style={styles.retryButtonText}>Dismiss</Text>
+                  </Pressable>
+                </View>
               )}
             </View>
           </TVFocusGuideView>

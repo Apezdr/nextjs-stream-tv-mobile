@@ -57,6 +57,8 @@ interface MobileContentCardProps {
   ) => void;
   layout?: "grid" | "list";
   size?: "small" | "medium" | "large";
+  /** Orientation key to force re-render when orientation changes */
+  orientationKey?: string;
 }
 
 const MobileContentCard = ({
@@ -65,6 +67,7 @@ const MobileContentCard = ({
   onInfo,
   layout = "grid",
   size = "medium",
+  orientationKey,
 }: MobileContentCardProps) => {
   const { generateConfig } = useActionSheetConfig();
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
@@ -72,6 +75,9 @@ const MobileContentCard = ({
   // Get responsive dimensions that will update with orientation changes
   const { window } = useDimensions();
   const screenWidth = window.width;
+
+  // Check if we're in landscape mode
+  const isLandscape = window.width > window.height;
 
   // Calculate responsive dimensions
   const dimensions = useMemo(() => {
@@ -84,11 +90,23 @@ const MobileContentCard = ({
       };
     }
 
-    // Grid layout calculations
-    const columns = size === "small" ? 3 : size === "large" ? 2 : 2.5;
+    // Grid layout calculations - adjust columns based on orientation
+    let columns;
+    if (isLandscape) {
+      // More columns in landscape mode
+      columns = size === "small" ? 5 : size === "large" ? 3.5 : 4;
+    } else {
+      // Fewer columns in portrait mode
+      columns = size === "small" ? 3 : size === "large" ? 2 : 2.5;
+    }
+
     const padding = 16;
-    const cardWidth = (screenWidth - padding * (columns + 1)) / columns;
-    const cardHeight = cardWidth * 1.5; // 2:3 aspect ratio for posters
+    // Calculate fixed card width based on screen size and columns
+    const cardWidth = Math.floor(
+      (screenWidth - padding * (columns + 1)) / columns,
+    );
+    // Maintain aspect ratio for posters (2:3)
+    const cardHeight = Math.floor(cardWidth * 1.5);
 
     return {
       width: cardWidth,
@@ -96,7 +114,7 @@ const MobileContentCard = ({
       imageWidth: cardWidth,
       imageHeight: cardWidth * 1.5,
     };
-  }, [layout, size]);
+  }, [layout, size, screenWidth, isLandscape, orientationKey]);
 
   // Handle card press - show action sheet
   const handlePress = useCallback(() => {
@@ -256,13 +274,15 @@ const MobileContentCard = ({
             },
           ]}
           width={450}
-          quality={78}
+          quality={75}
           placeholder={{
             uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
           }}
           placeholderContentFit="cover"
           contentFit="cover"
-          transition={200}
+          transition={300}
+          priority="high"
+          recyclingKey={`${item.thumbnailUrl}-${dimensions.width}x${dimensions.height}`}
         />
 
         {/* Season/Episode overlay for TV shows */}
@@ -455,11 +475,26 @@ const areEqual = (
   prevProps: MobileContentCardProps,
   nextProps: MobileContentCardProps,
 ) => {
-  return (
-    prevProps.layout === nextProps.layout &&
-    prevProps.size === nextProps.size &&
-    prevProps.item === nextProps.item
-  );
+  // Always re-render if orientation key changes
+  if (prevProps.orientationKey !== nextProps.orientationKey) {
+    return false;
+  }
+
+  // Always re-render if item reference changes
+  if (prevProps.item !== nextProps.item) {
+    return false;
+  }
+
+  // Always re-render if layout or size changes
+  if (
+    prevProps.layout !== nextProps.layout ||
+    prevProps.size !== nextProps.size
+  ) {
+    return false;
+  }
+
+  // Otherwise, consider them equal (no re-render needed)
+  return true;
 };
 
 export default memo(MobileContentCard, areEqual);

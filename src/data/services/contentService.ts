@@ -22,8 +22,37 @@ import {
   GenresListParams,
   GenresContentResponse,
   GenresContentParams,
+  MediaItem,
 } from "@/src/data/types/content.types";
 import { generateUserAgent } from "@/src/utils/deviceInfo";
+
+// Environment-controlled debug logging for horizontal list fetches
+const HORIZONTAL_LIST_DEBUG_ENABLED =
+  process.env.EXPO_PUBLIC_HORIZONTAL_LIST_DEBUG === "true";
+
+/**
+ * Debug logger for horizontal list requests
+ */
+function logHorizontalListRequest(
+  source: string,
+  endpoint: string,
+  queryParams: string,
+  params: unknown,
+) {
+  if (!HORIZONTAL_LIST_DEBUG_ENABLED) return;
+
+  const baseURL = enhancedApiClient.getBaseUrl();
+  const fullURL = `${baseURL}${endpoint}${queryParams}`;
+
+  console.log(`[${source}] Horizontal List Request:`, {
+    baseURL,
+    endpoint,
+    queryParams,
+    fullURL,
+    requestParams: params,
+    timestamp: new Date().toISOString(),
+  });
+}
 
 // Types for playback tracking
 export interface PlaybackUpdateRequest {
@@ -53,13 +82,16 @@ export const contentService = {
       limit = 30,
     } = params;
 
-    const queryParams = buildQueryParams({
-      type,
-      sort,
-      sortOrder,
-      page,
-      limit,
-    });
+    const requestParams = { type, sort, sortOrder, page, limit };
+    const queryParams = buildQueryParams(requestParams);
+
+    // Debug logging for horizontal list fetch
+    logHorizontalListRequest(
+      "contentService.getContentList",
+      API_ENDPOINTS.CONTENT.HORIZONTAL_LIST,
+      queryParams,
+      requestParams,
+    );
 
     // Use regular get method - React Query will handle caching
     return enhancedApiClient.get<ContentListResponse>(
@@ -164,7 +196,7 @@ export const contentService = {
       includeWatchHistory,
     });
 
-    console.log(':::::', `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`)
+    console.log(":::::", `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`);
 
     // Use regular get method - React Query will handle caching
     return enhancedApiClient.get<TVDeviceMediaResponse>(
@@ -391,8 +423,49 @@ export const contentService = {
       isTVdevice,
     });
 
-    return enhancedApiClient.get<GenresContentResponse>(
-      `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+    const endpoint = `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`;
+    const baseURL = enhancedApiClient.getBaseUrl();
+
+    console.log(`[contentService.getGenreContent] Requesting:`, {
+      fullURL: `${baseURL}${endpoint}`,
+      params: { genre, type, page, limit, sort, sortOrder },
+    });
+
+    const response =
+      await enhancedApiClient.get<GenresContentResponse>(endpoint);
+
+    console.log(`[contentService.getGenreContent] Response for ${genre}:`, {
+      itemsReceived: response.currentItems?.length || 0,
+      hasNextItem: !!response.nextItem,
+      nextItem: response.nextItem,
+    });
+
+    return response;
+  },
+
+  /**
+   * Search for media content
+   */
+  search: async (query: string = "", limit?: number): Promise<MediaItem[]> => {
+    const endpoint = API_ENDPOINTS.CONTENT.SEARCH;
+    const baseURL = enhancedApiClient.getBaseUrl();
+
+    console.log(`[contentService.search] Requesting:`, {
+      fullURL: `${baseURL}${endpoint}`,
+      query: query || "(empty - recently added)",
+      limit,
+    });
+
+    const response = await enhancedApiClient.post<{ results: MediaItem[] }>(
+      endpoint,
+      { query, ...(limit && { limit }) },
     );
+
+    console.log(`[contentService.search] Response:`, {
+      itemsReceived: response.results?.length || 0,
+      query: query || "(recently added)",
+    });
+
+    return response.results || [];
   },
 };

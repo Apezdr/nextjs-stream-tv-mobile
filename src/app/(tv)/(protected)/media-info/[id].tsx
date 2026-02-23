@@ -6,6 +6,7 @@ import {
   useEffect,
   useTransition,
   useDeferredValue,
+  useMemo,
 } from "react";
 import {
   View,
@@ -52,6 +53,78 @@ function formatTimeFromMs(ms?: number | null): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Helper to extract and format resolution information from various sources
+ */
+function formatResolution(dimensions?: string): string | null {
+  // For movies or fallback, use the direct dimensions or hdr field
+  if (dimensions) {
+    return parseResolution(dimensions);
+  }
+
+  return null;
+}
+
+/**
+ * Helper to format HDR information for display
+ */
+function formatHDR(hdr?: string | boolean): string | null {
+  if (!hdr) return null;
+
+  if (typeof hdr === "string") {
+    // Clean up common HDR format strings
+    if (hdr.toLowerCase().includes("hdr10+")) return "HDR10+";
+    if (hdr.toLowerCase().includes("hdr10")) return "HDR10";
+    if (hdr.toLowerCase().includes("dolby vision")) return "Dolby Vision";
+    if (hdr.toLowerCase().includes("hdr")) return "HDR";
+
+    // Return the string as-is if it contains useful HDR info
+    if (hdr.trim().length > 0 && !hdr.toLowerCase().includes("sdr")) {
+      return hdr.trim();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse resolution from dimension/hdr strings and return a user-friendly format
+ */
+function parseResolution(input: string): string | null {
+  if (!input) return null;
+
+  // Common resolution patterns
+  const resolutionPatterns = [
+    { pattern: /3840[x×]2160|4k|uhd/i, label: "4K" },
+    { pattern: /2560[x×]1440|1440p/i, label: "1440p" },
+    { pattern: /1920[x×]1080|1080p|fhd/i, label: "1080p" },
+    { pattern: /1280[x×]720|720p|hd/i, label: "720p" },
+    { pattern: /854[x×]480|480p/i, label: "480p" },
+    { pattern: /640[x×]360|360p/i, label: "360p" },
+  ];
+
+  for (const { pattern, label } of resolutionPatterns) {
+    if (pattern.test(input)) {
+      return label;
+    }
+  }
+
+  // If we can't parse a common resolution, try to extract WIDTHxHEIGHT pattern
+  const dimensionMatch = input.match(/(\d{3,4})[x×](\d{3,4})/);
+  if (dimensionMatch) {
+    const width = parseInt(dimensionMatch[1]);
+    if (width >= 3840) return "4K";
+    if (width >= 2560) return "1440p";
+    if (width >= 1920) return "1080p";
+    if (width >= 1280) return "720p";
+    if (width >= 854) return "480p";
+    if (width >= 640) return "360p";
+    return `${width}p`;
+  }
+
+  return null;
+}
+
 export default function MediaInfoPage() {
   const router = useRouter();
   const { setMode } = useTVAppState();
@@ -61,8 +134,8 @@ export default function MediaInfoPage() {
     season?: string;
   }>();
 
-  const [selectedSeason, setSelectedSeason] = useState<number>(
-    params.season ? parseInt(params.season) : 1,
+  const [selectedSeason, setSelectedSeason] = useState<number | undefined>(
+    params.season ? parseInt(params.season) : undefined,
   );
   const [isOverviewTruncated, setIsOverviewTruncated] =
     useState<boolean>(false);
@@ -97,6 +170,31 @@ export default function MediaInfoPage() {
       : null,
   );
 
+  // Derive initial season from server response when none is provided
+  useEffect(() => {
+    if (params.type !== "tv") return;
+    if (!tvData.data) return;
+    if (selectedSeason !== undefined) return;
+
+    const availableSeasons = tvData.data.availableSeasons || [];
+    const navCurrent = tvData.data.navigation?.seasons?.current;
+
+    let derived: number | undefined;
+    if (
+      typeof navCurrent === "number" &&
+      Array.isArray(availableSeasons) &&
+      availableSeasons.includes(navCurrent)
+    ) {
+      derived = navCurrent;
+    } else if (Array.isArray(availableSeasons) && availableSeasons.length > 0) {
+      derived = Math.min(...availableSeasons);
+    }
+
+    if (derived !== undefined) {
+      setSelectedSeason(derived);
+    }
+  }, [params.type, tvData.data, selectedSeason]);
+
   // Use the appropriate data based on media type
   const mediaInfo = params.type === "movie" ? movieData.data : tvData.data;
   const isLoading =
@@ -106,6 +204,33 @@ export default function MediaInfoPage() {
   const isRefreshing =
     params.type === "movie" ? movieData.isRefreshing : tvData.isRefreshing;
   const error = params.type === "movie" ? movieData.error : tvData.error;
+
+  // We no longer need these effects since the hook now handles
+  // preserving show metadata across season changes
+
+  // Compute merged display fields for TV shows
+  const mergedDisplayFields = useMemo(() => {
+    if (params.type !== "tv" || !mediaInfo) {
+      return {
+        displayGenres: mediaInfo?.metadata?.genres || [],
+        displayCast:
+          (mediaInfo as any)?.cast || mediaInfo?.metadata?.cast || [],
+        seasonOverview: mediaInfo?.metadata?.overview,
+        showOverview: undefined,
+      };
+    }
+
+    // With our updated hook, we now have both overviews directly in the metadata
+    const seasonOverview = mediaInfo.metadata?.overview;
+    const showOverview = mediaInfo.metadata?.showOverview;
+
+    return {
+      displayGenres: mediaInfo.metadata?.genres || [],
+      displayCast: (mediaInfo as any)?.cast || mediaInfo.metadata?.cast || [],
+      seasonOverview: seasonOverview,
+      showOverview: showOverview,
+    };
+  }, [params.type, mediaInfo]);
 
   // Extract backdrop values to prevent unnecessary re-renders from React Query updates
   const backdropUrl = mediaInfo?.backdrop;
@@ -184,7 +309,7 @@ export default function MediaInfoPage() {
           params: {
             id: params.id,
             type: params.type,
-            season: selectedSeason,
+            season: selectedSeason ?? mediaInfo?.seasonNumber,
             episode: episode.episodeNumber,
             backdrop: mediaInfo?.backdrop,
             backdropBlurhash: mediaInfo?.backdropBlurhash,
@@ -261,14 +386,23 @@ export default function MediaInfoPage() {
 
   // Fade in overview when new season data loads
   useEffect(() => {
-    if (mediaInfo?.metadata?.overview && !isLoadingEpisodes) {
+    if (
+      (mergedDisplayFields.seasonOverview ||
+        mergedDisplayFields.showOverview) &&
+      !isLoadingEpisodes
+    ) {
       Animated.timing(overviewOpacity, {
         toValue: 1,
         duration: 300,
         useNativeDriver: true,
       }).start();
     }
-  }, [mediaInfo?.metadata?.overview, isLoadingEpisodes, overviewOpacity]);
+  }, [
+    mergedDisplayFields.seasonOverview,
+    mergedDisplayFields.showOverview,
+    isLoadingEpisodes,
+    overviewOpacity,
+  ]);
 
   if (isLoading) {
     return (
@@ -326,10 +460,12 @@ export default function MediaInfoPage() {
 
             {/* Metadata Row */}
             <View style={styles.metadataRow}>
-              {mediaInfo.metadata.rating ? (
+              {mediaInfo.metadata.vote_average != null &&
+              typeof mediaInfo.metadata.vote_average === "number" &&
+              mediaInfo.metadata.vote_average > 0 ? (
                 <>
                   <Text style={styles.metadataRating}>
-                    ★ {mediaInfo.metadata.rating.toFixed(1)}
+                    ★ {mediaInfo.metadata.vote_average.toFixed(1)}
                   </Text>
                   <Text style={styles.metadataSeparator}>•</Text>
                 </>
@@ -346,20 +482,88 @@ export default function MediaInfoPage() {
                   : `${mediaInfo.totalSeasons} Seasons`}
               </Text>
               <Text style={styles.metadataSeparator}>•</Text>
-              <View style={styles.ratingBox}>
-                <Text style={styles.ratingBoxText}>TV-MA</Text>
-              </View>
+              {mediaInfo.metadata.rating &&
+                typeof mediaInfo.metadata.rating === "string" && (
+                  <View style={styles.ratingBox}>
+                    <Text style={styles.ratingBoxText}>
+                      {mediaInfo.metadata.rating}
+                    </Text>
+                  </View>
+                )}
             </View>
-            {mediaInfo.metadata.overview ? (
-              <Animated.View
-                style={[styles.overviewContainer, { opacity: overviewOpacity }]}
-              >
-                <ExpandableOverview
-                  overview={mediaInfo.metadata.overview}
-                  onTruncationChange={handleOverviewTruncationChange}
-                />
-              </Animated.View>
-            ) : null}
+            {/* Overview Section - Simplified Logic */}
+            {(() => {
+              const hasSeasonOverview = !!mergedDisplayFields.seasonOverview;
+              const hasShowOverview = !!mergedDisplayFields.showOverview;
+              const areDifferent =
+                hasSeasonOverview &&
+                hasShowOverview &&
+                mergedDisplayFields.seasonOverview !==
+                  mergedDisplayFields.showOverview;
+
+              return (
+                <>
+                  {/* Show Overview - only when both exist and are different */}
+                  {areDifferent && (
+                    <Animated.View
+                      style={[
+                        styles.overviewContainer,
+                        { opacity: overviewOpacity },
+                      ]}
+                    >
+                      <Text style={styles.overviewSectionTitle}>
+                        Show Overview
+                      </Text>
+                      <ExpandableOverview
+                        overview={mergedDisplayFields.showOverview!}
+                        maxLines={1}
+                        onTruncationChange={handleOverviewTruncationChange}
+                        overviewType="Show Overview"
+                      />
+                    </Animated.View>
+                  )}
+
+                  {/* Season Overview - show when it exists and either: no show overview, or they're different */}
+                  {hasSeasonOverview && (!hasShowOverview || areDifferent) && (
+                    <Animated.View
+                      style={[
+                        styles.overviewContainer,
+                        { opacity: overviewOpacity },
+                      ]}
+                    >
+                      <Text style={styles.overviewSectionTitle}>
+                        {areDifferent ? "Season Overview" : "Overview"}
+                      </Text>
+                      <ExpandableOverview
+                        overview={mergedDisplayFields.seasonOverview!}
+                        maxLines={1}
+                        onTruncationChange={handleOverviewTruncationChange}
+                        overviewType={
+                          areDifferent ? "Season Overview" : "Overview"
+                        }
+                      />
+                    </Animated.View>
+                  )}
+
+                  {/* Show Overview - only when season overview doesn't exist OR they're the same */}
+                  {hasShowOverview && (!hasSeasonOverview || !areDifferent) && (
+                    <Animated.View
+                      style={[
+                        styles.overviewContainer,
+                        { opacity: overviewOpacity },
+                      ]}
+                    >
+                      <Text style={styles.overviewSectionTitle}>Overview</Text>
+                      <ExpandableOverview
+                        overview={mergedDisplayFields.showOverview!}
+                        onTruncationChange={handleOverviewTruncationChange}
+                        overviewType="Overview"
+                      />
+                    </Animated.View>
+                  )}
+                </>
+              );
+            })()}
 
             {/* Season Picker */}
             <View style={styles.seasonPickerContainer}>
@@ -373,7 +577,11 @@ export default function MediaInfoPage() {
                 <SeasonPicker
                   navigation={mediaInfo.navigation}
                   availableSeasons={mediaInfo.availableSeasons}
-                  currentSeason={selectedSeason}
+                  currentSeason={
+                    selectedSeason ??
+                    mediaInfo.navigation?.seasons?.current ??
+                    mediaInfo.seasonNumber
+                  }
                   onSeasonChange={handleSeasonChange}
                 />
               </TVFocusGuideView>
@@ -384,7 +592,7 @@ export default function MediaInfoPage() {
           <View style={styles.rightColumn}>
             <View style={styles.episodesTitleContainer}>
               <Text style={styles.episodesTitle}>
-                Season {selectedSeason} Episodes
+                Season {selectedSeason ?? mediaInfo.seasonNumber} Episodes
               </Text>
               {isRefreshing && (
                 <View style={styles.refreshIndicator}>
@@ -404,6 +612,9 @@ export default function MediaInfoPage() {
                 <EpisodeList
                   episodes={mediaInfo.episodes}
                   onEpisodePress={handlePlayEpisode}
+                  fallbackBackdrop={mediaInfo.backdrop}
+                  fallbackBackdropBlurhash={mediaInfo.backdropBlurhash}
+                  logo={mediaInfo.logo}
                 />
               )}
             </TVFocusGuideView>
@@ -434,10 +645,12 @@ export default function MediaInfoPage() {
 
             {/* Metadata Row */}
             <View style={styles.metadataRow}>
-              {mediaInfo.metadata.rating ? (
+              {mediaInfo.metadata.vote_average != null &&
+              typeof mediaInfo.metadata.vote_average === "number" &&
+              mediaInfo.metadata.vote_average > 0 ? (
                 <>
                   <Text style={styles.metadataRating}>
-                    ★ {mediaInfo.metadata.rating.toFixed(1)}
+                    ★ {mediaInfo.metadata.vote_average.toFixed(1)}
                   </Text>
                   <Text style={styles.metadataSeparator}>•</Text>
                 </>
@@ -450,6 +663,23 @@ export default function MediaInfoPage() {
               <Text style={styles.metadataSeparator}>•</Text>
               <Text style={styles.metadataType}>Movie</Text>
               <Text style={styles.metadataSeparator}>•</Text>
+              {(() => {
+                const resolution = formatResolution(
+                  (mediaInfo as any).dimensions,
+                );
+                const hdr = formatHDR((mediaInfo as any).hdr);
+                const qualityParts = [resolution, hdr].filter(Boolean);
+                const quality = qualityParts.join(" ");
+
+                return (
+                  quality && (
+                    <>
+                      <Text style={styles.metadataResolution}>{quality}</Text>
+                      <Text style={styles.metadataSeparator}>•</Text>
+                    </>
+                  )
+                );
+              })()}
               {/* If there's no significant watch history (less than 10 seconds), show duration inline */}
               {(!mediaInfo.watchHistory?.playbackTime ||
                 (mediaInfo.watchHistory?.playbackTime ?? 0) < 10) &&
@@ -461,9 +691,14 @@ export default function MediaInfoPage() {
                   <Text style={styles.metadataSeparator}>•</Text>
                 </>
               ) : null}
-              <View style={styles.ratingBox}>
-                <Text style={styles.ratingBoxText}>R</Text>
-              </View>
+              {mediaInfo.metadata.rating &&
+                typeof mediaInfo.metadata.rating === "string" && (
+                  <View style={styles.ratingBox}>
+                    <Text style={styles.ratingBoxText}>
+                      {mediaInfo.metadata.rating}
+                    </Text>
+                  </View>
+                )}
             </View>
 
             {/* Watch Progress Bar */}
@@ -480,10 +715,14 @@ export default function MediaInfoPage() {
             </View>
 
             {/* Overview */}
-            {mediaInfo.metadata.overview ? (
+            {mergedDisplayFields.seasonOverview ||
+            mergedDisplayFields.showOverview ? (
               <View style={styles.overviewContainer}>
                 <ExpandableOverview
-                  overview={mediaInfo.metadata.overview}
+                  overview={
+                    (mergedDisplayFields.seasonOverview ||
+                      mergedDisplayFields.showOverview)!
+                  }
                   onTruncationChange={handleOverviewTruncationChange}
                 />
               </View>
@@ -588,8 +827,19 @@ const styles = StyleSheet.create({
     color: "#CCCCCC",
     fontSize: 16,
   },
+  metadataResolution: {
+    color: "#00D4FF", // Cyan color to make resolution stand out
+    fontSize: 16,
+    fontWeight: "600",
+  },
   overviewContainer: {
-    marginTop: 16,
+    marginTop: 4,
+  },
+  overviewSectionTitle: {
+    color: Colors.dark.whiteText,
+    fontSize: 12,
+    fontWeight: "bold",
+    marginBottom: 12,
   },
   ratingBox: {
     backgroundColor: "#666666",
@@ -604,13 +854,13 @@ const styles = StyleSheet.create({
   },
   seasonPickerContainer: {
     flex: 1,
-    marginTop: 8,
+    marginTop: 2,
   },
   seasonPickerTitle: {
     color: Colors.dark.whiteText,
     fontSize: 20,
     fontWeight: "bold",
-    marginBottom: 16,
+    marginBottom: 0,
   },
 
   // Right column styles

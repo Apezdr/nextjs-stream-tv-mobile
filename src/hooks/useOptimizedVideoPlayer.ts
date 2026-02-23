@@ -12,11 +12,15 @@ interface SavedPlayerState {
 export function useOptimizedVideoPlayer(
   videoURL: string | null,
   onPlayerSetup?: (player: VideoPlayer) => void,
+  deferSetup?: boolean,
 ) {
   const isFocused = useIsFocused();
 
-  // Use the original useVideoPlayer - onPlayerSetup runs once on creation
-  const player = useVideoPlayer(videoURL, onPlayerSetup);
+  // Use the original useVideoPlayer - conditionally apply onPlayerSetup
+  const player = useVideoPlayer(
+    videoURL,
+    deferSetup ? undefined : onPlayerSetup,
+  );
 
   // Track the saved state when we clean up
   const savedState = useRef<SavedPlayerState | null>(null);
@@ -307,5 +311,15 @@ export function useOptimizedVideoPlayer(
     };
   }, []);
 
-  return { player, isFocused };
+  // Manual setup function for deferred setup
+  const setupPlayer = useCallback(
+    (setupCallback?: (player: VideoPlayer) => void) => {
+      if (player && setupCallback) {
+        setupCallback(player);
+      }
+    },
+    [player],
+  );
+
+  return { player, isFocused, setupPlayer };
 }

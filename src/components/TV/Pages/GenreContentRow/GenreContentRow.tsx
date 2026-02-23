@@ -21,7 +21,13 @@ const ContentRowFallback = () => (
 
 // Component for individual genre content rows
 interface GenreContentRowProps {
-  genre: { id: number; name: string; movieCount?: number };
+  genre: {
+    id: number;
+    name: string;
+    movieCount?: number;
+    tvShowCount?: number;
+  };
+  contentType?: "movie" | "tv";
   onSelectContent: (
     showId: string,
     seasonNumber: number | undefined,
@@ -35,6 +41,7 @@ interface GenreContentRowProps {
 
 const GenreContentRow = memo(function GenreContentRow({
   genre,
+  contentType = "movie",
   onSelectContent,
   transformMediaItems,
   isLastRow = false,
@@ -48,7 +55,12 @@ const GenreContentRow = memo(function GenreContentRow({
     hasNextPage,
     isFetchingNextPage,
     shouldLoad,
-  } = useGenreContentData({ genre, transformMediaItems, loadDelay });
+  } = useGenreContentData({
+    genre,
+    contentType,
+    transformMediaItems,
+    loadDelay,
+  });
 
   // Show loading state if not yet ready to load or actively loading
   if (!shouldLoad || isLoadingGenreContent) {
@@ -91,7 +103,7 @@ const GenreContentRow = memo(function GenreContentRow({
     <View style={styles.genreSection}>
       <Suspense fallback={<ContentRowFallback />}>
         <LazyContentRow
-          title={`${genre.name} Movies`}
+          title={`${genre.name} ${contentType === "tv" ? "TV Shows" : "Movies"}`}
           items={transformedGenreContent}
           onSelectContent={(
             showId: string,

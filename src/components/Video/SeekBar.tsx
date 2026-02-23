@@ -8,8 +8,25 @@ import {
   Pressable,
   useTVEventHandler,
 } from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withRepeat,
+  withSequence,
+} from "react-native-reanimated";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
+
+export type PlayerState =
+  | "normal" // Normal playback
+  | "buffering" // Video buffering/loading
+  | "watch-history-loading" // Loading watch history from server
+  | "watch-history-applying" // Applying watch history to player
+  | "seeking" // User actively seeking (handled internally)
+  | "stalled" // Network/playback stalled
+  | "error" // Error state
+  | "codec-loading"; // Audio/video codec switching
 
 interface SeekBarProps {
   currentTime: number;
@@ -23,6 +40,9 @@ interface SeekBarProps {
   onStartSeeking?: () => void;
   onStopSeeking?: () => void;
   hasTVPreferredFocus?: boolean;
+  playerState?: PlayerState;
+  stateMessage?: string;
+  stateProgress?: number; // 0-1 for states that have progress
 }
 
 export interface SeekBarRef {
@@ -60,8 +80,11 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
       onStartSeeking,
       onStopSeeking,
       hasTVPreferredFocus = true,
+      playerState = "normal",
+      stateMessage,
+      stateProgress,
     },
-    ref,
+    ref: React.ForwardedRef<SeekBarRef>,
   ) => {
     const {
       resetActivityTimer,
@@ -106,6 +129,53 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
     const BASE_RATE = 2; // start at 2× real-time (sec/sec)
     const ACCELERATION_RATE = 38; // +38 sec/sec²
     const MAX_RATE = 620; // cap at 620× real-time
+
+    // Animation values for loading states
+    const shimmerTranslateX = useSharedValue(-100);
+    const loadingProgress = useSharedValue(0);
+
+    // Setup animations based on player state
+    useEffect(() => {
+      const isLoadingState =
+        playerState === "buffering" ||
+        playerState === "watch-history-loading" ||
+        playerState === "watch-history-applying" ||
+        playerState === "stalled" ||
+        playerState === "codec-loading";
+
+      if (isLoadingState) {
+        // Simple sweeping shimmer from left to right using percentage
+        shimmerTranslateX.value = withRepeat(
+          withSequence(
+            withTiming(-100, { duration: 0 }), // Start off-screen left
+            withTiming(100, { duration: 1500 }), // Sweep to off-screen right
+          ),
+          -1,
+          false,
+        );
+
+        // Loading progress for states that have progress
+        if (
+          playerState === "watch-history-applying" &&
+          stateProgress !== undefined
+        ) {
+          loadingProgress.value = withTiming(stateProgress, { duration: 300 });
+        } else {
+          // Indeterminate: gentle breathing animation
+          loadingProgress.value = withRepeat(
+            withSequence(
+              withTiming(0.6, { duration: 1000 }),
+              withTiming(0.3, { duration: 1000 }),
+            ),
+            -1,
+            true,
+          );
+        }
+      } else {
+        shimmerTranslateX.value = -100;
+        loadingProgress.value = 0;
+      }
+    }, [playerState, stateProgress, shimmerTranslateX, loadingProgress]);
 
     // Update seek time when currentTime changes (but not when actively seeking)
     useEffect(() => {
@@ -241,6 +311,107 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
     const seekProgressPercentage =
       duration > 0 ? (seekTime / duration) * 100 : 0;
 
+    // Shimmer highlight style - moves independently using percentage
+    const animatedShimmerStyle = useAnimatedStyle(() => {
+      return {
+        transform: [{ translateX: `${shimmerTranslateX.value}%` }],
+      };
+    }, [shimmerTranslateX]);
+
+    const animatedLoadingProgressStyle = useAnimatedStyle(() => {
+      return {
+        width: `${loadingProgress.value * 100}%`,
+      };
+    }, [loadingProgress]);
+
+    // Get state-specific icon and message
+    const getStateIcon = () => {
+      if (isSeeking) {
+        return (
+          <Ionicons
+            name={scrubDirection === "left" ? "play-back" : "play-forward"}
+            size={20}
+            color={"#FFFFFF"}
+          />
+        );
+      }
+
+      if (skipDirection) {
+        return (
+          <Ionicons
+            name="reload-outline"
+            size={20}
+            color={"#FFFFFF"}
+            style={
+              skipDirection === "left"
+                ? { transform: [{ scaleX: -1 }] }
+                : undefined
+            }
+          />
+        );
+      }
+
+      switch (playerState) {
+        case "buffering":
+        case "stalled":
+          return (
+            <Ionicons name="hourglass-outline" size={20} color={"#FFFFFF"} />
+          );
+        case "watch-history-loading":
+          return (
+            <Ionicons name="download-outline" size={20} color={"#FFFFFF"} />
+          );
+        case "watch-history-applying":
+          return (
+            <Ionicons name="refresh-outline" size={20} color={"#FFFFFF"} />
+          );
+        case "codec-loading":
+          return (
+            <Ionicons name="settings-outline" size={20} color={"#FFFFFF"} />
+          );
+        case "error":
+          return (
+            <Ionicons name="warning-outline" size={20} color={"#FF6B6B"} />
+          );
+        default:
+          return (
+            <Ionicons
+              name={isPlaying ? "pause" : "play"}
+              size={20}
+              color={"#FFFFFF"}
+            />
+          );
+      }
+    };
+
+    const getDisplayMessage = () => {
+      if (stateMessage) return stateMessage;
+
+      switch (playerState) {
+        case "buffering":
+          return "Buffering...";
+        case "watch-history-loading":
+          return "Loading playback position...";
+        case "watch-history-applying":
+          return "Restoring your position...";
+        case "stalled":
+          return "Connection stalled...";
+        case "codec-loading":
+          return "Loading codec...";
+        case "error":
+          return "Playback error";
+        default:
+          return null;
+      }
+    };
+
+    const isLoadingState =
+      playerState === "buffering" ||
+      playerState === "watch-history-loading" ||
+      playerState === "watch-history-applying" ||
+      playerState === "stalled" ||
+      playerState === "codec-loading";
+
     return (
       <Pressable
         ref={pressableRef}
@@ -270,57 +441,38 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
           </View>
         )}
 
+        {/* Loading state message - positioned above seek bar when not focused */}
+        {!isFocused && isLoadingState && getDisplayMessage() && (
+          <View style={styles.messageContainer}>
+            <Text style={styles.messageText}>{getDisplayMessage()}</Text>
+          </View>
+        )}
+
         {/* Main content container with icon and seek bar */}
         <View style={styles.mainContentContainer}>
-          {/* Play/Pause/Seek State Icon */}
+          {/* State Icon - now uses dynamic state management */}
           <View style={styles.stateIconContainer} focusable={false}>
-            {isSeeking ? (
-              <View style={styles.seekingIconContainer}>
-                <Ionicons
-                  name={
-                    scrubDirection === "left" ? "play-back" : "play-forward"
-                  }
-                  size={20}
-                  color={"#FFFFFF"}
-                />
-                {scrubRate !== 1 && (
-                  <Text
-                    style={[
-                      styles.scrubRateText,
-                      isFocused && styles.scrubRateTextFocused,
-                    ]}
-                  >
-                    {Math.round(scrubRate)}x
-                  </Text>
-                )}
-              </View>
-            ) : skipDirection ? (
-              <View style={styles.seekingIconContainer}>
-                <Ionicons
-                  name="reload-outline"
-                  size={20}
-                  color={"#FFFFFF"}
-                  style={
-                    skipDirection === "left"
-                      ? { transform: [{ scaleX: -1 }] }
-                      : undefined
-                  }
-                />
-                <Text
-                  style={[
-                    styles.scrubRateText,
-                    isFocused && styles.scrubRateTextFocused,
-                  ]}
-                >
-                  {SKIP_SECONDS}s
-                </Text>
-              </View>
-            ) : (
-              <Ionicons
-                name={isPlaying ? "pause" : "play"}
-                size={20}
-                color={"#FFFFFF"}
-              />
+            {getStateIcon()}
+            {/* Rate/skip text overlay */}
+            {isSeeking && scrubRate !== 1 && (
+              <Text
+                style={[
+                  styles.scrubRateText,
+                  isFocused && styles.scrubRateTextFocused,
+                ]}
+              >
+                {Math.round(scrubRate)}x
+              </Text>
+            )}
+            {skipDirection && (
+              <Text
+                style={[
+                  styles.scrubRateText,
+                  isFocused && styles.scrubRateTextFocused,
+                ]}
+              >
+                {SKIP_SECONDS}s
+              </Text>
             )}
           </View>
 
@@ -346,17 +498,37 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
               />
             )}
 
-            {/* Playback position dot */}
-            <View
-              style={[
-                styles.playbackDot,
-                { left: `${progressPercentage}%` },
-                isFocused && styles.playbackDotFocused,
-              ]}
-            />
+            {/* Loading overlay for loading states */}
+            {isLoadingState && (
+              <View style={styles.loadingOverlay}>
+                {/* Base loading bar with breathing animation */}
+                <Animated.View
+                  style={[
+                    styles.loadingProgressBar,
+                    animatedLoadingProgressStyle,
+                  ]}
+                />
 
-            {/* Seek position dot (when seeking) */}
-            {isSeeking && (
+                {/* Shimmer highlight that sweeps across */}
+                <Animated.View
+                  style={[styles.shimmerHighlight, animatedShimmerStyle]}
+                />
+              </View>
+            )}
+
+            {/* Playback position dot - only show when not loading and has valid duration */}
+            {!isLoadingState && duration > 0 && (
+              <View
+                style={[
+                  styles.playbackDot,
+                  { left: `${progressPercentage}%` },
+                  isFocused && styles.playbackDotFocused,
+                ]}
+              />
+            )}
+
+            {/* Seek position dot (when seeking) - only show when not loading */}
+            {!isLoadingState && isSeeking && duration > 0 && (
               <View
                 style={[styles.seekDot, { left: `${seekProgressPercentage}%` }]}
               />
@@ -364,13 +536,15 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
           </View>
         </View>
 
-        {/* Time display */}
+        {/* Time display - always reserve space, show placeholders only during initial loading */}
         <View style={styles.timeContainer}>
           <Text style={[styles.timeText, isFocused && styles.timeTextFocused]}>
-            {formatTime(isSeeking ? seekTime : currentTime)}
+            {duration <= 0 && !isSeeking
+              ? "--:--"
+              : formatTime(isSeeking ? seekTime : currentTime)}
           </Text>
           <Text style={[styles.timeText, isFocused && styles.timeTextFocused]}>
-            {formatTime(duration)}
+            {duration <= 0 ? "--:--" : formatTime(duration)}
           </Text>
         </View>
       </Pressable>
@@ -405,10 +579,43 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  loadingOverlay: {
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 3,
+    bottom: 0,
+    left: 0,
+    overflow: "hidden",
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+
+  loadingProgressBar: {
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    borderRadius: 3,
+    height: "100%",
+  },
+
   mainContentContainer: {
     alignItems: "center",
     flexDirection: "row",
     marginBottom: 7,
+  },
+
+  messageContainer: {
+    alignItems: "center",
+    marginBottom: 8,
+    position: "absolute",
+    top: 16, // Position above the seek bar
+    left: "50%",
+    transform: [{ translateX: -50 }], // Center horizontally
+  },
+
+  messageText: {
+    color: "#CCCCCC",
+    fontSize: 12,
+    fontWeight: "500",
+    textAlign: "center",
   },
 
   playbackDot: {
@@ -495,9 +702,14 @@ const styles = StyleSheet.create({
     borderColor: "#FFFFFF",
   },
 
-  seekingIconContainer: {
-    alignItems: "center",
-    justifyContent: "center",
+  shimmerHighlight: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: "30%", // Width of the shimmer highlight
+    backgroundColor: "rgba(255, 255, 255, 0.4)",
+    borderRadius: 3,
   },
 
   stateIconContainer: {

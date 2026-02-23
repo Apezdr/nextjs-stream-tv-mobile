@@ -216,18 +216,13 @@ export default function MobileBanner({
     }
 
     // Navigate to media info page
-    router.push(
-      {
-        pathname: "/(mobile)/(protected)/media-info/[id]",
-        params: {
-          id: currentBanner.id,
-          type: currentBanner.type,
-        },
+    router.push({
+      pathname: "/(mobile)/(protected)/media-info/[id]",
+      params: {
+        id: currentBanner.id,
+        type: currentBanner.type,
       },
-      {
-        dangerouslySingular: true,
-      },
-    );
+    });
   }, [currentBanner, router, showBackdrop]);
 
   // Extend to absolute screen edge - more aggressive approach

@@ -23,6 +23,7 @@ import MobileCaptionControls, {
 
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
 
 interface MobileVideoControlsProps {
   player: VideoPlayer;
@@ -114,10 +115,32 @@ const MobileVideoControls = memo(
     }>({ seconds: 0, visible: false });
     const [totalSkipAmount, setTotalSkipAmount] = useState(0);
 
+    // Subtitle preferences (persisted)
+    const subtitlesEnabled = useSubtitlePreferencesStore((s) => s.subtitlesEnabled);
+    const preferredLanguage = useSubtitlePreferencesStore((s) => s.preferredLanguage);
+    const setSubtitlesEnabled = useSubtitlePreferencesStore((s) => s.setSubtitlesEnabled);
+    const setPreferredLanguage = useSubtitlePreferencesStore((s) => s.setPreferredLanguage);
+
     // Caption selection state - use undefined to distinguish from user selecting "Off" (null)
-    const [selectedCaptionLanguage, setSelectedCaptionLanguage] = useState<
+    const [selectedCaptionLanguage, setSelectedCaptionLanguageRaw] = useState<
       string | null | undefined
     >(undefined);
+
+    // Wrap setter to persist preference changes
+    const setSelectedCaptionLanguage = useCallback(
+      (language: string | null | undefined) => {
+        setSelectedCaptionLanguageRaw(language);
+        if (language === null) {
+          // User explicitly turned subtitles off
+          setSubtitlesEnabled(false);
+        } else if (typeof language === "string") {
+          // User selected a language
+          setSubtitlesEnabled(true);
+          setPreferredLanguage(language);
+        }
+      },
+      [setSubtitlesEnabled, setPreferredLanguage],
+    );
 
     // Subtitle style state
     const [selectedSubtitleStyle, setSelectedSubtitleStyle] =
@@ -297,32 +320,43 @@ const MobileVideoControls = memo(
       };
     }, []);
 
-    // Initialize default caption language (only once when captionURLs first become available)
+    // Initialize caption language from persisted preferences
     useEffect(() => {
       if (videoInfo?.captionURLs && selectedCaptionLanguage === undefined) {
+        // If user previously turned subtitles off, respect that
+        if (!subtitlesEnabled) {
+          setSelectedCaptionLanguageRaw(null);
+          return;
+        }
+
         const availableLanguages = Object.keys(videoInfo.captionURLs);
 
-        // First try to find English by name
-        if (availableLanguages.includes("English")) {
-          setSelectedCaptionLanguage("English");
+        // Try the user's preferred language first
+        if (preferredLanguage && availableLanguages.includes(preferredLanguage)) {
+          setSelectedCaptionLanguageRaw(preferredLanguage);
         } else {
-          // Then try to find English by srcLang code
-          const englishLang = availableLanguages.find(
-            (lang) =>
-              videoInfo.captionURLs &&
-              (videoInfo.captionURLs[lang].srcLang === "eng" ||
-                videoInfo.captionURLs[lang].srcLang === "en"),
-          );
+          // Fallback: try to find English by name
+          if (availableLanguages.includes("English")) {
+            setSelectedCaptionLanguageRaw("English");
+          } else {
+            // Then try to find English by srcLang code
+            const englishLang = availableLanguages.find(
+              (lang) =>
+                videoInfo.captionURLs &&
+                (videoInfo.captionURLs[lang].srcLang === "eng" ||
+                  videoInfo.captionURLs[lang].srcLang === "en"),
+            );
 
-          if (englishLang) {
-            setSelectedCaptionLanguage(englishLang);
-          } else if (availableLanguages.length > 0) {
-            // Fallback to first available language
-            setSelectedCaptionLanguage(availableLanguages[0]);
+            if (englishLang) {
+              setSelectedCaptionLanguageRaw(englishLang);
+            } else if (availableLanguages.length > 0) {
+              // Fallback to first available language
+              setSelectedCaptionLanguageRaw(availableLanguages[0]);
+            }
           }
         }
       }
-    }, [videoInfo?.captionURLs, selectedCaptionLanguage]);
+    }, [videoInfo?.captionURLs, selectedCaptionLanguage, subtitlesEnabled, preferredLanguage]);
 
     // Player control functions
     const handleTogglePlay = useCallback(() => {

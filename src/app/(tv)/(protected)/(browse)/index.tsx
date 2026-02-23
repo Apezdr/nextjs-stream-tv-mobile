@@ -359,27 +359,40 @@ export default function TVHomePage() {
   useEffect(() => {
     if (pendingTVNavigation && rootShowData && !isLoadingRootShow) {
       const { showId, mediaType } = pendingTVNavigation;
-      const { availableSeasons } = rootShowData;
+      const { availableSeasons } = rootShowData as {
+        availableSeasons: number[];
+      };
+      const navCurrent = (rootShowData as any)?.navigation?.seasons?.current as
+        | number
+        | undefined;
 
-      // Find the first available season
-      const firstAvailableSeason =
-        availableSeasons.length > 0 ? Math.min(...availableSeasons) : 1;
+      // Prefer server-provided current season when valid, else the minimum available season
+      const preferredSeason =
+        typeof navCurrent === "number" &&
+        Array.isArray(availableSeasons) &&
+        availableSeasons.includes(navCurrent)
+          ? navCurrent
+          : Array.isArray(availableSeasons) && availableSeasons.length > 0
+            ? Math.min(...availableSeasons)
+            : undefined;
 
-      logDebug("Navigating to TV show with first available season:", {
+      logDebug("Navigating to TV show, deriving season from server response:", {
         id: showId,
         type: mediaType,
-        season: firstAvailableSeason,
+        season: preferredSeason ?? null,
         availableSeasons,
       });
 
-      // Navigate to media info page with the first available season
+      // Navigate to media info page; include season only if we derived a valid one
       router.push(
         {
           pathname: "/media-info/[id]",
           params: {
             id: showId,
             type: mediaType,
-            season: firstAvailableSeason,
+            ...(preferredSeason !== undefined
+              ? { season: preferredSeason }
+              : {}),
           },
         },
         {
@@ -398,18 +411,17 @@ export default function TVHomePage() {
       const { showId, mediaType } = pendingTVNavigation;
 
       logDebug(
-        "Failed to fetch root show data, falling back to season 1:",
+        "Failed to fetch root show data, navigating without season (media-info will initialize):",
         rootShowError,
       );
 
-      // Fallback to season 1 if we can't get available seasons
+      // Navigate without a season; media-info will derive initial season from server response
       router.push(
         {
           pathname: "/media-info/[id]",
           params: {
             id: showId,
             type: mediaType,
-            season: 1,
           },
         },
         {

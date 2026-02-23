@@ -10,7 +10,13 @@ const LazyGenreContentRow = lazy(
 );
 
 interface ProgressiveGenreLoaderProps {
-  genres: Array<{ id: number; name: string; movieCount?: number }>;
+  genres: Array<{
+    id: number;
+    name: string;
+    movieCount?: number;
+    tvShowCount?: number;
+  }>;
+  contentType?: "movie" | "tv";
   onSelectContent: (
     showId: string,
     seasonNumber: number | undefined,
@@ -26,6 +32,7 @@ interface ProgressiveGenreLoaderProps {
  */
 const ProgressiveGenreLoader = memo(function ProgressiveGenreLoader({
   genres,
+  contentType = "movie",
   onSelectContent,
   transformMediaItems,
 }: ProgressiveGenreLoaderProps) {
@@ -43,6 +50,7 @@ const ProgressiveGenreLoader = memo(function ProgressiveGenreLoader({
           >
             <LazyGenreContentRow
               genre={genre}
+              contentType={contentType}
               onSelectContent={onSelectContent}
               transformMediaItems={transformMediaItems}
               isLastRow={isLastRow}
