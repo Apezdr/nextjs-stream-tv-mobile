@@ -48,6 +48,7 @@
       ],
       "./enableLargeHeap",
       "./fixHermesCommand",
+      "./withRemovePortraitOrientation",
       [
         "react-native-edge-to-edge",
         {
