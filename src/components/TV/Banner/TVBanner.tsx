@@ -1,6 +1,5 @@
 import { useIsFocused } from "@react-navigation/native";
 import { ImageBackground } from "expo-image";
-import { useRouter } from "expo-router";
 import { VideoView } from "expo-video";
 import { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
@@ -23,6 +22,7 @@ import { useTVAppState, TVAppMode } from "@/src/context/TVAppStateContext";
 import { useBanner } from "@/src/data/hooks/useContent";
 import { BannerItem } from "@/src/data/types/content.types";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 interface TVBannerProps {
   style?: ViewStyle;
@@ -37,7 +37,6 @@ type BannerPhase =
   | "nextSlide";
 
 export default function TVBanner({ style }: TVBannerProps) {
-  const router = useRouter();
   const { currentMode } = useTVAppState();
   const isFocused = useIsFocused();
 
@@ -1006,19 +1005,11 @@ export default function TVBanner({ style }: TVBannerProps) {
     if (!currentBanner) return;
 
     // Navigate to media info page for the banner item
-    router.push(
-      {
-        pathname: "/media-info/[id]",
-        params: {
-          id: currentBanner.id,
-          type: currentBanner.type,
-        },
-      },
-      {
-        dangerouslySingular: true,
-      },
-    );
-  }, [currentBanner, router]);
+    navigationHelper.navigateToMediaInfo({
+      id: currentBanner.id,
+      type: currentBanner.type,
+    });
+  }, [currentBanner]);
 
   const tvEventHandler = useCallback(
     (evt: any) => {

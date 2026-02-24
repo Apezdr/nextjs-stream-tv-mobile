@@ -20,7 +20,7 @@ import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useSearchPreferencesStore } from "@/src/stores/searchPreferencesStore";
-import { navigationHelper } from "@/src/utils/navigationHelper.tv";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 // Create a TV-compatible TouchableOpacity component
 interface TVTouchableProps extends React.ComponentProps<

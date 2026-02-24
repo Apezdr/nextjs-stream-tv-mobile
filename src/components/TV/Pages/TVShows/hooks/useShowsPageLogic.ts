@@ -3,7 +3,6 @@
  * Handles TV navigation and data management
  */
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
-import { useRouter } from "expo-router";
 import {
   useCallback,
   useEffect,
@@ -17,10 +16,10 @@ import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useGenresList } from "@/src/data/hooks/queries/useContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
 import { MediaItem } from "@/src/data/types/content.types";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 export function useShowsPageLogic() {
   const { currentMode, setMode } = useTVAppState();
-  const router = useRouter();
   const isFocused = useIsFocused();
 
   // Conditional logging for performance optimization
@@ -110,25 +109,17 @@ export function useShowsPageLogic() {
         availableSeasons,
       });
 
-      router.push(
-        {
-          pathname: "/media-info/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            season: firstAvailableSeason,
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToMediaInfo({
+        id: showId,
+        type: mediaType,
+        season: firstAvailableSeason,
+      });
 
       startTransition(() => {
         setPendingTVNavigation(null);
       });
     }
-  }, [pendingTVNavigation, rootShowData, isLoadingRootShow, router]);
+  }, [pendingTVNavigation, rootShowData, isLoadingRootShow]);
 
   // Effect to handle root show data errors
   useEffect(() => {
@@ -140,25 +131,17 @@ export function useShowsPageLogic() {
         rootShowError,
       );
 
-      router.push(
-        {
-          pathname: "/media-info/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            season: 1,
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToMediaInfo({
+        id: showId,
+        type: mediaType,
+        season: 1,
+      });
 
       startTransition(() => {
         setPendingTVNavigation(null);
       });
     }
-  }, [pendingTVNavigation, rootShowError, isLoadingRootShow, router]);
+  }, [pendingTVNavigation, rootShowError, isLoadingRootShow]);
 
   const handleSelectContent = useCallback(
     (
@@ -177,22 +160,14 @@ export function useShowsPageLogic() {
           episode: episodeNumber,
         });
 
-        router.push(
-          {
-            pathname: "/watch/[id]",
-            params: {
-              id: showId,
-              type: mediaType,
-              season: seasonNumber,
-              episode: episodeNumber,
-              ...(backdropUrl && { backdrop: backdropUrl }),
-              ...(backdropBlurhash && { backdropBlurhash }),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToWatch({
+          id: showId,
+          type: mediaType,
+          season: seasonNumber,
+          episode: episodeNumber,
+          ...(backdropUrl && { backdrop: backdropUrl }),
+          ...(backdropBlurhash && { backdropBlurhash }),
+        });
       } else if (mediaType === "tv") {
         logDebug("Querying available seasons for TV show:", {
           id: showId,
@@ -208,23 +183,15 @@ export function useShowsPageLogic() {
           type: mediaType,
         });
 
-        router.push(
-          {
-            pathname: "/media-info/[id]",
-            params: {
-              id: showId,
-              type: mediaType,
-              ...(backdropUrl && { backdrop: backdropUrl }),
-              ...(backdropBlurhash && { backdropBlurhash }),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToMediaInfo({
+          id: showId,
+          type: mediaType,
+          ...(backdropUrl && { backdrop: backdropUrl }),
+          ...(backdropBlurhash && { backdropBlurhash }),
+        });
       }
     },
-    [router],
+    [],
   );
 
   // Focus-aware background refresh

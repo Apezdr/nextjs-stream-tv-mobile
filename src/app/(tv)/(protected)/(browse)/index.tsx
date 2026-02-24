@@ -1,5 +1,4 @@
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
-import { useRouter } from "expo-router";
 import { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
   View,
@@ -21,10 +20,10 @@ import {
 import { useRootShowData } from "@/src/data/hooks/useContent";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 export default function TVHomePage() {
   const { currentMode, setMode } = useTVAppState();
-  const router = useRouter();
   const isFocused = useIsFocused();
 
   // Use the new Zustand-based backdrop manager
@@ -384,26 +383,16 @@ export default function TVHomePage() {
       });
 
       // Navigate to media info page; include season only if we derived a valid one
-      router.push(
-        {
-          pathname: "/media-info/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-            ...(preferredSeason !== undefined
-              ? { season: preferredSeason }
-              : {}),
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToMediaInfo({
+        id: showId,
+        type: mediaType,
+        ...(preferredSeason !== undefined ? { season: preferredSeason } : {}),
+      });
 
       // Clear pending navigation
       setPendingTVNavigation(null);
     }
-  }, [pendingTVNavigation, rootShowData, isLoadingRootShow, router]);
+  }, [pendingTVNavigation, rootShowData, isLoadingRootShow]);
 
   // Effect to handle root show data errors
   useEffect(() => {
@@ -416,23 +405,15 @@ export default function TVHomePage() {
       );
 
       // Navigate without a season; media-info will derive initial season from server response
-      router.push(
-        {
-          pathname: "/media-info/[id]",
-          params: {
-            id: showId,
-            type: mediaType,
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToMediaInfo({
+        id: showId,
+        type: mediaType,
+      });
 
       // Clear pending navigation
       setPendingTVNavigation(null);
     }
-  }, [pendingTVNavigation, rootShowError, isLoadingRootShow, router]);
+  }, [pendingTVNavigation, rootShowError, isLoadingRootShow]);
 
   const handleSelectContent = useCallback(
     (
@@ -453,22 +434,14 @@ export default function TVHomePage() {
           episode: episodeNumber,
         });
 
-        router.push(
-          {
-            pathname: "/watch/[id]",
-            params: {
-              id: showId,
-              type: mediaType,
-              season: seasonNumber,
-              episode: episodeNumber,
-              ...(backdropUrl && { backdrop: backdropUrl }),
-              ...(backdropBlurhash && { backdropBlurhash }),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToWatch({
+          id: showId,
+          type: mediaType,
+          season: seasonNumber,
+          episode: episodeNumber,
+          ...(backdropUrl && { backdrop: backdropUrl }),
+          ...(backdropBlurhash && { backdropBlurhash }),
+        });
       } else if (mediaType === "tv") {
         // TV show without specific episode - query available seasons first
         logDebug("Querying available seasons for TV show:", {
@@ -484,23 +457,15 @@ export default function TVHomePage() {
           type: mediaType,
         });
 
-        router.push(
-          {
-            pathname: "/media-info/[id]",
-            params: {
-              id: showId,
-              type: mediaType,
-              ...(backdropUrl && { backdrop: backdropUrl }),
-              ...(backdropBlurhash && { backdropBlurhash }),
-            },
-          },
-          {
-            dangerouslySingular: true,
-          },
-        );
+        navigationHelper.navigateToMediaInfo({
+          id: showId,
+          type: mediaType,
+          ...(backdropUrl && { backdrop: backdropUrl }),
+          ...(backdropBlurhash && { backdropBlurhash }),
+        });
       }
     },
-    [logDebug, router],
+    [logDebug],
   );
 
   return (

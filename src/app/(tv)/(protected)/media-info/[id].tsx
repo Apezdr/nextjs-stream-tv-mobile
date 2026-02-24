@@ -1,4 +1,4 @@
-import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
+import { useLocalSearchParams, useFocusEffect, router } from "expo-router";
 import {
   useCallback,
   useState,
@@ -33,6 +33,7 @@ import {
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useBackdropStore } from "@/src/stores/backdropStore";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
 /**
  * Small helper to format milliseconds into H:MM:SS or M:SS
@@ -126,7 +127,6 @@ function parseResolution(input: string): string | null {
 }
 
 export default function MediaInfoPage() {
-  const router = useRouter();
   const { setMode } = useTVAppState();
   const params = useLocalSearchParams<{
     id: string;
@@ -303,52 +303,34 @@ export default function MediaInfoPage() {
 
   const handlePlayEpisode = useCallback(
     (episode: TVDeviceEpisode) => {
-      router.push(
-        {
-          pathname: "/watch/[id]",
-          params: {
-            id: params.id,
-            type: params.type,
-            season: selectedSeason ?? mediaInfo?.seasonNumber,
-            episode: episode.episodeNumber,
-            backdrop: mediaInfo?.backdrop,
-            backdropBlurhash: mediaInfo?.backdropBlurhash,
-          },
-        },
-        {
-          dangerouslySingular: true,
-        },
-      );
+      navigationHelper.navigateToWatch({
+        id: params.id,
+        type: params.type,
+        season: selectedSeason ?? mediaInfo?.seasonNumber,
+        episode: episode.episodeNumber,
+        backdrop: mediaInfo?.backdrop,
+        backdropBlurhash: mediaInfo?.backdropBlurhash,
+      });
     },
     [
       params.id,
       params.type,
       selectedSeason,
-      router,
       mediaInfo?.backdrop,
       mediaInfo?.backdropBlurhash,
     ],
   );
 
   const handlePlayMovie = useCallback(() => {
-    router.push(
-      {
-        pathname: "/watch/[id]",
-        params: {
-          id: params.id,
-          type: params.type,
-          backdrop: mediaInfo?.backdrop,
-          backdropBlurhash: mediaInfo?.backdropBlurhash,
-        },
-      },
-      {
-        dangerouslySingular: true,
-      },
-    );
+    navigationHelper.navigateToWatch({
+      id: params.id,
+      type: params.type,
+      backdrop: mediaInfo?.backdrop,
+      backdropBlurhash: mediaInfo?.backdropBlurhash,
+    });
   }, [
     params.id,
     params.type,
-    router,
     mediaInfo?.backdrop,
     mediaInfo?.backdropBlurhash,
   ]);
@@ -372,7 +354,7 @@ export default function MediaInfoPage() {
 
   const handleGoBack = useCallback(() => {
     router.back();
-  }, [router]);
+  }, []);
 
   const handleOverviewTruncationChange = useCallback((isTruncated: boolean) => {
     console.log(
