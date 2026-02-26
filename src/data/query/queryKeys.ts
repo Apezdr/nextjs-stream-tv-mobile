@@ -63,6 +63,30 @@ export const queryKeys = {
     sortOrder?: string;
   }) => [...queryKeys.content(), "genres", "content", params] as const,
 
+  // Watchlist content queries
+  watchlistPlaylists: (params: {
+    includeItemCounts?: boolean;
+    includeDefaultPlaylist?: boolean;
+    visibilityFilter?: string;
+  }) => [...queryKeys.content(), "watchlist", "playlists", params] as const,
+
+  watchlistContent: (params: {
+    playlistId: string;
+    page?: number;
+    limit?: number;
+    mediaType?: string;
+    isTVdevice?: boolean;
+    includeWatchHistory?: boolean;
+    includeUnavailable?: boolean;
+    hideUnavailable?: boolean;
+  }) => [...queryKeys.content(), "watchlist", "content", params] as const,
+
+  watchlistStatus: (params: {
+    tmdbId: number;
+    mediaType: "movie" | "tv";
+    playlistId?: string;
+  }) => [...queryKeys.content(), "watchlist", "status", params] as const,
+
   // Banner and screensaver
   banner: () => [...queryKeys.content(), "banner"] as const,
   screensaver: () => [...queryKeys.content(), "screensaver"] as const,

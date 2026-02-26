@@ -13,6 +13,7 @@ export interface WatchHistory {
 // Core media item as returned by the API
 export interface MediaItem {
   id: string;
+  tmdbId?: number;
   title: string;
   posterURL?: string;
   posterBlurhash?: string; // data:image/png;base64, encoded blurhash for poster
@@ -28,7 +29,14 @@ export interface MediaItem {
   hdr?: string; // HDR format (e.g., "HDR10", "10-bit SDR (BT.709)")
   logo?: string; // Logo URL (typically for TV shows)
   releaseDate?: string; // Release date (from metadata)
+  isAvailable?: boolean;
+  isComingSoon?: boolean;
+  comingSoonDate?: string | null;
+  available?: boolean;
+  unavailable?: boolean;
   metadata?: {
+    tmdbId?: number;
+    tmdb_id?: number;
     release_date?: string;
     first_air_date?: string;
     overview?: string;
@@ -414,6 +422,102 @@ export interface GenresContentParams {
 
 // Combined genres API parameters
 export type GenresApiParams = GenresListParams | GenresContentParams;
+
+// Watchlist/playlist related types for watchlist-content API
+export interface PlaylistItemCounts {
+  total: number;
+  available: number;
+  unavailable: number;
+  movie?: number;
+  tv?: number;
+}
+
+export interface WatchlistPlaylist {
+  id: string;
+  name: string;
+  description?: string;
+  privacy?: "private" | "public" | string;
+  isDefault?: boolean;
+  hideUnavailable?: boolean;
+  itemCounts?: PlaylistItemCounts;
+  dateCreated?: string;
+  dateUpdated?: string;
+}
+
+export interface WatchlistPlaylistsResponse {
+  playlists: WatchlistPlaylist[];
+  defaultPlaylistId?: string;
+}
+
+export interface WatchlistPlaylistsParams {
+  action?: "playlists";
+  includeItemCounts?: boolean;
+  includeDefaultPlaylist?: boolean;
+  visibilityFilter?: string;
+}
+
+export interface WatchlistPaginationInfo {
+  currentPage: number;
+  totalResults: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
+export interface WatchlistPlaylistInfo {
+  id: string;
+  name: string;
+  description?: string;
+  hideUnavailable?: boolean;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+}
+
+export interface WatchlistContentResponse {
+  currentItems: MediaItem[];
+  previousItem: MediaItem | null;
+  nextItem: MediaItem | null;
+  pagination: WatchlistPaginationInfo;
+  playlistInfo: WatchlistPlaylistInfo;
+}
+
+export interface WatchlistContentParams {
+  action?: "content";
+  playlistId: string;
+  page?: number;
+  limit?: number;
+  mediaType?: "movie" | "tv";
+  isTVdevice?: boolean;
+  includeWatchHistory?: boolean;
+  includeUnavailable?: boolean;
+  hideUnavailable?: boolean;
+}
+
+export interface WatchlistWritePayload {
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  playlistId?: string;
+}
+
+export interface WatchlistWriteResponse {
+  success: boolean;
+  action?: "added" | "removed";
+  message?: string;
+  item?: Record<string, unknown>;
+}
+
+export interface WatchlistStatusParams {
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  playlistId?: string;
+}
+
+export interface WatchlistStatusResponse {
+  success: boolean;
+  inWatchlist: boolean;
+  item?: Record<string, unknown>;
+}
 
 // Episode-specific API response (when fetching with episode parameter)
 export interface EpisodeSpecificResponse {

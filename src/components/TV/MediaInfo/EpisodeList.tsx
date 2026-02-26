@@ -110,9 +110,19 @@ export default function EpisodeList({
                 watchHistory={episode.watchHistory}
                 duration={episode.duration}
               />
-              <Text style={styles.episodeDuration}>
-                ({formatDuration(episode.duration)})
-              </Text>
+              <View style={styles.durationRow}>
+                <Text style={styles.episodeDuration}>
+                  ({formatDuration(episode.duration)})
+                </Text>
+                {Boolean(
+                  episode.watchHistory?.playbackTime &&
+                  episode.duration > 0 &&
+                  (episode.watchHistory.playbackTime /
+                    (episode.duration / 1000)) *
+                    100 >=
+                    95,
+                ) && <Text style={styles.watchedLabel}>Watched</Text>}
+              </View>
             </View>
           </View>
         </Pressable>
@@ -127,6 +137,11 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingVertical: 8,
+  },
+  durationRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    marginTop: 4,
   },
   episodeContent: {
     alignItems: "flex-start",
@@ -212,5 +227,12 @@ const styles = StyleSheet.create({
   thumbnailContainer: {
     marginRight: 16,
     position: "relative",
+  },
+  watchedLabel: {
+    color: "#46D369",
+    fontSize: 12,
+    fontStyle: "italic",
+    fontWeight: "600",
+    marginLeft: 8,
   },
 });

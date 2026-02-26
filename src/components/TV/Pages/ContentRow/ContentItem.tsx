@@ -28,6 +28,7 @@ const TouchableOpacity =
 
 export interface ContentItemData {
   id: string;
+  tmdbId?: number;
   title: string;
   description?: string;
   thumbnailUrl?: string;
@@ -44,6 +45,7 @@ export interface ContentItemData {
   hdr?: string;
   logo?: string;
   year?: string;
+  isAvailable?: boolean;
 }
 
 interface ContentItemProps {
@@ -95,8 +97,17 @@ const ContentItem = ({
     return { itemWidth, itemHeight };
   }, [size, customWidth, window.width]);
 
+  const isUnavailableItem = useMemo(
+    () => item.isAvailable === false || !item.link,
+    [item.isAvailable, item.link],
+  );
+
   // Memoize press handler - MIGRATED to use Zustand
   const handlePress = useCallback(() => {
+    if (isUnavailableItem) {
+      return;
+    }
+
     if (item.backdropUrl) {
       // 1) Immediately show the backdrop using Zustand store
       showBackdrop(item.backdropUrl, {
@@ -129,6 +140,7 @@ const ContentItem = ({
     );
   }, [
     showBackdrop, // NEW: Zustand action
+    item.id,
     onSelect,
     item.showId,
     item.seasonNumber,
@@ -137,6 +149,7 @@ const ContentItem = ({
     item.backdropUrl,
     item.backdropBlurhash,
     item.thumbnailBlurhash,
+    isUnavailableItem,
   ]);
 
   // Focus handler
@@ -184,6 +197,15 @@ const ContentItem = ({
         quality={100}
       />
 
+      {isUnavailableItem && (
+        <View style={styles.unavailableOverlay}>
+          <Text style={styles.unavailableText}>Unavailable</Text>
+          {/* {item.tmdbId && (
+            <Text style={styles.unavailableSubText}>TMDB #{item.tmdbId}</Text>
+          )} */}
+        </View>
+      )}
+
       {/* Season/Episode info at the top */}
       {item.seasonNumber && item.episodeNumber && (
         <View style={styles.topOverlay}>
@@ -210,9 +232,15 @@ const ContentItem = ({
           {item.title}
         </Text>
 
-        <View style={styles.playButton}>
-          <Ionicons name="play-circle" size={24} color="#FFFFFF" />
-        </View>
+        {isUnavailableItem ? null : (
+          <View style={styles.playButton}>
+            <Ionicons
+              name="information-circle-outline"
+              size={24}
+              color="#FFFFFF"
+            />
+          </View>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -220,7 +248,7 @@ const ContentItem = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#333",
+    backgroundColor: Colors.dark.cardBackground,
     borderRadius: 4,
     margin: 8,
     opacity: 0.22,
@@ -242,7 +270,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    backgroundColor: Colors.dark.videoControlCaptionButtonBg,
     bottom: 0,
     flexDirection: "row",
     justifyContent: "space-between",
@@ -261,7 +289,7 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 12,
     fontWeight: "600",
-    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowColor: Colors.dark.videoTextShadow,
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
@@ -277,7 +305,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   topOverlay: {
-    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    backgroundColor: Colors.dark.videoOverlayBackground,
     borderRadius: 4,
     left: 8,
     paddingHorizontal: 8,
@@ -285,6 +313,22 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 8,
     zIndex: 1,
+  },
+  unavailableOverlay: {
+    alignItems: "center",
+    backgroundColor: Colors.dark.videoControlBackgroundPreviewBg,
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+    zIndex: 2,
+  },
+  unavailableText: {
+    color: Colors.dark.whiteText,
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
   },
 });
 

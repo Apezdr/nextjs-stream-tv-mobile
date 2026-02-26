@@ -14,8 +14,9 @@ import ContentItem, {
 } from "@/src/components/TV/Pages/ContentRow/ContentItem";
 import { useDimensions } from "@/src/hooks/useDimensions";
 
-interface TVTouchableProps
-  extends React.ComponentProps<typeof RNTouchableOpacity> {
+interface TVTouchableProps extends React.ComponentProps<
+  typeof RNTouchableOpacity
+> {
   isTVSelectable?: boolean;
   hasTVPreferredFocus?: boolean;
 }
@@ -43,6 +44,9 @@ interface ContentRowProps {
   onLoadMore?: () => void;
   loadMoreThreshold?: number; // ratio 0–1 of items before end
   trapFocusDown?: boolean;
+  trapFocusLeft?: boolean;
+  trapFocusRight?: boolean;
+  showHeader?: boolean;
 }
 
 const ContentRow = ({
@@ -57,6 +61,9 @@ const ContentRow = ({
   onLoadMore,
   loadMoreThreshold = 0.3, // start prefetch when 30% from end
   trapFocusDown = false,
+  trapFocusLeft = false,
+  trapFocusRight = true,
+  showHeader = true,
 }: ContentRowProps) => {
   // Simplified load guard - just track if we're currently loading
   const isLoadingMore = useRef(false);
@@ -154,20 +161,27 @@ const ContentRow = ({
 
   return (
     <View style={styles.container}>
-      <View style={styles.headerContainer}>
-        <Text style={styles.title}>{title}</Text>
-        {showMoreButton && onShowMore && (
-          <TouchableOpacity
-            onPress={onShowMore}
-            style={styles.showMoreButton}
-            isTVSelectable={Platform.isTV}
-          >
-            <Text style={styles.showMoreText}>See All</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      {showHeader && (
+        <View style={styles.headerContainer}>
+          <Text style={styles.title}>{title}</Text>
+          {showMoreButton && onShowMore && (
+            <TouchableOpacity
+              onPress={onShowMore}
+              style={styles.showMoreButton}
+              isTVSelectable={Platform.isTV}
+            >
+              <Text style={styles.showMoreText}>See All</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
-      <TVFocusGuideView autoFocus trapFocusRight trapFocusDown={trapFocusDown}>
+      <TVFocusGuideView
+        autoFocus
+        trapFocusRight={trapFocusRight}
+        trapFocusDown={trapFocusDown}
+        trapFocusLeft={trapFocusLeft}
+      >
         <FlatList
           data={items}
           extraData={[items.length, hasNextPage, isFetchingNextPage]}

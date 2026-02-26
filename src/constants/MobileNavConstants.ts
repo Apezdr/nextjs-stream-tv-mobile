@@ -38,6 +38,13 @@ export const MOBILE_NAVIGATION_ROUTES: MobileNavigationRoute[] = [
     focusedIcon: "search",
   },
   {
+    key: "my-list",
+    title: "My List",
+    path: "my-list",
+    icon: "bookmark-outline",
+    focusedIcon: "bookmark",
+  },
+  {
     key: "profile",
     title: "Profile",
     path: "profile",

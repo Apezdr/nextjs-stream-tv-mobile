@@ -20,6 +20,7 @@ import { useDimensions } from "@/src/hooks/useDimensions";
 
 export interface MobileContentCardData {
   id: string;
+  tmdbId?: number;
   title: string;
   description?: string;
   thumbnailUrl?: string;
@@ -29,6 +30,9 @@ export interface MobileContentCardData {
   episodeNumber?: number;
   mediaType?: "movie" | "tv";
   link?: string;
+  isUnavailable?: boolean;
+  isComingSoon?: boolean;
+  comingSoonDate?: string | null;
   backdropUrl?: string;
   backdropBlurhash?: string;
   hdr?: string;
@@ -125,10 +129,14 @@ const MobileContentCard = ({
   const contentData: ActionSheetContentData = useMemo(
     () => ({
       id: item.showId || item.id,
+      tmdbId: item.tmdbId,
       title: item.title,
       mediaType: item.mediaType || "movie",
       seasonNumber: item.seasonNumber,
       episodeNumber: item.episodeNumber,
+      isUnavailable: item.isUnavailable,
+      isComingSoon: item.isComingSoon,
+      comingSoonDate: item.comingSoonDate,
       backdrop: item.backdropUrl,
       backdropBlurhash: item.backdropBlurhash || item.thumbnailBlurhash,
     }),

@@ -8,6 +8,17 @@ interface EpisodeProgressBarProps {
   duration: number; // Duration in milliseconds
 }
 
+function formatTime(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+
+  return `${hours.toString().padStart(2, "0")}:${minutes
+    .toString()
+    .padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+}
+
 export default function EpisodeProgressBar({
   watchHistory,
   duration,
@@ -31,6 +42,7 @@ export default function EpisodeProgressBar({
 
   // Show "Watched" for 95%+ completion
   const isWatched = progressPercentage >= 95;
+  const playbackTime = watchHistory.playbackTime;
 
   return (
     <View style={styles.container}>
@@ -44,7 +56,9 @@ export default function EpisodeProgressBar({
             ]}
           />
         </View>
-        {isWatched && <Text style={styles.watchedText}>Watched</Text>}
+        <Text
+          style={styles.timeText}
+        >{`${formatTime(playbackTime)}/${formatTime(durationInSeconds)}`}</Text>
       </View>
     </View>
   );
@@ -54,16 +68,17 @@ const styles = StyleSheet.create({
   container: {
     marginTop: 4,
   },
-  progressBarContainer: {
-    alignItems: "center",
-    flexDirection: "row",
-  },
   progressBarBackground: {
     backgroundColor: "rgba(255, 255, 255, 0.2)",
     borderRadius: 2,
     flex: 1,
     height: 4,
+    marginRight: 8,
     overflow: "hidden",
+  },
+  progressBarContainer: {
+    alignItems: "center",
+    flexDirection: "row",
   },
   progressBarFill: {
     backgroundColor: "#E50914",
@@ -72,10 +87,9 @@ const styles = StyleSheet.create({
   progressBarFillComplete: {
     backgroundColor: "#46D369",
   },
-  watchedText: {
-    color: "#46D369",
+  timeText: {
+    color: "#CCCCCC",
     fontSize: 12,
-    fontWeight: "600",
     marginLeft: 8,
   },
 });

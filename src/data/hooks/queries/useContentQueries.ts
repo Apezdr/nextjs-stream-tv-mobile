@@ -25,6 +25,14 @@ import type {
   GenresListParams,
   GenresContentResponse,
   GenresContentParams,
+  WatchlistPlaylistsResponse,
+  WatchlistPlaylistsParams,
+  WatchlistContentResponse,
+  WatchlistContentParams,
+  WatchlistStatusResponse,
+  WatchlistStatusParams,
+  WatchlistWritePayload,
+  WatchlistWriteResponse,
 } from "@/src/data/types/content.types";
 
 // Environment-controlled debug logging for horizontal list fetches
@@ -345,6 +353,174 @@ export function useGenreContent(params: GenresContentParams) {
       );
     },
     enabled: !!genre,
+  });
+}
+
+/**
+ * Hook to fetch watchlist playlists metadata
+ */
+export function useWatchlistPlaylists(params: WatchlistPlaylistsParams = {}) {
+  const {
+    action = "playlists",
+    includeItemCounts = true,
+    includeDefaultPlaylist = true,
+    visibilityFilter,
+  } = params;
+
+  return useQuery({
+    queryKey: queryKeys.watchlistPlaylists({
+      includeItemCounts,
+      includeDefaultPlaylist,
+      visibilityFilter,
+    }),
+    queryFn: () => {
+      const queryParams = buildQueryParams({
+        action,
+        includeItemCounts,
+        includeDefaultPlaylist,
+        visibilityFilter,
+      });
+      return enhancedApiClient.get<WatchlistPlaylistsResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST_CONTENT}${queryParams}`,
+      );
+    },
+  });
+}
+
+/**
+ * Hook to fetch watchlist content for a specific playlist
+ */
+export function useWatchlistContent(params: WatchlistContentParams) {
+  const {
+    action = "content",
+    playlistId,
+    page = 0,
+    limit = 30,
+    mediaType,
+    isTVdevice = false,
+    includeWatchHistory = true,
+    includeUnavailable,
+    hideUnavailable,
+  } = params;
+
+  return useQuery({
+    queryKey: queryKeys.watchlistContent({
+      playlistId,
+      page,
+      limit,
+      mediaType,
+      isTVdevice,
+      includeWatchHistory,
+      includeUnavailable,
+      hideUnavailable,
+    }),
+    queryFn: () => {
+      const queryParams = buildQueryParams({
+        action,
+        playlistId,
+        page,
+        limit,
+        mediaType,
+        isTVdevice,
+        includeWatchHistory,
+        includeUnavailable,
+        hideUnavailable,
+      });
+      return enhancedApiClient.get<WatchlistContentResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST_CONTENT}${queryParams}`,
+      );
+    },
+    enabled: !!playlistId,
+  });
+}
+
+/**
+ * Hook to check watchlist status for a single item
+ */
+export function useWatchlistStatus(
+  params: WatchlistStatusParams,
+  enabled = true,
+) {
+  const { tmdbId, mediaType, playlistId } = params;
+
+  return useQuery({
+    queryKey: queryKeys.watchlistStatus({ tmdbId, mediaType, playlistId }),
+    queryFn: () => {
+      const queryParams = buildQueryParams({
+        action: "status",
+        tmdbId,
+        mediaType,
+        playlistId,
+      });
+      return enhancedApiClient.get<WatchlistStatusResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+      );
+    },
+    enabled: enabled && Number.isFinite(tmdbId),
+  });
+}
+
+/**
+ * Mutation to add item to watchlist
+ */
+export function useAddToWatchlist() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: WatchlistWritePayload) => {
+      const queryParams = buildQueryParams({ action: "add" });
+      return enhancedApiClient.post<WatchlistWriteResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+        payload,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.content() });
+    },
+  });
+}
+
+/**
+ * Mutation to toggle item in watchlist
+ */
+export function useToggleWatchlistItem() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: WatchlistWritePayload) => {
+      const queryParams = buildQueryParams({ action: "toggle" });
+      return enhancedApiClient.post<WatchlistWriteResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+        payload,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.content() });
+    },
+  });
+}
+
+/**
+ * Mutation to remove item from watchlist
+ */
+export function useRemoveFromWatchlist() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: WatchlistStatusParams) => {
+      const queryParams = buildQueryParams({
+        action: "remove",
+        tmdbId: params.tmdbId,
+        mediaType: params.mediaType,
+        playlistId: params.playlistId,
+      });
+      return enhancedApiClient.delete<WatchlistWriteResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.content() });
+    },
   });
 }
 

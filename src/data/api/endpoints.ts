@@ -29,6 +29,8 @@ export const API_ENDPOINTS = {
     BANNER: "/api/authenticated/banner",
     SCREENSAVER: "/api/authenticated/screensaver",
     GENRES: "/api/authenticated/genres",
+    WATCHLIST: "/api/authenticated/watchlist",
+    WATCHLIST_CONTENT: "/api/authenticated/watchlist-content",
     SEARCH: "/api/authenticated/search",
     CALENDAR: (endpoint: "sonarr" | "radarr") =>
       `/api/authenticated/calendar/${endpoint}`,

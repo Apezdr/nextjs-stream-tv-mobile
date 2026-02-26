@@ -1,14 +1,27 @@
-import React from "react";
-import { View, StyleSheet, Text } from "react-native";
+import { lazy, Suspense } from "react";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+
+import { Colors } from "@/src/constants/Colors";
+
+const LazyMyListPageContent = lazy(
+  () => import("@/src/components/TV/Pages/MyList/MyListPageContent"),
+);
 
 export default function MyListPage() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>My List</Text>
-      <Text style={styles.subtitle}>Your saved content</Text>
-    </View>
+    <Suspense fallback={<MyListPageFallback />}>
+      <LazyMyListPageContent />
+    </Suspense>
   );
 }
+
+const MyListPageFallback = () => (
+  <View style={styles.container}>
+    <Text style={styles.title}>My List</Text>
+    <ActivityIndicator color="#FFFFFF" size="large" />
+    <Text style={styles.subtitle}>Loading your watchlist...</Text>
+  </View>
+);
 
 const styles = StyleSheet.create({
   container: {
@@ -23,7 +36,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   title: {
-    color: "#FFFFFF",
+    color: Colors.dark.whiteText,
     fontSize: 32,
     fontWeight: "bold",
     marginBottom: 10,

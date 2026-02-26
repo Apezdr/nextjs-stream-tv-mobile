@@ -72,12 +72,8 @@ export default function WatchProgressBar({
         </Text>
       </View>
 
-      {/* "Watched" label below the progress container */}
-      {isCompleted && (
-        <View style={styles.watchedContainer}>
-          <Text style={styles.watchedLabel}>Watched</Text>
-        </View>
-      )}
+      {/* "Watched" label aligned with the progress row */}
+      {isCompleted && <Text style={styles.watchedLabel}>Watched</Text>}
     </View>
   );
 }
@@ -85,11 +81,13 @@ export default function WatchProgressBar({
 const styles = StyleSheet.create({
   container: {
     marginTop: 12,
-    position: "relative", // Enable absolute positioning for child elements
+    flexDirection: "row",
+    alignItems: "center",
   },
   progressContainer: {
     alignItems: "center",
     flexDirection: "row",
+    flex: 1,
   },
   progressFill: {
     backgroundColor: Colors.dark.tint,
@@ -111,15 +109,11 @@ const styles = StyleSheet.create({
     height: 4,
     marginRight: 12,
   },
-  watchedContainer: {
-    position: "absolute",
-    right: 20,
-    top: 16,
-  },
   watchedLabel: {
     color: "#30830fff",
     fontSize: 12,
     fontStyle: "italic",
     fontWeight: "800",
+    marginLeft: 12,
   },
 });

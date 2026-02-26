@@ -22,6 +22,14 @@ import {
   GenresListParams,
   GenresContentResponse,
   GenresContentParams,
+  WatchlistPlaylistsResponse,
+  WatchlistPlaylistsParams,
+  WatchlistContentResponse,
+  WatchlistContentParams,
+  WatchlistWritePayload,
+  WatchlistWriteResponse,
+  WatchlistStatusParams,
+  WatchlistStatusResponse,
   MediaItem,
 } from "@/src/data/types/content.types";
 import { generateUserAgent } from "@/src/utils/deviceInfo";
@@ -441,6 +449,131 @@ export const contentService = {
     });
 
     return response;
+  },
+
+  /**
+   * Fetch available watchlist playlists for the current user
+   */
+  getWatchlistPlaylists: async (
+    params: WatchlistPlaylistsParams = {},
+  ): Promise<WatchlistPlaylistsResponse> => {
+    const {
+      action = "playlists",
+      includeItemCounts = true,
+      includeDefaultPlaylist = true,
+      visibilityFilter,
+    } = params;
+
+    const queryParams = buildQueryParams({
+      action,
+      includeItemCounts,
+      includeDefaultPlaylist,
+      visibilityFilter,
+    });
+
+    return enhancedApiClient.get<WatchlistPlaylistsResponse>(
+      `${API_ENDPOINTS.CONTENT.WATCHLIST_CONTENT}${queryParams}`,
+    );
+  },
+
+  /**
+   * Fetch paginated content for a specific watchlist playlist
+   */
+  getWatchlistContent: async (
+    params: WatchlistContentParams,
+  ): Promise<WatchlistContentResponse> => {
+    const {
+      action = "content",
+      playlistId,
+      page = 0,
+      limit = 30,
+      mediaType,
+      isTVdevice = false,
+      includeWatchHistory = true,
+      includeUnavailable,
+      hideUnavailable,
+    } = params;
+
+    const queryParams = buildQueryParams({
+      action,
+      playlistId,
+      page,
+      limit,
+      mediaType,
+      isTVdevice,
+      includeWatchHistory,
+      includeUnavailable,
+      hideUnavailable,
+    });
+
+    return enhancedApiClient.get<WatchlistContentResponse>(
+      `${API_ENDPOINTS.CONTENT.WATCHLIST_CONTENT}${queryParams}`,
+    );
+  },
+
+  /**
+   * Check if an item is already in watchlist
+   */
+  getWatchlistStatus: async (
+    params: WatchlistStatusParams,
+  ): Promise<WatchlistStatusResponse> => {
+    const { tmdbId, mediaType, playlistId } = params;
+
+    const queryParams = buildQueryParams({
+      action: "status",
+      tmdbId,
+      mediaType,
+      playlistId,
+    });
+
+    return enhancedApiClient.get<WatchlistStatusResponse>(
+      `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+    );
+  },
+
+  /**
+   * Add item to watchlist
+   */
+  addToWatchlist: async (
+    payload: WatchlistWritePayload,
+  ): Promise<WatchlistWriteResponse> => {
+    const queryParams = buildQueryParams({ action: "add" });
+    return enhancedApiClient.post<WatchlistWriteResponse>(
+      `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+      payload,
+    );
+  },
+
+  /**
+   * Toggle watchlist item state (add/remove)
+   */
+  toggleWatchlistItem: async (
+    payload: WatchlistWritePayload,
+  ): Promise<WatchlistWriteResponse> => {
+    const queryParams = buildQueryParams({ action: "toggle" });
+    return enhancedApiClient.post<WatchlistWriteResponse>(
+      `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+      payload,
+    );
+  },
+
+  /**
+   * Remove item from watchlist
+   */
+  removeFromWatchlist: async (
+    params: WatchlistStatusParams,
+  ): Promise<WatchlistWriteResponse> => {
+    const { tmdbId, mediaType, playlistId } = params;
+    const queryParams = buildQueryParams({
+      action: "remove",
+      tmdbId,
+      mediaType,
+      playlistId,
+    });
+
+    return enhancedApiClient.delete<WatchlistWriteResponse>(
+      `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+    );
   },
 
   /**

@@ -14,6 +14,8 @@ import type {
   MediaItem,
   GenresContentResponse,
   GenresContentParams,
+  WatchlistContentResponse,
+  WatchlistContentParams,
 } from "@/src/data/types/content.types";
 
 // Environment-controlled debug logging for horizontal list fetches
@@ -94,7 +96,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     },
     initialPageParam: 0,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, error: Error & { status?: number }) => {
+    retry: (failureCount, _error: Error & { status?: number }) => {
       // retry 6 times for network/server errors
       return failureCount < 6;
     },
@@ -215,7 +217,7 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
     includeWatchHistory = true,
     isTVdevice = true,
   } = params;
-  const queryClient = useQueryClient();
+  const _queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     queryKey: queryKeys.genreContent({
@@ -254,7 +256,7 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
     initialPageParam: 0,
     enabled: !!genre,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, error: Error & { status?: number }) => {
+    retry: (failureCount, _error: Error & { status?: number }) => {
       // retry 6 times for network/server errors
       return failureCount < 6;
     },
@@ -265,10 +267,98 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
 }
 
 /**
+ * Hook for infinite watchlist content loading with pagination
+ */
+export function useInfiniteWatchlistContent(
+  params: WatchlistContentParams,
+  options?: {
+    enabled?: boolean;
+    refetchInterval?: number | false;
+    refetchIntervalInBackground?: boolean;
+  },
+) {
+  const {
+    playlistId,
+    limit = 30,
+    mediaType,
+    isTVdevice = false,
+    includeWatchHistory = true,
+    includeUnavailable,
+    hideUnavailable,
+  } = params;
+  const {
+    enabled = true,
+    refetchInterval,
+    refetchIntervalInBackground,
+  } = options || {};
+
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.watchlistContent({
+      playlistId,
+      limit,
+      mediaType,
+      isTVdevice,
+      includeWatchHistory,
+      includeUnavailable,
+      hideUnavailable,
+    }),
+    queryFn: async ({ pageParam = 0 }) => {
+      const queryParams = buildQueryParams({
+        action: "content",
+        playlistId,
+        page: pageParam,
+        limit,
+        mediaType,
+        isTVdevice,
+        includeWatchHistory,
+        includeUnavailable,
+        hideUnavailable,
+      });
+
+      const response = await enhancedApiClient.get<WatchlistContentResponse>(
+        `${API_ENDPOINTS.CONTENT.WATCHLIST_CONTENT}${queryParams}`,
+      );
+
+      return response;
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      if (!lastPage.pagination?.hasNextPage) {
+        return undefined;
+      }
+      return allPages.length;
+    },
+    initialPageParam: 0,
+    enabled: enabled && !!playlistId,
+    refetchInterval,
+    refetchIntervalInBackground,
+    retry: (failureCount) => failureCount < 6,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
+  });
+
+  return query;
+}
+
+/**
  * Helper to get flattened data from infinite genre query
  */
 export function getFlattenedInfiniteGenreData(
   data: ReturnType<typeof useInfiniteGenreContent>["data"],
+): MediaItem[] {
+  if (!data?.pages) return [];
+
+  return data.pages.reduce<MediaItem[]>((acc, page) => {
+    if (page.currentItems) {
+      acc.push(...page.currentItems);
+    }
+    return acc;
+  }, []);
+}
+
+/**
+ * Helper to get flattened data from infinite watchlist query
+ */
+export function getFlattenedInfiniteWatchlistData(
+  data: ReturnType<typeof useInfiniteWatchlistContent>["data"],
 ): MediaItem[] {
   if (!data?.pages) return [];
 
