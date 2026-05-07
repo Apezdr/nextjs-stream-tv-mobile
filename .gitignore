@@ -28,3 +28,6 @@ expo-env.d.ts
 *.bak
 
 CLAUDE.md
+
+.playwright*
+.claude

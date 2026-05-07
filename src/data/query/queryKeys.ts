@@ -82,7 +82,8 @@ export const queryKeys = {
   }) => [...queryKeys.content(), "watchlist", "content", params] as const,
 
   watchlistStatus: (params: {
-    tmdbId: number;
+    tmdbId?: number;
+    mediaId?: string;
     mediaType: "movie" | "tv";
     playlistId?: string;
   }) => [...queryKeys.content(), "watchlist", "status", params] as const,

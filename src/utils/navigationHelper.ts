@@ -14,11 +14,13 @@ import { Platform } from "react-native";
 type TVWatchRoute = "/(tv)/(protected)/watch/[id]";
 type TVMediaInfoRoute = "/(tv)/(protected)/media-info/[id]";
 type TVBrowseRoute = `/(tv)/(protected)/(browse)/${string}`;
+type TVGenreRoute = "/(tv)/(protected)/(browse)/genre/[type]/[name]";
 type MobileWatchRoute = "/(mobile)/(protected)/watch/[id]";
 type MobileMediaInfoRoute = "/(mobile)/(protected)/media-info/[id]";
 type MobileEpisodeInfoRoute =
   "/(mobile)/(protected)/episode-info/[showId]/[season]/[episode]";
 type MobileTabRoute = `/(mobile)/(protected)/(tabs)/${string}`;
+type MobileGenreRoute = "/(mobile)/(protected)/genre/[type]/[name]";
 
 interface NavigationParams {
   id: string;
@@ -133,6 +135,25 @@ export const navigationHelper = {
    * TV: top-nav browse routes.
    * Mobile: tab navigation.
    */
+  /**
+   * Navigate to a genre screen.
+   * TV: push to the TV browse genre route.
+   * Mobile: push to the mobile genre route.
+   */
+  navigateToGenre: (type: "movie" | "tv", genre: string) => {
+    if (Platform.isTV) {
+      const route: TVGenreRoute =
+        "/(tv)/(protected)/(browse)/genre/[type]/[name]";
+      logNavigation("GENRE", route, { type, name: genre }, "push");
+      router.push({ pathname: route, params: { type, name: genre } });
+    } else {
+      const route: MobileGenreRoute =
+        "/(mobile)/(protected)/genre/[type]/[name]";
+      logNavigation("GENRE", route, { type, name: genre }, "push");
+      router.push({ pathname: route, params: { type, name: genre } });
+    }
+  },
+
   navigateToTab: (tabName: string, params: Record<string, string> = {}) => {
     if (Platform.isTV) {
       const route = `/(tv)/(protected)/(browse)/${tabName}` as TVBrowseRoute;

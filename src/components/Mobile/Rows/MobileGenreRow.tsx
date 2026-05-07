@@ -116,6 +116,7 @@ export default function MobileGenreRow({
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
         showId: item.id,
+        tmdbId: item.tmdbId ?? item.metadata?.tmdbId ?? item.metadata?.tmdb_id,
         hdr: item.hdr,
         logo: item.logo,
       }));

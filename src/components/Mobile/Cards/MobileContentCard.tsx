@@ -1,6 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
-import React, { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
@@ -10,12 +9,7 @@ import {
 } from "react-native";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
-import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import { Colors } from "@/src/constants/Colors";
-import {
-  useActionSheetConfig,
-  ActionSheetContentData,
-} from "@/src/hooks/useActionSheetConfig";
 import { useDimensions } from "@/src/hooks/useDimensions";
 
 export interface MobileContentCardData {
@@ -39,43 +33,23 @@ export interface MobileContentCardData {
   logo?: string;
   releaseDate?: string;
   rating?: number;
+  isTrailer?: boolean;
 }
 
 interface MobileContentCardProps {
   item: MobileContentCardData;
-  onPlay: (
-    showId: string,
-    seasonNumber: number | undefined,
-    episodeNumber: number | undefined,
-    mediaType: "movie" | "tv",
-    backdropUrl?: string,
-    backdropBlurhash?: string,
-  ) => void;
-  onInfo: (
-    showId: string,
-    seasonNumber: number | undefined,
-    episodeNumber: number | undefined,
-    mediaType: "movie" | "tv",
-    backdropUrl?: string,
-    backdropBlurhash?: string,
-  ) => void;
+  /** Called when the card is tapped. The parent is responsible for showing the action sheet. */
+  onPress: (item: MobileContentCardData) => void;
   layout?: "grid" | "list";
   size?: "small" | "medium" | "large";
-  /** Orientation key to force re-render when orientation changes */
-  orientationKey?: string;
 }
 
 const MobileContentCard = ({
   item,
-  onPlay,
-  onInfo,
+  onPress,
   layout = "grid",
   size = "medium",
-  orientationKey,
 }: MobileContentCardProps) => {
-  const { generateConfig } = useActionSheetConfig();
-  const [actionSheetVisible, setActionSheetVisible] = useState(false);
-
   // Get responsive dimensions that will update with orientation changes
   const { window } = useDimensions();
   const screenWidth = window.width;
@@ -116,86 +90,13 @@ const MobileContentCard = ({
       width: cardWidth,
       height: cardHeight,
       imageWidth: cardWidth,
-      imageHeight: cardWidth * 1.5,
+      imageHeight: cardWidth * 1.4,
     };
-  }, [layout, size, screenWidth, isLandscape, orientationKey]);
+  }, [layout, size, screenWidth, isLandscape]);
 
-  // Handle card press - show action sheet
   const handlePress = useCallback(() => {
-    setActionSheetVisible(true);
-  }, []);
-
-  // Create content data for action sheet
-  const contentData: ActionSheetContentData = useMemo(
-    () => ({
-      id: item.showId || item.id,
-      tmdbId: item.tmdbId,
-      title: item.title,
-      mediaType: item.mediaType || "movie",
-      seasonNumber: item.seasonNumber,
-      episodeNumber: item.episodeNumber,
-      isUnavailable: item.isUnavailable,
-      isComingSoon: item.isComingSoon,
-      comingSoonDate: item.comingSoonDate,
-      backdrop: item.backdropUrl,
-      backdropBlurhash: item.backdropBlurhash || item.thumbnailBlurhash,
-    }),
-    [item],
-  );
-
-  // Handle custom play action (for backwards compatibility)
-  const handleCustomPlay = useCallback(
-    (data: ActionSheetContentData) => {
-      // Prefetch backdrop for smooth transition
-      if (data.backdrop) {
-        Image.prefetch(data.backdrop).catch((err) =>
-          console.warn("[MobileContentCard] prefetch error:", err),
-        );
-      }
-
-      onPlay(
-        data.id,
-        data.seasonNumber,
-        data.episodeNumber,
-        data.mediaType,
-        data.backdrop,
-        data.backdropBlurhash,
-      );
-    },
-    [onPlay],
-  );
-
-  // Handle custom info action (for backwards compatibility)
-  const handleCustomInfo = useCallback(
-    (data: ActionSheetContentData) => {
-      // Prefetch backdrop for smooth transition
-      if (data.backdrop) {
-        Image.prefetch(data.backdrop).catch((err) =>
-          console.warn("[MobileContentCard] prefetch error:", err),
-        );
-      }
-
-      onInfo(
-        data.id,
-        data.seasonNumber,
-        data.episodeNumber,
-        data.mediaType,
-        data.backdrop,
-        data.backdropBlurhash,
-      );
-    },
-    [onInfo],
-  );
-
-  // Generate action sheet configuration
-  const actionSheetConfig = useMemo(() => {
-    return generateConfig(contentData, "card", {
-      onClose: () => setActionSheetVisible(false),
-      onPlay: handleCustomPlay,
-      onInfo: handleCustomInfo,
-      // onRestart uses default implementation from hook
-    });
-  }, [contentData, generateConfig, handleCustomPlay, handleCustomInfo]);
+    onPress(item);
+  }, [onPress, item]);
 
   if (layout === "list") {
     return (
@@ -220,6 +121,14 @@ const MobileContentCard = ({
           contentFit="cover"
           transition={200}
         />
+
+        {/* Trailer badge */}
+        {item.isTrailer && (
+          <View style={[styles.trailerBadge, styles.trailerBadgeAbsolute]}>
+            <Ionicons name="play-circle" size={10} color="#FFFFFF" />
+            <Text style={styles.trailerBadgeText}>Trailer</Text>
+          </View>
+        )}
 
         <View style={styles.listContent}>
           <Text style={styles.listTitle} numberOfLines={2}>
@@ -260,81 +169,80 @@ const MobileContentCard = ({
 
   // Grid layout
   return (
-    <>
-      <TouchableOpacity
+    <TouchableOpacity
+      style={[
+        styles.gridContainer,
+        {
+          width: dimensions.width,
+          height: dimensions.height,
+        },
+      ]}
+      onPress={handlePress}
+      activeOpacity={0.8}
+    >
+      <OptimizedImage
+        source={item.thumbnailUrl ? { uri: item.thumbnailUrl } : undefined}
         style={[
-          styles.gridContainer,
+          styles.gridImage,
           {
-            width: dimensions.width,
-            height: dimensions.height,
+            width: dimensions.imageWidth,
+            height: dimensions.imageHeight * 0.75, // Leave room for title
           },
         ]}
-        onPress={handlePress}
-        activeOpacity={0.8}
-      >
-        <OptimizedImage
-          source={item.thumbnailUrl ? { uri: item.thumbnailUrl } : undefined}
-          style={[
-            styles.gridImage,
-            {
-              width: dimensions.imageWidth,
-              height: dimensions.imageHeight * 0.75, // Leave room for title
-            },
-          ]}
-          width={450}
-          quality={75}
-          placeholder={{
-            uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
-          }}
-          placeholderContentFit="cover"
-          contentFit="cover"
-          transition={300}
-          priority="high"
-          recyclingKey={`${item.thumbnailUrl}-${dimensions.width}x${dimensions.height}`}
-        />
-
-        {/* Season/Episode overlay for TV shows */}
-        {item.seasonNumber && item.episodeNumber && (
-          <View style={styles.gridEpisodeOverlay}>
-            <Text style={styles.gridEpisodeText}>
-              S{item.seasonNumber}E{item.episodeNumber}
-            </Text>
-          </View>
-        )}
-
-        {/* HDR badge */}
-        {item.hdr && (
-          <View style={styles.gridHdrBadge}>
-            <Text style={styles.gridHdrText}>HDR</Text>
-          </View>
-        )}
-
-        {/* Play button overlay */}
-        <View style={styles.gridPlayOverlay}>
-          <Ionicons
-            name="play-circle"
-            size={32}
-            color="rgba(255, 255, 255, 0.9)"
-          />
-        </View>
-
-        {/* Title section */}
-        <View style={styles.gridTitleSection}>
-          <Text style={styles.gridTitle} numberOfLines={2}>
-            {item.title}
-          </Text>
-        </View>
-      </TouchableOpacity>
-
-      {/* Action Sheet */}
-      <MobileActionSheet
-        visible={actionSheetVisible}
-        onClose={() => setActionSheetVisible(false)}
-        title={actionSheetConfig.title}
-        subtitle={actionSheetConfig.subtitle}
-        actions={actionSheetConfig.actions}
+        width={450}
+        quality={75}
+        placeholder={{
+          uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
+        }}
+        placeholderContentFit="cover"
+        contentFit="cover"
+        transition={300}
+        priority="high"
+        recyclingKey={`${item.thumbnailUrl}-${dimensions.width}x${dimensions.height}`}
       />
-    </>
+
+      {/* Top-left badge stack: season/episode and/or trailer */}
+      {((item.seasonNumber && item.episodeNumber) || item.isTrailer) && (
+        <View style={styles.topLeftBadges}>
+          {item.seasonNumber && item.episodeNumber && (
+            <View style={styles.gridEpisodeOverlay}>
+              <Text style={styles.gridEpisodeText}>
+                S{item.seasonNumber}E{item.episodeNumber}
+              </Text>
+            </View>
+          )}
+          {item.isTrailer && (
+            <View style={styles.trailerBadge}>
+              <Ionicons name="play-circle" size={10} color="#FFFFFF" />
+              <Text style={styles.trailerBadgeText}>Trailer</Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* HDR badge */}
+      {item.hdr && (
+        <View style={styles.gridHdrBadge}>
+          <Text style={styles.gridHdrText}>HDR</Text>
+        </View>
+      )}
+
+      {/* Play button overlay */}
+      <View style={styles.gridPlayOverlay}>
+        <Ionicons
+          name="play-circle"
+          size={32}
+          color="rgba(255, 255, 255, 0.9)"
+        />
+      </View>
+
+      {/* Title section */}
+      <View style={styles.gridTitleSection}>
+        <Text style={styles.gridTitle} numberOfLines={2}>
+          {item.title}
+        </Text>
+      </View>
+    </TouchableOpacity>
   );
 };
 
@@ -400,7 +308,7 @@ const styles = StyleSheet.create({
   gridContainer: {
     backgroundColor: Colors.dark.cardBackground,
     borderRadius: 8,
-    margin: 8,
+    margin: 5,
     overflow: "hidden",
     ...Platform.select({
       ios: {
@@ -420,11 +328,8 @@ const styles = StyleSheet.create({
   gridEpisodeOverlay: {
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderRadius: 4,
-    left: 8,
     paddingHorizontal: 6,
     paddingVertical: 3,
-    position: "absolute",
-    top: 8,
   },
   gridEpisodeText: {
     color: Colors.dark.whiteText,
@@ -459,7 +364,7 @@ const styles = StyleSheet.create({
   },
   gridTitle: {
     color: Colors.dark.whiteText,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "500",
     textAlign: "center",
   },
@@ -476,33 +381,47 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: "700",
   },
+  topLeftBadges: {
+    alignItems: "flex-start",
+    flexDirection: "column",
+    gap: 4,
+    left: 8,
+    position: "absolute",
+    top: 8,
+    zIndex: 2,
+  },
+  trailerBadge: {
+    alignItems: "center",
+    backgroundColor: "rgba(147, 51, 234, 0.9)",
+    borderRadius: 4,
+    flexDirection: "row",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  trailerBadgeAbsolute: {
+    left: 8,
+    position: "absolute",
+    top: 8,
+    zIndex: 2,
+  },
+  trailerBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "600",
+  },
 });
 
-// Optimization: Only re-render when essential props change
 const areEqual = (
   prevProps: MobileContentCardProps,
   nextProps: MobileContentCardProps,
 ) => {
-  // Always re-render if orientation key changes
-  if (prevProps.orientationKey !== nextProps.orientationKey) {
-    return false;
-  }
-
-  // Always re-render if item reference changes
-  if (prevProps.item !== nextProps.item) {
-    return false;
-  }
-
-  // Always re-render if layout or size changes
-  if (
-    prevProps.layout !== nextProps.layout ||
-    prevProps.size !== nextProps.size
-  ) {
-    return false;
-  }
-
-  // Otherwise, consider them equal (no re-render needed)
-  return true;
+  return (
+    prevProps.item === nextProps.item &&
+    prevProps.onPress === nextProps.onPress &&
+    prevProps.layout === nextProps.layout &&
+    prevProps.size === nextProps.size
+  );
 };
 
 export default memo(MobileContentCard, areEqual);

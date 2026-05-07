@@ -43,15 +43,15 @@ export default function LoginTV() {
   const {
     ready,
     user,
+    server,
     state,
     actions,
     goBackToEnter,
-    goBackToChoose,
     goToQRStage,
     cancelQR,
   } = useLoginLogic();
 
-  const { stage, loading, qrCode, qrPolling } = state;
+  const { stage, loading, qrCode, userCode, qrPolling } = state;
 
   // ── TV remote play/pause resets us to enter
   const tvEventHandler = useCallback(
@@ -112,6 +112,7 @@ export default function LoginTV() {
         styles={styles}
         signInWithProvider={actions.signInWithProvider}
         goBackToEnter={goBackToEnter}
+        reloadProviders={actions.reloadProviders}
         goToQRStage={goToQRStage}
         Container={TVFocusGuideView}
         Button={FocusableButton}
@@ -142,6 +143,7 @@ export default function LoginTV() {
               style={styles.backButton}
               textStyle={styles.backButtonText}
               focusedStyle={styles.backButtonFocused}
+              hasTVPreferredFocus
             />
           </Card>
         </TVFocusGuideView>
@@ -161,13 +163,15 @@ export default function LoginTV() {
               <FocusableButton
                 title="Try Again"
                 onPress={() => {
-                  actions.setQrSessionId(null);
+                  actions.setDeviceCode(null);
+                  actions.setUserCode(null);
                   actions.setQrCode(null);
                   actions.setQrPolling(false);
                 }}
                 style={[styles.button, styles.connectButton]}
                 textStyle={styles.buttonText}
                 focusedStyle={styles.buttonFocused}
+                hasTVPreferredFocus
               />
 
               <FocusableButton
@@ -183,61 +187,75 @@ export default function LoginTV() {
       );
     }
 
+    // ── YouTube-style full-screen two-column layout
     return (
-      <TVFocusGuideView style={styles.container}>
-        <Card style={styles.authCard}>
-          <Text style={styles.authTitle}>
-            {qrPolling ? "Scan QR Code" : "Authentication Ready"}
-          </Text>
-          <Text style={styles.authSubtitle}>
-            {qrPolling
-              ? "Use your mobile device to approve TV sign-in"
-              : "Scan the code below to authenticate"}
+      <TVFocusGuideView style={styles.qrFullScreenContainer}>
+        {/* Left Panel - Sign-in options */}
+        <View style={styles.qrLeftPanel}>
+          <Text style={styles.qrPageTitle}>Sign in with QR Code</Text>
+          <Text style={styles.qrPageDescription}>
+            Scan the QR code with your phone or visit the link to the right to
+            sign in to your account on this device.
           </Text>
 
-          <View style={styles.qrContainer}>
-            <QRCode
-              value={qrCode}
-              size={200} // TV-specific size
-              logoSVG={splashSvgString}
-              logoSize={40}
-              logoBorderRadius={15}
-              logoColor={"black"}
-            />
-            {qrPolling && (
-              <Text style={styles.pollingText}>
-                Waiting for authentication...
-              </Text>
-            )}
-          </View>
-
-          <View style={styles.qrInstructions}>
-            <Text style={styles.instructionsTitle}>How to sign in:</Text>
-            <Text style={styles.instructionStep}>
-              1. Open your mobile camera or QR scanner
-            </Text>
-            <Text style={styles.instructionStep}>
-              2. Scan the QR code shown above
-            </Text>
-            <Text style={styles.instructionStep}>
-              3. Complete sign-in on your mobile device
-            </Text>
-            <Text style={[styles.instructionStep, styles.lastInstruction]}>
-              4. You'll be signed in automatically on TV
-            </Text>
-          </View>
-
+          {/* Back button at bottom of left panel */}
           <FocusableButton
             title="Go back to set new site name"
             onPress={() => {
               cancelQR();
               goBackToEnter();
             }}
-            style={styles.backButton}
+            style={[styles.backButton, { marginTop: "auto", marginBottom: 0 }]}
             textStyle={styles.backButtonText}
             focusedStyle={styles.backButtonFocused}
+            hasTVPreferredFocus
           />
-        </Card>
+        </View>
+
+        {/* Right Panel - QR code and device code */}
+        <View style={styles.qrRightPanel}>
+          {/* QR Code Card */}
+          <View style={styles.qrCodeCard}>
+            <QRCode
+              value={qrCode}
+              size={190}
+              logoSVG={splashSvgString}
+              logoSize={45}
+              logoBorderRadius={15}
+              logoColor={"black"}
+            />
+          </View>
+
+          {/* URL Box */}
+          <View style={styles.qrUrlBox}>
+            <Text style={styles.qrUrlBoxTextTop}>Scan or go to</Text>
+            <Text style={styles.qrUrlBoxText}>
+              {server
+                ? new URL(server).protocol + "//" + new URL(server).hostname
+                : "your-server.com"}
+              /device
+            </Text>
+          </View>
+
+          {/* Device Code Display */}
+          <View style={styles.qrDeviceCodeContainer}>
+            <Text style={styles.qrDeviceCodeLabel}>Enter the code:</Text>
+            {userCode ? (
+              <Text style={styles.qrDeviceCodeValue}>{userCode}</Text>
+            ) : null}
+          </View>
+
+          {/* Polling Indicator */}
+          {qrPolling && (
+            <View style={styles.qrPollingIndicator}>
+              <ActivityIndicator
+                size="small"
+                color={Colors.dark.brandPrimary}
+              />
+              <Text style={styles.pollingText}>Waiting for sign-in...</Text>
+            </View>
+          )}
+        </View>
       </TVFocusGuideView>
     );
   }

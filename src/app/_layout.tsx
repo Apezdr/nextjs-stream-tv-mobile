@@ -11,7 +11,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 import { SystemBars } from "react-native-edge-to-edge";
-// import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import GlobalBackdrop from "../components/TV/GlobalBackdrop";
 import { getDeviceType } from "../utils/deviceInfo";
@@ -23,6 +23,12 @@ import { QueryProvider } from "@/src/providers/QueryProvider";
 // Prevent the splash screen from auto-hiding before asset loading is complete
 SplashScreen.preventAutoHideAsync();
 
+// Fade the splash out smoothly so there's no abrupt cut to white
+SplashScreen.setOptions({
+  duration: 800,
+  fade: true,
+});
+
 // Inner component that uses the auth context
 function StackNavigator({ isTV = getDeviceType() === "tv" }) {
   const { user, ready, apiReady } = useAuth();
@@ -33,12 +39,20 @@ function StackNavigator({ isTV = getDeviceType() === "tv" }) {
   console.log(isTV ? "Running on TV" : "Running on Mobile");
   console.log("User logged in:", loggedIn);
 
-  // Hide splash screen when auth is ready
+  // Hide splash screen once both auth AND API are ready so index.tsx can
+  // immediately redirect to the correct screen with no white flash.
+  // Safety timeout: if apiReady hasn't fired within 15s of auth being ready
+  // (e.g. server offline / slow network), hide anyway so the app doesn't hang.
   useEffect(() => {
-    if (ready) {
+    if (ready && apiReady) {
       SplashScreen.hideAsync();
+      return;
     }
-  }, [ready]);
+    if (ready) {
+      const timer = setTimeout(() => SplashScreen.hideAsync(), 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [ready, apiReady]);
 
   // Always render the Stack to prevent white flash
   // The splash screen will remain visible until auth is ready
@@ -77,16 +91,18 @@ export default function RootLayout() {
   const isTV = getDeviceType() === "tv";
   console.log("theme", useColorScheme());
   return (
-    <QueryProvider>
-      <AuthProvider>
-        <ThemeProvider value={theme}>
-          <PortalProvider>
-            <SystemBars style="light" />
-            <GlobalBackdrop />
-            <StackNavigator isTV={isTV} />
-          </PortalProvider>
-        </ThemeProvider>
-      </AuthProvider>
-    </QueryProvider>
+    <SafeAreaProvider>
+      <QueryProvider>
+        <AuthProvider>
+          <ThemeProvider value={theme}>
+            <PortalProvider>
+              <SystemBars style="light" />
+              <GlobalBackdrop />
+              <StackNavigator isTV={isTV} />
+            </PortalProvider>
+          </ThemeProvider>
+        </AuthProvider>
+      </QueryProvider>
+    </SafeAreaProvider>
   );
 }

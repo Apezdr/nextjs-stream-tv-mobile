@@ -109,31 +109,6 @@ export default function MobileMediaInfoPage() {
       : null,
   );
 
-  // Derive initial season from root TV media response when none is provided
-  useEffect(() => {
-    if (params.type !== "tv") return;
-    if (!tvData.data) return;
-    if (selectedSeason !== undefined) return;
-
-    const availableSeasons = tvData.data.availableSeasons || [];
-    const navCurrent = tvData.data.navigation?.seasons?.current;
-
-    let derived: number | undefined;
-    if (
-      typeof navCurrent === "number" &&
-      Array.isArray(availableSeasons) &&
-      availableSeasons.includes(navCurrent)
-    ) {
-      derived = navCurrent;
-    } else if (Array.isArray(availableSeasons) && availableSeasons.length > 0) {
-      derived = Math.min(...availableSeasons);
-    }
-
-    if (derived !== undefined) {
-      setSelectedSeason(derived);
-    }
-  }, [params.type, tvData.data, selectedSeason]);
-
   // Use the appropriate data based on media type
   const mediaInfo = params.type === "movie" ? movieData.data : tvData.data;
   const isLoading =
@@ -141,6 +116,9 @@ export default function MobileMediaInfoPage() {
   const isLoadingEpisodes =
     params.type === "movie" ? false : tvData.isLoadingEpisodes;
   const error = params.type === "movie" ? movieData.error : tvData.error;
+
+  // Active season: user's explicit choice (selectedSeason) OR the hook's auto-derived effective season
+  const activeSeason = selectedSeason ?? tvData.effectiveSeason;
 
   // Compute merged display fields for TV shows
   const mergedDisplayFields = useMemo(() => {
@@ -276,6 +254,13 @@ export default function MobileMediaInfoPage() {
     setShowActionSheet(true);
   }, []);
 
+  // Handle action sheet for TV shows (show-level options)
+  const handleShowPress = useCallback(() => {
+    setSelectedEpisode(null);
+    setActionSheetContext("show");
+    setShowActionSheet(true);
+  }, []);
+
   const handleCloseActionSheet = useCallback(() => {
     setShowActionSheet(false);
     setSelectedEpisode(null);
@@ -300,7 +285,7 @@ export default function MobileMediaInfoPage() {
       navigationHelper.navigateToWatch({
         id: params.id,
         type: params.type,
-        season: selectedSeason ?? (mediaInfo as any)?.seasonNumber,
+        season: activeSeason ?? (mediaInfo as any)?.seasonNumber,
         episode: episode.episodeNumber,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
@@ -309,7 +294,7 @@ export default function MobileMediaInfoPage() {
     [
       params.id,
       params.type,
-      selectedSeason,
+      activeSeason,
       router,
       mediaInfo?.backdrop,
       mediaInfo?.backdropBlurhash,
@@ -332,17 +317,17 @@ export default function MobileMediaInfoPage() {
       navigationHelper.navigateToWatch({
         id: params.id,
         type: params.type,
-        season: selectedSeason ?? (mediaInfo as any)?.seasonNumber,
+        season: activeSeason ?? (mediaInfo as any)?.seasonNumber,
         episode: episode.episodeNumber,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
-        restart: true, // Add restart parameter
+        restart: "true", // Add restart parameter
       });
     },
     [
       params.id,
       params.type,
-      selectedSeason,
+      activeSeason,
       mediaInfo?.backdrop,
       mediaInfo?.backdropBlurhash,
       showBackdrop,
@@ -363,13 +348,13 @@ export default function MobileMediaInfoPage() {
 
       navigationHelper.navigateToEpisodeInfo({
         showId: params.id,
-        season: selectedSeason ?? (mediaInfo as any)?.seasonNumber,
+        season: activeSeason ?? (mediaInfo as any)?.seasonNumber,
         episode: episode.episodeNumber,
       });
     },
     [
       params.id,
-      selectedSeason,
+      activeSeason,
       router,
       mediaInfo?.backdrop,
       mediaInfo?.backdropBlurhash,
@@ -400,7 +385,7 @@ export default function MobileMediaInfoPage() {
       type: params.type,
       backdrop: mediaInfo?.backdrop,
       backdropBlurhash: mediaInfo?.backdropBlurhash,
-      restart: true,
+      restart: "true",
     });
   }, [
     params.id,
@@ -473,14 +458,41 @@ export default function MobileMediaInfoPage() {
 
   // === ACTION SHEET LOGIC ===
 
-  // Create content data based on context
-  const createContentData = (): ActionSheetContentData => {
+  // Create content data based on context — memoized to keep a stable reference
+  const contentData = useMemo((): ActionSheetContentData => {
+    const parseTmdbId = (value: unknown): number | undefined => {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+
+      if (typeof value === "string") {
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+
+      return undefined;
+    };
+
+    const metadata = mediaInfo?.metadata as Record<string, unknown> | undefined;
+    const mediaInfoTmdbId = parseTmdbId(
+      (mediaInfo as { tmdbId?: unknown } | undefined)?.tmdbId,
+    );
+
+    const resolvedTmdbId =
+      mediaInfoTmdbId ??
+      parseTmdbId(metadata?.tmdbId) ??
+      parseTmdbId(metadata?.tmdb_id) ??
+      parseTmdbId(params.id);
+
     if (actionSheetContext === "episode" && selectedEpisode) {
       return {
         id: params.id,
+        tmdbId: resolvedTmdbId,
         title: selectedEpisode.title,
         mediaType: "tv",
-        seasonNumber: selectedSeason,
+        seasonNumber: activeSeason,
         episodeNumber: selectedEpisode.episodeNumber,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
@@ -488,54 +500,73 @@ export default function MobileMediaInfoPage() {
     } else {
       return {
         id: params.id,
+        tmdbId: resolvedTmdbId,
         title: mediaInfo?.title || "Unknown",
         mediaType: params.type,
         seasonNumber:
           params.type === "tv"
-            ? (selectedSeason ?? (mediaInfo as any)?.seasonNumber)
+            ? (activeSeason ?? (mediaInfo as any)?.seasonNumber)
             : undefined,
         episodeNumber: undefined,
         backdrop: mediaInfo?.backdrop,
         backdropBlurhash: mediaInfo?.backdropBlurhash,
       };
     }
-  };
+  }, [
+    actionSheetContext,
+    mediaInfo,
+    params.id,
+    params.type,
+    selectedEpisode,
+    activeSeason,
+  ]);
 
-  const contentData = createContentData();
-
-  // Custom handlers for backward compatibility and specific navigation needs
-  const customHandlers = {
-    onClose: handleCloseActionSheet,
-    onPlay: (data: ActionSheetContentData) => {
-      if (actionSheetContext === "episode" && selectedEpisode) {
-        handlePlayEpisode(selectedEpisode);
-      } else if (actionSheetContext === "movie") {
-        handlePlayMovie();
-      }
-    },
-    onRestart: (data: ActionSheetContentData) => {
-      if (actionSheetContext === "episode" && selectedEpisode) {
-        handleRestartEpisode(selectedEpisode);
-      } else if (actionSheetContext === "movie") {
-        handleRestartMovie();
-      }
-    },
-    onInfo: (data: ActionSheetContentData) => {
-      if (actionSheetContext === "episode" && selectedEpisode) {
-        handleEpisodeInfo(selectedEpisode);
-      } else if (actionSheetContext === "movie") {
-        handleMovieInfo();
-      } else if (actionSheetContext === "show") {
-        handleShowInfo();
-      }
-    },
-  };
+  // Custom handlers — memoized so the actionSheetConfig stays stable
+  const customHandlers = useMemo(
+    () => ({
+      onClose: handleCloseActionSheet,
+      onPlay: (_data: ActionSheetContentData) => {
+        if (actionSheetContext === "episode" && selectedEpisode) {
+          handlePlayEpisode(selectedEpisode);
+        } else if (actionSheetContext === "movie") {
+          handlePlayMovie();
+        }
+      },
+      onRestart: (_data: ActionSheetContentData) => {
+        if (actionSheetContext === "episode" && selectedEpisode) {
+          handleRestartEpisode(selectedEpisode);
+        } else if (actionSheetContext === "movie") {
+          handleRestartMovie();
+        }
+      },
+      onInfo: (_data: ActionSheetContentData) => {
+        if (actionSheetContext === "episode" && selectedEpisode) {
+          handleEpisodeInfo(selectedEpisode);
+        } else if (actionSheetContext === "movie") {
+          handleMovieInfo();
+        } else if (actionSheetContext === "show") {
+          handleShowInfo();
+        }
+      },
+    }),
+    [
+      actionSheetContext,
+      handleCloseActionSheet,
+      handleEpisodeInfo,
+      handleMovieInfo,
+      handlePlayEpisode,
+      handlePlayMovie,
+      handleRestartEpisode,
+      handleRestartMovie,
+      handleShowInfo,
+      selectedEpisode,
+    ],
+  );
 
   // Generate action sheet configuration using centralized hook
-  const actionSheetConfig = generateConfig(
-    contentData,
-    actionSheetContext,
-    customHandlers,
+  const actionSheetConfig = useMemo(
+    () => generateConfig(contentData, actionSheetContext, customHandlers),
+    [generateConfig, contentData, actionSheetContext, customHandlers],
   );
 
   // Loading state
@@ -594,7 +625,16 @@ export default function MobileMediaInfoPage() {
         <Text style={styles.headerTitle} numberOfLines={1}>
           {mediaInfo.title}
         </Text>
-        <View style={styles.headerSpacer} />
+        <TouchableOpacity
+          style={styles.headerOptionsButton}
+          onPress={params.type === "tv" ? handleShowPress : handleMoviePress}
+        >
+          <Ionicons
+            name="ellipsis-horizontal"
+            size={20}
+            color={Colors.dark.whiteText}
+          />
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -745,17 +785,6 @@ export default function MobileMediaInfoPage() {
                               Play Movie
                             </Text>
                           </TouchableOpacity>
-
-                          <TouchableOpacity
-                            style={styles.movieOptionsButton}
-                            onPress={handleMoviePress}
-                          >
-                            <Ionicons
-                              name="ellipsis-horizontal"
-                              size={20}
-                              color={Colors.dark.whiteText}
-                            />
-                          </TouchableOpacity>
                         </View>
                       </>
                     )}
@@ -829,6 +858,16 @@ export default function MobileMediaInfoPage() {
                 </Text>
               </View>
             )}
+
+          {/* Movie Overview */}
+          {params.type === "movie" && mediaInfo.metadata?.overview && (
+            <View style={styles.overviewContainer}>
+              <Text style={styles.overviewTitle}>Overview</Text>
+              <Text style={styles.overviewText}>
+                {mediaInfo.metadata.overview}
+              </Text>
+            </View>
+          )}
 
           {/* Trailer Section */}
           {mediaInfo.metadata.trailer_url &&
@@ -940,8 +979,8 @@ export default function MobileMediaInfoPage() {
 
           {/* TV Show specific: Season picker and episodes */}
           {params.type === "tv" &&
-            mediaInfo.navigation &&
-            mediaInfo.episodes && (
+            mediaInfo.availableSeasons &&
+            mediaInfo.availableSeasons.length > 0 && (
               <>
                 {/* Season picker */}
                 <View style={styles.seasonSection}>
@@ -957,8 +996,7 @@ export default function MobileMediaInfoPage() {
                         key={season}
                         style={[
                           styles.seasonButton,
-                          season === selectedSeason &&
-                            styles.seasonButtonActive,
+                          season === activeSeason && styles.seasonButtonActive,
                         ]}
                         onLayout={(event) =>
                           handleSeasonButtonLayout(season, event)
@@ -968,7 +1006,7 @@ export default function MobileMediaInfoPage() {
                         <Text
                           style={[
                             styles.seasonButtonText,
-                            season === selectedSeason &&
+                            season === activeSeason &&
                               styles.seasonButtonTextActive,
                           ]}
                         >
@@ -982,7 +1020,7 @@ export default function MobileMediaInfoPage() {
                     <View style={styles.seasonOverviewContainer}>
                       <Text style={styles.overviewTitle}>
                         {mergedDisplayFields.showOverview
-                          ? `Season ${selectedSeason} Overview`
+                          ? `Season ${activeSeason} Overview`
                           : "Overview"}
                       </Text>
                       <Text style={styles.overviewText}>
@@ -995,11 +1033,11 @@ export default function MobileMediaInfoPage() {
                 {/* Episodes list */}
                 <View style={styles.episodesSection}>
                   <Text style={styles.sectionTitle}>
-                    Season {selectedSeason ?? (mediaInfo as any).seasonNumber}{" "}
+                    Season {activeSeason ?? (mediaInfo as any).seasonNumber}{" "}
                     Episodes
                   </Text>
 
-                  {isLoadingEpisodes ? (
+                  {isLoadingEpisodes || !mediaInfo.episodes ? (
                     <View style={styles.episodesLoading}>
                       <ActivityIndicator color={Colors.dark.brandPrimary} />
                       <Text style={styles.loadingText}>
@@ -1120,15 +1158,37 @@ export default function MobileMediaInfoPage() {
         subtitle={actionSheetConfig.subtitle}
         actions={actionSheetConfig.actions}
         backdropDismiss={true}
+        onBack={actionSheetConfig.onBack}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  bottomGradient: {
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    bottom: 0,
+    height: "100%",
+    left: 0,
+    position: "absolute",
+    right: 0,
+  },
+
   container: {
     backgroundColor: Colors.dark.background,
     flex: 1,
+  },
+  content: {
+    flex: 1,
+  },
+
+  gradientOverlay: {
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
   },
 
   // Header styles
@@ -1144,44 +1204,26 @@ const styles = StyleSheet.create({
     marginRight: 8,
     padding: 8,
   },
+  headerOptionsButton: {
+    alignItems: "center",
+    padding: 8,
+    width: 40,
+  },
   headerTitle: {
     color: Colors.dark.whiteText,
     flex: 1,
     fontSize: 18,
     fontWeight: "600",
   },
-  headerSpacer: {
-    width: 40, // Balance the back button
-  },
-
-  // Content styles
-  content: {
-    flex: 1,
-  },
 
   // Hero section styles
-  heroSection: {
-    minHeight: 250,
-  },
   heroBackground: {
     flex: 1,
     justifyContent: "flex-end",
   },
-  gradientOverlay: {
-    backgroundColor: "rgba(0, 0, 0, 0.3)",
-    bottom: 0,
-    left: 0,
-    position: "absolute",
-    right: 0,
-    top: 0,
-  },
-  bottomGradient: {
-    backgroundColor: "rgba(0, 0, 0, 0.6)",
-    bottom: 0,
-    height: "100%",
-    left: 0,
-    position: "absolute",
-    right: 0,
+  heroContent: {
+    padding: 20,
+    paddingBottom: 40,
   },
   heroContentContainer: {
     flex: 1,
@@ -1189,27 +1231,12 @@ const styles = StyleSheet.create({
     position: "relative",
     zIndex: 1,
   },
-  heroContent: {
-    padding: 20,
-    paddingBottom: 40,
-  },
   heroMetadata: {
     alignItems: "center",
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
     marginBottom: 20,
-  },
-  heroRatingContainer: {
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-    borderRadius: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  heroRatingText: {
-    color: Colors.dark.whiteText,
-    fontSize: 12,
-    fontWeight: "600",
   },
   heroMetadataText: {
     color: Colors.dark.whiteText,
@@ -1230,14 +1257,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-  logoContainer: {
-    height: 60,
-    marginBottom: 20,
-    width: 200,
+  heroRatingContainer: {
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  logoImage: {
-    height: "100%",
-    width: "100%",
+  heroRatingText: {
+    color: Colors.dark.whiteText,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  heroSection: {
+    minHeight: 250,
   },
   heroTitle: {
     color: Colors.dark.whiteText,
@@ -1247,6 +1279,15 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.8)",
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 4,
+  },
+  logoContainer: {
+    height: 60,
+    marginBottom: 20,
+    width: 200,
+  },
+  logoImage: {
+    height: "100%",
+    width: "100%",
   },
   movieButtonContainer: {
     alignItems: "center",
@@ -1274,15 +1315,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginLeft: 8,
   },
-  movieOptionsButton: {
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    borderRadius: 8,
-    height: 44,
-    justifyContent: "center",
-    width: 44,
-  },
-
   // TV show hero styles
   tvHeroLayout: {
     alignItems: "flex-start",

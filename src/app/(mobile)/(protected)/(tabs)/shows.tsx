@@ -1,13 +1,8 @@
+import { FlashList, ListRenderItem } from "@shopify/flash-list";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import {
-  StyleSheet,
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-} from "react-native";
+import { StyleSheet, View, Text, TouchableOpacity } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
@@ -15,7 +10,7 @@ import MobileContentList from "@/src/components/Mobile/Lists/MobileContentList";
 import MobileGenreRow from "@/src/components/Mobile/Rows/MobileGenreRow";
 import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
-import { MediaItem } from "@/src/data/types/content.types";
+import { Genre, MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
@@ -23,9 +18,8 @@ type ViewMode = "genres" | "all";
 type SortOption = "newest" | "title" | "rating";
 
 export default function ShowsPage() {
-  const _router = useRouter();
   const { show: showBackdrop } = useBackdropManager();
-  const [viewMode, setViewMode] = useState<ViewMode>("genres");
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
   const [sortBy, _setSortBy] = useState<SortOption>("newest");
   const insets = useSafeAreaInsets();
 
@@ -80,6 +74,7 @@ export default function ShowsPage() {
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
         showId: item.id,
+        tmdbId: item.tmdbId ?? item.metadata?.tmdbId ?? item.metadata?.tmdb_id,
         hdr: item.hdr,
         logo: item.logo,
       }));
@@ -95,7 +90,7 @@ export default function ShowsPage() {
 
   // Handle show more for genre
   const handleShowMore = useCallback((genre: string) => {
-    console.log(`See all ${genre} TV shows`);
+    navigationHelper.navigateToGenre("tv", genre);
   }, []);
 
   // Handle play content - direct to watch page
@@ -181,6 +176,22 @@ export default function ShowsPage() {
     setViewMode((prev) => (prev === "genres" ? "all" : "genres"));
   }, []);
 
+  const renderGenreRow: ListRenderItem<Genre> = useCallback(
+    ({ item }) => (
+      <MobileGenreRow
+        genre={item.name}
+        type="tv"
+        onPlayContent={handlePlayContent}
+        onInfoContent={handleInfoContent}
+        cardSize="medium"
+        showMoreButton
+        onShowMore={handleShowMore}
+        limit={20}
+      />
+    ),
+    [handlePlayContent, handleInfoContent, handleShowMore],
+  );
+
   // Focus-aware data refresh - refetch data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
@@ -231,22 +242,13 @@ export default function ShowsPage() {
 
       {/* Content */}
       {viewMode === "genres" ? (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {genresData?.availableGenres?.map((genreInfo) => (
-            <MobileGenreRow
-              key={genreInfo.name}
-              genre={genreInfo.name}
-              type="tv"
-              onPlayContent={handlePlayContent}
-              onInfoContent={handleInfoContent}
-              cardSize="medium"
-              showMoreButton
-              onShowMore={handleShowMore}
-              enabled={viewMode === "genres"}
-              limit={20}
-            />
-          ))}
-        </ScrollView>
+        <FlashList
+          data={genresData?.availableGenres ?? []}
+          renderItem={renderGenreRow}
+          keyExtractor={(item) => item.name}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
+        />
       ) : (
         <MobileContentList
           title=""
@@ -270,9 +272,6 @@ export default function ShowsPage() {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: Colors.dark.background,
-    flex: 1,
-  },
-  content: {
     flex: 1,
   },
   header: {

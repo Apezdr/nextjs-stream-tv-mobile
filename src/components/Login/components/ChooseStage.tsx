@@ -15,6 +15,7 @@ interface ChooseStageProps {
   styles: any;
   signInWithProvider: (providerId: string) => Promise<void>;
   goBackToEnter: () => void;
+  reloadProviders: () => Promise<void>;
   goToQRStage?: () => void; // Only TV has this
   // Platform-specific components
   Container: React.ComponentType<any>;
@@ -27,15 +28,53 @@ export default function ChooseStage({
   styles,
   signInWithProvider,
   goBackToEnter,
+  reloadProviders,
   goToQRStage,
   Container,
   Button,
 }: ChooseStageProps) {
-  const { providers, shouldPlayLogo, loadingProviderId } = state;
+  const {
+    providers,
+    providersLoading,
+    providersError,
+    shouldPlayLogo,
+    loadingProviderId,
+  } = state;
   const isAnyProviderLoading = loadingProviderId !== null;
 
-  if (providers.length === 0) {
+  if (providersLoading) {
     return <ActivityIndicator style={styles.centered} />;
+  }
+
+  if (providersError || providers.length === 0) {
+    return (
+      <Container style={styles.container}>
+        <Card style={styles.authCard}>
+          <Text style={styles.authTitle}>Unable to load sign-in options</Text>
+          <Text style={styles.authSubtitle}>
+            {providersError ??
+              "No sign-in providers are configured on this server."}
+          </Text>
+
+          <Button
+            title="Retry"
+            onPress={() => reloadProviders().catch(() => null)}
+            style={[styles.button, styles.connectButton]}
+            textStyle={styles.buttonText}
+            focusedStyle={isTVPlatform ? styles.buttonFocused : undefined}
+            hasTVPreferredFocus={isTVPlatform}
+          />
+
+          <Button
+            title="Go back to set new site name"
+            onPress={goBackToEnter}
+            style={styles.backButton}
+            textStyle={styles.backButtonText}
+            focusedStyle={isTVPlatform ? styles.backButtonFocused : undefined}
+          />
+        </Card>
+      </Container>
+    );
   }
 
   return (

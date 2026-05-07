@@ -1,18 +1,18 @@
-import React, { memo, useCallback, useMemo } from "react";
-import {
-  StyleSheet,
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  ListRenderItem,
-} from "react-native";
+import { FlashList, ListRenderItem } from "@shopify/flash-list";
+import { memo, useCallback, useMemo, useState } from "react";
+import { StyleSheet, View, Text, TouchableOpacity } from "react-native";
 
+import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import MobileContentCard, {
   MobileContentCardData,
 } from "@/src/components/Mobile/Cards/MobileContentCard";
 import { Colors } from "@/src/constants/Colors";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import {
+  useActionSheetConfig,
+  ActionSheetContentData,
+} from "@/src/hooks/useActionSheetConfig";
+import { useSmartInfiniteScroll } from "@/src/hooks/useSmartInfiniteScroll";
 
 interface MobileContentRowProps {
   title: string;
@@ -60,51 +60,50 @@ const MobileContentRow = ({
   loading = false,
   emptyMessage = "No content available",
 }: MobileContentRowProps) => {
-  // Handle play content
-  const handlePlayContent = useCallback(
-    (
-      showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
-      mediaType: "movie" | "tv",
-      backdropUrl?: string,
-      backdropBlurhash?: string,
-    ) => {
-      onPlayContent(
-        showId,
-        mediaType,
-        seasonNumber,
-        episodeNumber,
-        backdropUrl,
-        backdropBlurhash,
-      );
+  // Single action sheet instance for the entire row
+  const { generateConfig, invalidateItemStatus } = useActionSheetConfig();
+  const [selectedItem, setSelectedItem] = useState<MobileContentCardData | null>(null);
+
+  const handleClose = useCallback(() => setSelectedItem(null), []);
+
+  const actionSheetConfig = useMemo(() => {
+    if (!selectedItem) return null;
+    const contentData: ActionSheetContentData = {
+      id: selectedItem.showId || selectedItem.id,
+      tmdbId: selectedItem.tmdbId,
+      title: selectedItem.title,
+      mediaType: selectedItem.mediaType || "movie",
+      seasonNumber: selectedItem.seasonNumber,
+      episodeNumber: selectedItem.episodeNumber,
+      backdrop: selectedItem.backdropUrl,
+      backdropBlurhash: selectedItem.backdropBlurhash || selectedItem.thumbnailBlurhash,
+    };
+    return generateConfig(contentData, "card", {
+      onClose: handleClose,
+      onPlay: (data) => {
+        handleClose();
+        onPlayContent(data.id, data.mediaType, data.seasonNumber, data.episodeNumber, data.backdrop, data.backdropBlurhash);
+      },
+      onInfo: (data) => {
+        handleClose();
+        onInfoContent(data.id, data.mediaType, data.seasonNumber, data.episodeNumber, data.backdrop, data.backdropBlurhash);
+      },
+    });
+  }, [selectedItem, generateConfig, handleClose, onPlayContent, onInfoContent]);
+
+  const handleCardPress = useCallback(
+    (item: MobileContentCardData) => {
+      invalidateItemStatus({
+        id: item.showId || item.id,
+        tmdbId: item.tmdbId,
+        title: item.title,
+        mediaType: item.mediaType || "movie",
+      });
+      setSelectedItem(item);
     },
-    [onPlayContent],
+    [invalidateItemStatus],
   );
 
-  // Handle info content
-  const handleInfoContent = useCallback(
-    (
-      showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
-      mediaType: "movie" | "tv",
-      backdropUrl?: string,
-      backdropBlurhash?: string,
-    ) => {
-      onInfoContent(
-        showId,
-        mediaType,
-        seasonNumber,
-        episodeNumber,
-        backdropUrl,
-        backdropBlurhash,
-      );
-    },
-    [onInfoContent],
-  );
-
-  // Render individual content card
   // Get screen dimensions to detect orientation changes
   const { window } = useDimensions();
   const screenWidth = window.width;
@@ -118,30 +117,38 @@ const MobileContentRow = ({
     [screenWidth, screenHeight, isLandscape],
   );
 
-  // Render individual content card with orientation awareness
+  // Mirror MobileContentCard's dimension calculation so FlashList has an
+  // explicit height for the horizontal list (required by FlashList 2.x)
+  const itemHeight = useMemo(() => {
+    const columns = isLandscape
+      ? cardSize === "small" ? 5 : cardSize === "large" ? 3.5 : 4
+      : cardSize === "small" ? 3 : cardSize === "large" ? 2 : 2.5;
+    const padding = 16;
+    const cardWidth = Math.floor((screenWidth - padding * (columns + 1)) / columns);
+    return Math.floor(cardWidth * 1.5);
+  }, [screenWidth, isLandscape, cardSize]);
+
   const renderItem: ListRenderItem<MobileContentCardData> = useCallback(
     ({ item, index }) => (
       <View style={[styles.cardContainer, index === 0 && styles.firstCard]}>
         <MobileContentCard
           item={item}
-          onPlay={handlePlayContent}
-          onInfo={handleInfoContent}
+          onPress={handleCardPress}
           layout="grid"
           size={cardSize}
-          // Pass a key that changes with orientation to force re-render
-          orientationKey={orientationKey}
         />
       </View>
     ),
-    [handlePlayContent, handleInfoContent, cardSize, orientationKey],
+    [handleCardPress, cardSize],
   );
 
-  // Handle end reached for infinite scroll
-  const handleEndReached = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage && onLoadMore) {
-      onLoadMore();
-    }
-  }, [hasNextPage, isFetchingNextPage, onLoadMore]);
+  const smartScroll = useSmartInfiniteScroll({
+    hasNextPage,
+    isFetching: isFetchingNextPage,
+    onLoadMore: onLoadMore ?? (() => {}),
+    horizontal: true,
+    predictAheadMs: 800,
+  });
 
   // Render loading footer
   const renderFooter = useCallback(() => {
@@ -154,11 +161,9 @@ const MobileContentRow = ({
     );
   }, [isFetchingNextPage]);
 
-  // Key extractor - include orientation in the key to force re-render on orientation change
   const keyExtractor = useCallback(
-    (item: MobileContentCardData, index: number) =>
-      `${title}-${item.id}-${index}-${orientationKey}`,
-    [title, orientationKey],
+    (item: MobileContentCardData, index: number) => `${title}-${item.id}-${index}`,
+    [title],
   );
 
   // Loading state
@@ -202,27 +207,32 @@ const MobileContentRow = ({
         )}
       </View>
 
-      <FlatList
+      <FlashList
         data={data}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
-        // Infinite scroll
-        onEndReached={handleEndReached}
-        onEndReachedThreshold={0.5}
+        style={{ height: itemHeight }}
+        // Smart infinite scroll
+        {...smartScroll}
         ListFooterComponent={renderFooter}
-        // Performance optimizations
-        removeClippedSubviews={true}
-        maxToRenderPerBatch={8}
-        windowSize={21}
-        initialNumToRender={4}
-        // Force re-render when orientation changes
+        drawDistance={250}
         extraData={orientationKey}
-        // Key that changes with orientation to force component recreation
-        key={`row-${title}-${orientationKey}`}
+        key={`row-${title}`}
       />
+
+      {selectedItem && actionSheetConfig && (
+        <MobileActionSheet
+          visible
+          onClose={handleClose}
+          title={actionSheetConfig.title}
+          subtitle={actionSheetConfig.subtitle}
+          actions={actionSheetConfig.actions}
+          onBack={actionSheetConfig.onBack}
+        />
+      )}
     </View>
   );
 };

@@ -9,16 +9,22 @@ export default function RootIndex() {
   const isTV = getDeviceType() === "tv";
   const { user, apiReady, ready } = useAuth();
 
-  if (!user && !apiReady && ready) {
-    return <Redirect href="/login" withAnchor />;
+  // Wait for auth to finish rehydrating before making routing decisions.
+  // Without this guard, the else-fallthrough would send authenticated users
+  // to /login before their saved session has been restored from storage.
+  if (!ready) {
+    return null;
   }
 
-  // Redirect to appropriate platform
-  if (isTV && user && user.approved && apiReady && ready) {
-    return <Redirect href="/(tv)/(protected)" withAnchor />;
-  } else if (!isTV && user && user.approved && apiReady && ready) {
-    return <Redirect href="/(mobile)/(protected)" withAnchor />;
-  } else {
-    return <Redirect href="/login" withAnchor />;
+  // Authenticated + API ready → go to the appropriate protected area
+  if (user && user.approved && apiReady) {
+    return isTV ? (
+      <Redirect href="/(tv)/(protected)" withAnchor />
+    ) : (
+      <Redirect href="/(mobile)/(protected)" withAnchor />
+    );
   }
+
+  // Not authenticated (or API not yet ready) → go to login
+  return <Redirect href="/login" withAnchor />;
 }

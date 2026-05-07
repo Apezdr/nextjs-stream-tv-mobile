@@ -266,7 +266,7 @@ export default function SearchPage() {
   } = useQuery({
     queryKey: ["search", debouncedQuery],
     queryFn: () =>
-      contentService.search(debouncedQuery, debouncedQuery ? undefined : 30),
+      contentService.search(debouncedQuery, debouncedQuery ? undefined : 30, true),
     enabled: true,
   });
 
@@ -394,7 +394,10 @@ export default function SearchPage() {
   );
 
   // Key extractor
-  const keyExtractor = useCallback((item: ContentItemData) => item.id, []);
+  const keyExtractor = useCallback(
+    (item: ContentItemData, index: number) => `search-${item.id}-${index}`,
+    [],
+  );
 
   return (
     <View style={styles.container}>

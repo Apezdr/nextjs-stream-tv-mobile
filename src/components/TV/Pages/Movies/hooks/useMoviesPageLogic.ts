@@ -6,6 +6,7 @@ import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   startTransition,
   useDeferredValue,
@@ -14,13 +15,23 @@ import { InteractionManager } from "react-native";
 
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useGenresList } from "@/src/data/hooks/queries/useContentQueries";
+import { useInfiniteContentList } from "@/src/data/hooks/queries/useInfiniteContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
 import { MediaItem } from "@/src/data/types/content.types";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
-export function useMoviesPageLogic() {
+export type MoviesViewMode = "all" | "genres";
+
+export function useMoviesPageLogic(initialViewMode: MoviesViewMode = "all") {
   const { currentMode, setMode } = useTVAppState();
   const isFocused = useIsFocused();
+
+  // View mode toggle: default from route param when provided
+  const [viewMode, setViewMode] = useState<MoviesViewMode>(initialViewMode);
+
+  useEffect(() => {
+    setViewMode(initialViewMode);
+  }, [initialViewMode]);
 
   // Conditional logging for performance optimization
   const DEBUG_MOVIES_PAGE = __DEV__ && false;
@@ -48,6 +59,27 @@ export function useMoviesPageLogic() {
     includeCounts: true,
     isTVdevice: true,
   });
+
+  // Infinite query for "all movies" view
+  const {
+    data: allMoviesData,
+    fetchNextPage: fetchNextMoviesPage,
+    hasNextPage: hasNextMoviesPage,
+    isFetchingNextPage: isFetchingNextMoviesPage,
+    isLoading: isLoadingAllMovies,
+  } = useInfiniteContentList({
+    type: "movie",
+    sort: "id",
+    sortOrder: "desc",
+    limit: 30,
+  });
+
+  // Flatten paginated all-movies data
+  const allMoviesItems = useMemo(
+    () =>
+      allMoviesData?.pages.flatMap((page) => page?.currentItems || []) ?? [],
+    [allMoviesData],
+  );
 
   // Defer large props to avoid blocking initial paint
   const deferredGenresData = useDeferredValue(genresData);
@@ -228,7 +260,18 @@ export function useMoviesPageLogic() {
   );
 
   return {
-    // Data
+    // View mode
+    viewMode,
+    setViewMode,
+
+    // All movies data
+    allMoviesItems,
+    fetchNextMoviesPage,
+    hasNextMoviesPage,
+    isFetchingNextMoviesPage,
+    isLoadingAllMovies,
+
+    // Genres data
     genresData,
     deferredGenresData,
     processedGenres,

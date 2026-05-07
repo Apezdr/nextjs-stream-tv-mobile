@@ -316,6 +316,7 @@ export default function TVHomePage() {
         backdropUrl: item.backdrop,
         hdr: item.hdr,
         logo: item.logo,
+        isTrailer: item.isTrailer,
       };
     });
   }, []);

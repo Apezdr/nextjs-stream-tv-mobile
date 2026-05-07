@@ -3,16 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
-import MobileContentList from "@/src/components/Mobile/Lists/MobileContentList";
+import MobileWatchlistList, {
+  WatchlistFilter,
+} from "@/src/components/Mobile/Lists/MobileWatchlistList";
 import { Colors } from "@/src/constants/Colors";
 import {
   getFlattenedInfiniteWatchlistData,
@@ -23,13 +23,32 @@ import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
-type WatchlistFilter = "all" | "movie" | "tv";
+const WATCHLIST_POLL_INTERVAL_MS = 5000;
 
-const FILTER_OPTIONS: Array<{ label: string; value: WatchlistFilter }> = [
-  { label: "All", value: "all" },
-  { label: "Movies", value: "movie" },
-  { label: "TV Shows", value: "tv" },
-];
+const transformMediaItems = (items: MediaItem[] = []): MobileContentCardData[] =>
+  items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    thumbnailUrl: item.thumbnailUrl || item.posterURL,
+    thumbnailBlurhash: item.thumbnailBlurhash || item.posterBlurhash,
+    backdropUrl: item.backdropUrl || item.backdrop,
+    backdropBlurhash: item.backdropBlurhash,
+    mediaType: item.type,
+    seasonNumber: item.seasonNumber,
+    episodeNumber: item.episodeNumber,
+    showId: item.id,
+    tmdbId: item.tmdbId ?? item.metadata?.tmdbId ?? item.metadata?.tmdb_id,
+    hdr: item.hdr,
+    link: item.link,
+    isUnavailable:
+      item.isAvailable === false ||
+      item.unavailable === true ||
+      item.available === false ||
+      (typeof item.link === "string" && item.link.trim().length === 0),
+    isComingSoon: item.isComingSoon,
+    comingSoonDate: item.comingSoonDate,
+    logo: item.logo,
+  }));
 
 export default function MobileMyListPage() {
   const isScreenFocused = useIsFocused();
@@ -38,6 +57,7 @@ export default function MobileMyListPage() {
 
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>("");
   const [mediaFilter, setMediaFilter] = useState<WatchlistFilter>("all");
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   const {
     data: playlistsData,
@@ -51,7 +71,7 @@ export default function MobileMyListPage() {
         includeItemCounts: true,
         includeDefaultPlaylist: true,
       }),
-    refetchInterval: isScreenFocused ? 15000 : false,
+    refetchInterval: isScreenFocused ? WATCHLIST_POLL_INTERVAL_MS : false,
     refetchIntervalInBackground: true,
   });
 
@@ -122,47 +142,19 @@ export default function MobileMyListPage() {
     },
     {
       enabled: isScreenFocused,
-      refetchInterval: isScreenFocused ? 15000 : false,
+      refetchInterval: isScreenFocused ? WATCHLIST_POLL_INTERVAL_MS : false,
       refetchIntervalInBackground: true,
     },
   );
 
-  const watchlistItems = useMemo(() => {
-    return getFlattenedInfiniteWatchlistData(watchlistContent);
-  }, [watchlistContent]);
-
-  const transformMediaItems = useCallback(
-    (items: MediaItem[] = []): MobileContentCardData[] => {
-      return items.map((item) => ({
-        id: item.id,
-        title: item.title,
-        thumbnailUrl: item.thumbnailUrl || item.posterURL,
-        thumbnailBlurhash: item.thumbnailBlurhash || item.posterBlurhash,
-        backdropUrl: item.backdropUrl || item.backdrop,
-        backdropBlurhash: item.backdropBlurhash,
-        mediaType: item.type,
-        seasonNumber: item.seasonNumber,
-        episodeNumber: item.episodeNumber,
-        showId: item.id,
-        tmdbId: item.tmdbId ?? item.metadata?.tmdbId ?? item.metadata?.tmdb_id,
-        hdr: item.hdr,
-        link: item.link,
-        isUnavailable:
-          item.isAvailable === false ||
-          item.unavailable === true ||
-          item.available === false ||
-          (typeof item.link === "string" && item.link.trim().length === 0),
-        isComingSoon: item.isComingSoon,
-        comingSoonDate: item.comingSoonDate,
-        logo: item.logo,
-      }));
-    },
-    [],
+  const watchlistItems = useMemo(
+    () => getFlattenedInfiniteWatchlistData(watchlistContent),
+    [watchlistContent],
   );
 
   const cardItems = useMemo(
     () => transformMediaItems(watchlistItems),
-    [watchlistItems, transformMediaItems],
+    [watchlistItems],
   );
 
   const handlePlayContent = useCallback(
@@ -230,9 +222,13 @@ export default function MobileMyListPage() {
     [showBackdrop],
   );
 
-  const handleRefresh = useCallback(() => {
-    refetchPlaylists();
-    refetchWatchlistContent();
+  const handleRefresh = useCallback(async () => {
+    setIsManualRefreshing(true);
+    try {
+      await Promise.all([refetchPlaylists(), refetchWatchlistContent()]);
+    } finally {
+      setIsManualRefreshing(false);
+    }
   }, [refetchPlaylists, refetchWatchlistContent]);
 
   const handleLoadMore = useCallback(() => {
@@ -241,7 +237,6 @@ export default function MobileMyListPage() {
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const totalItems = selectedPlaylist?.itemCounts?.total;
-  const isRefreshing = isLoadingPlaylists || isFetchingNextPage;
 
   if (isLoadingPlaylists) {
     return (
@@ -272,84 +267,23 @@ export default function MobileMyListPage() {
         </Text>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.playlistSelector}
-        contentContainerStyle={styles.playlistSelectorContent}
-      >
-        {playlists.map((playlist) => {
-          const isSelected = playlist.id === selectedPlaylistId;
-          return (
-            <TouchableOpacity
-              key={playlist.id}
-              onPress={() => setSelectedPlaylistId(playlist.id)}
-              style={[
-                styles.playlistButton,
-                isSelected && styles.playlistButtonActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.playlistButtonText,
-                  isSelected && styles.playlistButtonTextActive,
-                ]}
-              >
-                {playlist.name}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      <View style={styles.filterRow}>
-        {FILTER_OPTIONS.map((option) => {
-          const isActive = option.value === mediaFilter;
-          return (
-            <TouchableOpacity
-              key={option.value}
-              onPress={() => setMediaFilter(option.value)}
-              style={[
-                styles.filterButton,
-                isActive && styles.filterButtonActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterButtonText,
-                  isActive && styles.filterButtonTextActive,
-                ]}
-              >
-                {option.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {isLoadingContent ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator color={Colors.dark.whiteText} size="large" />
-          <Text style={styles.subtitle}>Loading watchlist content...</Text>
-        </View>
-      ) : (
-        <MobileContentList
-          title=""
-          data={cardItems}
-          onPlayContent={handlePlayContent}
-          onInfoContent={handleInfoContent}
-          layout="grid"
-          cardSize="medium"
-          showHeader={false}
-          hasNextPage={hasNextPage}
-          isFetchingNextPage={isFetchingNextPage}
-          onLoadMore={handleLoadMore}
-          loading={false}
-          onRefresh={handleRefresh}
-          isRefreshing={isRefreshing}
-          emptyMessage="No items found for this playlist"
-        />
-      )}
+      <MobileWatchlistList
+        playlists={playlists}
+        selectedPlaylistId={selectedPlaylistId}
+        onSelectPlaylist={setSelectedPlaylistId}
+        mediaFilter={mediaFilter}
+        onSelectFilter={setMediaFilter}
+        data={cardItems}
+        onPlayContent={handlePlayContent}
+        onInfoContent={handleInfoContent}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={handleLoadMore}
+        loading={isLoadingContent && cardItems.length === 0}
+        onRefresh={handleRefresh}
+        isRefreshing={isManualRefreshing}
+        emptyMessage="No items found for this playlist"
+      />
     </View>
   );
 }
@@ -371,68 +305,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginTop: 12,
   },
-  filterButton: {
-    backgroundColor: Colors.dark.cardBackground,
-    borderRadius: 8,
-    marginRight: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  filterButtonActive: {
-    backgroundColor: Colors.dark.brandPrimary,
-  },
-  filterButtonText: {
-    color: Colors.dark.videoDescriptionText,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  filterButtonTextActive: {
-    color: Colors.dark.whiteText,
-  },
-  filterRow: {
-    flexDirection: "row",
-    marginBottom: 10,
-    paddingHorizontal: 16,
-  },
   header: {
     borderBottomColor: Colors.dark.outline,
     borderBottomWidth: 1,
     marginBottom: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
-  },
-  loadingContainer: {
-    alignItems: "center",
-    flex: 1,
-    justifyContent: "center",
-  },
-  playlistButton: {
-    backgroundColor: Colors.dark.cardBackground,
-    borderRadius: 8,
-    marginRight: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  playlistButtonActive: {
-    backgroundColor: Colors.dark.whiteText,
-  },
-  playlistButtonText: {
-    color: Colors.dark.videoDescriptionText,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  playlistButtonTextActive: {
-    color: Colors.dark.background,
-  },
-  playlistSelector: {
-    marginBottom: 10,
-    maxHeight: 42,
-    minHeight: 42,
-    paddingHorizontal: 16,
-  },
-  playlistSelectorContent: {
-    alignItems: "center",
-    paddingRight: 16,
   },
   subtitle: {
     color: Colors.dark.videoDescriptionText,

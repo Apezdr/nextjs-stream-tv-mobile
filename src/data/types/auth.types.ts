@@ -1,5 +1,5 @@
 /**
- * Type definitions for authentication
+ * Type definitions for authentication (better-auth device authorization flow)
  */
 
 export interface User {
@@ -8,74 +8,42 @@ export interface User {
   email: string;
   approved: boolean;
   limitedAccess?: boolean;
+  role?: "user" | "admin";
+  /** Derived from role === 'admin'; kept for UI compatibility */
   admin?: boolean;
 }
 
-export interface RegisterSessionRequest {
-  clientId: string;
+export interface DeviceCodeResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  /** verification_uri with user_code embedded — use this for QR codes */
+  verification_uri_complete: string;
+  expires_in: number;
+  /** Polling interval in seconds; server minimum is 5s */
+  interval: number;
 }
 
-export interface RegisterSessionResponse {
-  sessionId: string;
-  expiresAt: number;
+export interface DeviceTokenSuccess {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
 }
 
-export interface TokenCheckResponse {
-  status: "pending" | "complete" | "expired";
-  tokens?: {
-    user: User;
-    mobileSessionToken: string;
-    sessionId: string;
+export interface DeviceTokenError {
+  error:
+    | "authorization_pending"
+    | "slow_down"
+    | "access_denied"
+    | "expired_token";
+}
+
+export interface GetSessionResponse {
+  session: {
+    id: string;
+    userId: string;
+    token: string;
+    expiresAt: string;
   };
-}
-
-export interface UserStatusResponse {
   user: User;
-  sessionExpired?: boolean;
-}
-
-export interface DeviceInfo {
-  brand?: string;
-  model?: string;
-  platform: string; // "android", "ios", etc.
-}
-
-export interface QRSessionRequest {
-  clientId: string;
-  deviceType: "tv" | "mobile" | "tablet" | "desktop";
-  host?: string;
-  deviceInfo: DeviceInfo;
-}
-
-export interface QRSessionResponse {
-  qrSessionId: string;
-  expiresAt: number;
-  qrData: {
-    qrSessionId: string;
-    host: string;
-    deviceType: string;
-  };
-}
-
-export interface QRSessionInfo {
-  qrSessionId: string;
-  deviceType: string;
-  host: string;
-  status: "pending" | "complete" | "expired";
-  createdAt: number;
-  expiresAt: number;
-}
-
-export interface QRAuthRequest {
-  qrSessionId: string;
-  providerId: string;
-}
-
-export interface QRTokenCheckResponse {
-  status: "pending" | "complete" | "expired";
-  tokens?: {
-    user: User;
-    mobileSessionToken: string;
-    sessionId: string;
-  };
 }

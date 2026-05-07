@@ -592,7 +592,7 @@ export default function MobileWatchPage() {
       effectiveVideoData,
       loading,
       isEpisodeSwitching,
-      params.restart, // Add restart parameter to dependencies
+      params.restart,
     ]),
   );
 

@@ -37,6 +37,7 @@ import { generateUserAgent } from "@/src/utils/deviceInfo";
 // Environment-controlled debug logging for horizontal list fetches
 const HORIZONTAL_LIST_DEBUG_ENABLED =
   process.env.EXPO_PUBLIC_HORIZONTAL_LIST_DEBUG === "true";
+const WATCHLIST_DEBUG_ENABLED = __DEV__;
 
 /**
  * Debug logger for horizontal list requests
@@ -517,18 +518,42 @@ export const contentService = {
   getWatchlistStatus: async (
     params: WatchlistStatusParams,
   ): Promise<WatchlistStatusResponse> => {
-    const { tmdbId, mediaType, playlistId } = params;
+    const { tmdbId, mediaId, mediaType, playlistId } = params;
 
     const queryParams = buildQueryParams({
       action: "status",
       tmdbId,
+      mediaId,
       mediaType,
       playlistId,
     });
 
-    return enhancedApiClient.get<WatchlistStatusResponse>(
-      `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
-    );
+    const endpoint = `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`;
+
+    if (WATCHLIST_DEBUG_ENABLED) {
+      console.log("[contentService.watchlist.status] Request", {
+        endpoint,
+        tmdbId,
+        mediaId,
+        mediaType,
+        playlistId,
+      });
+    }
+
+    const response =
+      await enhancedApiClient.get<WatchlistStatusResponse>(endpoint);
+
+    if (WATCHLIST_DEBUG_ENABLED) {
+      console.log("[contentService.watchlist.status] Response", {
+        tmdbId,
+        mediaType,
+        playlistId,
+        success: response.success,
+        inWatchlist: response.inWatchlist,
+      });
+    }
+
+    return response;
   },
 
   /**
@@ -551,10 +576,32 @@ export const contentService = {
     payload: WatchlistWritePayload,
   ): Promise<WatchlistWriteResponse> => {
     const queryParams = buildQueryParams({ action: "toggle" });
-    return enhancedApiClient.post<WatchlistWriteResponse>(
-      `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`,
+    const endpoint = `${API_ENDPOINTS.CONTENT.WATCHLIST}${queryParams}`;
+
+    if (WATCHLIST_DEBUG_ENABLED) {
+      console.log("[contentService.watchlist.toggle] Request", {
+        endpoint,
+        payload,
+      });
+    }
+
+    const response = await enhancedApiClient.post<WatchlistWriteResponse>(
+      endpoint,
       payload,
     );
+
+    if (WATCHLIST_DEBUG_ENABLED) {
+      console.log("[contentService.watchlist.toggle] Response", {
+        tmdbId: payload.tmdbId,
+        mediaType: payload.mediaType,
+        playlistId: payload.playlistId,
+        success: response.success,
+        action: response.action,
+        message: response.message,
+      });
+    }
+
+    return response;
   },
 
   /**
@@ -563,10 +610,11 @@ export const contentService = {
   removeFromWatchlist: async (
     params: WatchlistStatusParams,
   ): Promise<WatchlistWriteResponse> => {
-    const { tmdbId, mediaType, playlistId } = params;
+    const { tmdbId, mediaId, mediaType, playlistId } = params;
     const queryParams = buildQueryParams({
       action: "remove",
       tmdbId,
+      mediaId,
       mediaType,
       playlistId,
     });
@@ -579,7 +627,7 @@ export const contentService = {
   /**
    * Search for media content
    */
-  search: async (query: string = "", limit?: number): Promise<MediaItem[]> => {
+  search: async (query: string = "", limit?: number, isTVdevice: boolean = false): Promise<MediaItem[]> => {
     const endpoint = API_ENDPOINTS.CONTENT.SEARCH;
     const baseURL = enhancedApiClient.getBaseUrl();
 
@@ -587,18 +635,29 @@ export const contentService = {
       fullURL: `${baseURL}${endpoint}`,
       query: query || "(empty - recently added)",
       limit,
+      isTVdevice,
     });
 
     const response = await enhancedApiClient.post<{ results: MediaItem[] }>(
       endpoint,
-      { query, ...(limit && { limit }) },
+      { query, isTVdevice, ...(limit && { limit }) },
     );
 
+    const raw = response.results || [];
+
     console.log(`[contentService.search] Response:`, {
-      itemsReceived: response.results?.length || 0,
+      itemsReceived: raw.length,
       query: query || "(recently added)",
     });
 
-    return response.results || [];
+    // The search API returns `_id` (MongoDB ObjectId) instead of `id`.
+    // Normalize so downstream consumers always have `id`.
+    return raw.map((item: Record<string, unknown>) => {
+      const { _id, ...rest } = item as Record<string, unknown> & { _id?: string };
+      return {
+        ...rest,
+        id: (rest.id as string | undefined) ?? _id ?? "",
+      } as MediaItem;
+    });
   },
 };

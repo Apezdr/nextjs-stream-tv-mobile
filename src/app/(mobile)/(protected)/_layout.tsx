@@ -17,6 +17,7 @@ export default function ProtectedLayout() {
       <Stack.Screen name="media-info" />
       <Stack.Screen name="episode-info" />
       <Stack.Screen name="watch" />
+      <Stack.Screen name="genre" />
     </Stack>
   );
 }

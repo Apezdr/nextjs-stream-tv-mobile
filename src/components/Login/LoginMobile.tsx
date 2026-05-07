@@ -56,6 +56,7 @@ export default function LoginMobile() {
         styles={styles}
         signInWithProvider={actions.signInWithProvider}
         goBackToEnter={goBackToEnter}
+        reloadProviders={actions.reloadProviders}
         Container={View}
         Button={MobileButton}
       />

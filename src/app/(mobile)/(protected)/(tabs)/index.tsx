@@ -1,18 +1,14 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo } from "react";
-import {
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  SafeAreaView,
-  View,
-} from "react-native";
+import { StyleSheet, ScrollView, RefreshControl, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import MobileBanner from "@/src/components/Mobile/Banner/MobileBanner";
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
 import MobileContentRow from "@/src/components/Mobile/Rows/MobileContentRow";
 import { Colors } from "@/src/constants/Colors";
+import { MOBILE_TAB_CONFIG } from "@/src/constants/MobileNavConstants";
 import {
   useInfiniteContentList,
   getFlattenedInfiniteData,
@@ -22,6 +18,7 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
 export default function MobileHomePage() {
+  const insets = useSafeAreaInsets();
   const { show: showBackdrop } = useBackdropManager();
 
   // Fetch different content types for the home page with infinite scrolling
@@ -153,8 +150,10 @@ export default function MobileHomePage() {
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
         showId: item.id,
+        tmdbId: item.tmdbId ?? item.metadata?.tmdbId ?? item.metadata?.tmdb_id,
         hdr: item.hdr,
         logo: item.logo,
+        isTrailer: item.isTrailer,
       }));
     },
     [],
@@ -273,10 +272,18 @@ export default function MobileHomePage() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaView style={styles.container}>
+      <View style={[styles.container, { paddingTop: insets.top }]}>
         <ScrollView
           style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingBottom:
+                MOBILE_TAB_CONFIG.TAB_BAR_HEIGHT +
+                Math.max(insets.bottom, 12) +
+                12,
+            },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -349,7 +356,7 @@ export default function MobileHomePage() {
             onLoadMore={handleLoadMoreTvShows}
           />
         </ScrollView>
-      </SafeAreaView>
+      </View>
     </GestureHandlerRootView>
   );
 }
@@ -359,9 +366,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.dark.background,
     flex: 1,
   },
-  scrollContent: {
-    paddingBottom: 16,
-  },
+  scrollContent: {},
   scrollView: {
     flex: 1,
   },

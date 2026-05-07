@@ -18,6 +18,9 @@ export default function LoginLayout() {
           }}
         >
           <Stack.Screen name="index" />
+          <Stack.Screen name="enter" />
+          <Stack.Screen name="choose" />
+          <Stack.Screen name="qr" />
         </Stack>
       </View>
     );
@@ -33,6 +36,9 @@ export default function LoginLayout() {
         }}
       >
         <Stack.Screen name="index" />
+        <Stack.Screen name="enter" />
+        <Stack.Screen name="choose" />
+        <Stack.Screen name="qr" />
       </Stack>
     </View>
   );

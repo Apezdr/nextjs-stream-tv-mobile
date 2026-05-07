@@ -1,6 +1,10 @@
 import { Platform } from "react-native";
 
-import type { DeviceInfo } from "@/src/data/types/auth.types";
+interface DeviceInfo {
+  brand?: string;
+  model?: string;
+  platform: string;
+}
 
 // Extend the Platform interface to include the additional properties
 // that are available in react-native-tvos but not in the base React Native types

@@ -2,34 +2,48 @@
  * Code-split movies page content component
  * Contains the heavy logic and rendering separated from the main page
  */
-import { memo, lazy, Suspense } from "react";
+import { memo, useCallback } from "react";
 import {
   View,
   StyleSheet,
   ScrollView,
   Text,
   ActivityIndicator,
+  TouchableOpacity as RNTouchableOpacity,
+  Platform,
+  TVFocusGuideView,
 } from "react-native";
 
 import { useMoviesPageLogic } from "./hooks/useMoviesPageLogic";
 
+import ContentRow from "@/src/components/TV/Pages/ContentRow";
+import TVGenreGrid from "@/src/components/TV/Pages/Genres/TVGenreGrid";
 import { Colors } from "@/src/constants/Colors";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 
-// Lazy load the ProgressiveGenreLoader for further code-splitting
-const LazyProgressiveGenreLoader = lazy(
-  () => import("@/src/components/TV/Pages/ProgressiveGenreLoader"),
-);
+interface TVTouchableProps extends React.ComponentProps<
+  typeof RNTouchableOpacity
+> {
+  isTVSelectable?: boolean;
+}
+const TouchableOpacity =
+  RNTouchableOpacity as React.ComponentType<TVTouchableProps>;
 
-// Fallback for the genre loader
-const GenreLoaderFallback = () => (
-  <View style={styles.genreLoaderFallback}>
-    <ActivityIndicator color="#FFFFFF" size="large" />
-    <Text style={styles.genreLoaderFallbackText}>Loading genres...</Text>
-  </View>
-);
+interface MoviesPageContentProps {
+  initialViewMode?: "all" | "genres";
+}
 
-const MoviesPageContent = memo(function MoviesPageContent() {
+const MoviesPageContent = memo(function MoviesPageContent({
+  initialViewMode = "all",
+}: MoviesPageContentProps) {
   const {
+    viewMode,
+    setViewMode,
+    allMoviesItems,
+    fetchNextMoviesPage,
+    hasNextMoviesPage,
+    isFetchingNextMoviesPage,
+    isLoadingAllMovies,
     genresData,
     deferredGenresData,
     processedGenres,
@@ -37,68 +51,158 @@ const MoviesPageContent = memo(function MoviesPageContent() {
     genresError,
     handleSelectContent,
     transformMediaItems,
-  } = useMoviesPageLogic();
+  } = useMoviesPageLogic(initialViewMode);
 
-  // Render loading state
-  if (isLoadingGenres) {
+  const handleSelectFromRow = useCallback(
+    (
+      showId: string,
+      mediaType: "movie" | "tv",
+      seasonNumber?: number,
+      episodeNumber?: number,
+      backdropUrl?: string,
+      backdropBlurhash?: string,
+    ) => {
+      handleSelectContent(
+        showId,
+        seasonNumber,
+        episodeNumber,
+        mediaType,
+        backdropUrl,
+        backdropBlurhash,
+      );
+    },
+    [handleSelectContent],
+  );
+
+  const handleSelectGenre = useCallback((genreName: string) => {
+    navigationHelper.navigateToGenre("movie", genreName);
+  }, []);
+
+  // Show loading only when the active view is still loading
+  const isLoading =
+    viewMode === "all" ? isLoadingAllMovies : isLoadingGenres && !genresData;
+
+  if (isLoading) {
     return (
       <View style={styles.container}>
-        <View style={styles.contentBrowser}>
-          <View style={styles.loadingContainer}>
-            <Text style={styles.title}>Movies</Text>
-            <ActivityIndicator color="#FFFFFF" size="large" />
-            <Text style={styles.loadingText}>Loading movie genres...</Text>
-          </View>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.title}>Movies</Text>
+          <ActivityIndicator color="#FFFFFF" size="large" />
+          <Text style={styles.loadingText}>Loading movies...</Text>
         </View>
       </View>
     );
   }
 
-  // Render error state
-  if (genresError || !genresData) {
+  // Genres error state (only relevant when genres view is active)
+  if (viewMode === "genres" && (genresError || !genresData)) {
     return (
       <View style={styles.container}>
-        <View style={styles.contentBrowser}>
-          <View style={styles.errorContainer}>
-            <Text style={styles.title}>Movies</Text>
-            <Text style={styles.errorText}>
-              {genresError?.message || "Failed to load movie genres"}
-            </Text>
-            <Text style={styles.subtitle}>Please try again later</Text>
-          </View>
+        <View style={styles.errorContainer}>
+          <Text style={styles.title}>Movies</Text>
+          <Text style={styles.errorText}>
+            {genresError?.message || "Failed to load movie genres"}
+          </Text>
+          <Text style={styles.subtitle}>Please try again later</Text>
         </View>
       </View>
     );
   }
 
-  // Use deferred data for rendering to avoid blocking initial paint
   const dataToRender = deferredGenresData || genresData;
 
   return (
     <View style={styles.container}>
-      {/* Content browser with stepped scrolling */}
       <ScrollView
         style={styles.contentBrowser}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
       >
-        {/* Page Header */}
+        {/* Page Header with view mode toggle */}
         <View style={styles.headerContainer}>
-          <Text style={styles.title}>Movies</Text>
-          <Text style={styles.subtitle}>
-            Browse {dataToRender.mediaTypeCounts.movies} movies across{" "}
-            {dataToRender.totalGenres} genres
-          </Text>
+          <View style={styles.headerRow}>
+            <Text style={styles.title}>Movies</Text>
+            <TVFocusGuideView
+              style={styles.toggleWrapper}
+              autoFocus={false}
+              trapFocusLeft
+              trapFocusRight
+            >
+              <TouchableOpacity
+                style={[
+                  styles.toggleButton,
+                  viewMode === "all" && styles.toggleButtonActive,
+                ]}
+                onPress={() => setViewMode("all")}
+                isTVSelectable={Platform.isTV}
+              >
+                <Text
+                  style={[
+                    styles.toggleText,
+                    viewMode === "all" && styles.toggleTextActive,
+                  ]}
+                >
+                  All
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.toggleButton,
+                  viewMode === "genres" && styles.toggleButtonActive,
+                ]}
+                onPress={() => setViewMode("genres")}
+                isTVSelectable={Platform.isTV}
+              >
+                <Text
+                  style={[
+                    styles.toggleText,
+                    viewMode === "genres" && styles.toggleTextActive,
+                  ]}
+                >
+                  Genres
+                </Text>
+              </TouchableOpacity>
+            </TVFocusGuideView>
+          </View>
+          {viewMode === "all" ? (
+            <Text style={styles.subtitle}>
+              {allMoviesItems.length > 0
+                ? `${allMoviesItems.length}+ movies`
+                : "Browse all movies"}
+            </Text>
+          ) : (
+            dataToRender && (
+              <Text style={styles.subtitle}>
+                Browse {dataToRender.mediaTypeCounts?.movies} movies across{" "}
+                {dataToRender.totalGenres} genres
+              </Text>
+            )
+          )}
         </View>
 
-        {/* Genre-based Content Rows with coordinated progressive loading */}
-        <Suspense fallback={<GenreLoaderFallback />}>
-          <LazyProgressiveGenreLoader
-            genres={processedGenres}
-            onSelectContent={handleSelectContent}
-            transformMediaItems={transformMediaItems}
+        {/* All Movies view */}
+        {viewMode === "all" && (
+          <ContentRow
+            title=""
+            showHeader={false}
+            items={transformMediaItems(allMoviesItems)}
+            onSelectContent={handleSelectFromRow}
+            itemSize="small"
+            hasNextPage={hasNextMoviesPage}
+            isFetchingNextPage={isFetchingNextMoviesPage}
+            onLoadMore={fetchNextMoviesPage}
+            trapFocusDown
           />
-        </Suspense>
+        )}
+
+        {/* Genres view — lightweight grid, navigates to per-genre page on select */}
+        {viewMode === "genres" && (
+          <TVGenreGrid
+            genres={processedGenres}
+            contentType="movie"
+            onSelectGenre={handleSelectGenre}
+          />
+        )}
       </ScrollView>
     </View>
   );
@@ -129,18 +233,14 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     textAlign: "center",
   },
-  genreLoaderFallback: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 40,
-  },
-  genreLoaderFallbackText: {
-    color: "#CCCCCC",
-    fontSize: 16,
-    marginTop: 15,
-  },
   headerContainer: {
     marginBottom: 30,
+  },
+  headerRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 10,
   },
   loadingContainer: {
     alignItems: "center",
@@ -161,7 +261,28 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 32,
     fontWeight: "bold",
-    marginBottom: 10,
+  },
+  toggleButton: {
+    borderRadius: 6,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  toggleButtonActive: {
+    backgroundColor: Colors.dark.brandPrimary,
+  },
+  toggleText: {
+    color: Colors.dark.videoDescriptionText,
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  toggleTextActive: {
+    color: Colors.dark.whiteText,
+  },
+  toggleWrapper: {
+    backgroundColor: Colors.dark.cardBackground,
+    borderRadius: 8,
+    flexDirection: "row",
+    padding: 4,
   },
 });
 

@@ -39,7 +39,6 @@ export const DEBUG_API = __DEV__;
 export class EnhancedApiClient {
   private baseUrl: string | null = null;
   private authToken: string | null = null;
-  private sessionId: string | null = null;
   private debugMode: boolean = DEBUG_API;
   private tokenRefreshCallback: (() => Promise<boolean>) | null = null;
 
@@ -80,13 +79,6 @@ export class EnhancedApiClient {
     this.updateStoredAuth();
   }
 
-  setSessionId(sessionId: string | null) {
-    this.logDebug(`Setting session ID: ${sessionId || "null"}`);
-    this.sessionId = sessionId;
-    // Store in AsyncStorage for axios interceptor
-    this.updateStoredAuth();
-  }
-
   setTokenRefreshCallback(callback: (() => Promise<boolean>) | null) {
     this.logDebug(
       `Setting token refresh callback: ${callback ? "provided" : "null"}`,
@@ -106,11 +98,10 @@ export class EnhancedApiClient {
 
   private async updateStoredAuth() {
     try {
-      const authData = {
-        authToken: this.authToken,
-        sessionId: this.sessionId,
-      };
-      await AsyncStorage.setItem("auth", JSON.stringify(authData));
+      await AsyncStorage.setItem(
+        "auth",
+        JSON.stringify({ authToken: this.authToken }),
+      );
     } catch (error) {
       console.error("Failed to store auth data:", error);
     }

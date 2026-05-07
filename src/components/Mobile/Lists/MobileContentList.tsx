@@ -1,17 +1,19 @@
-import React, { memo, useCallback } from "react";
-import {
-  StyleSheet,
-  View,
-  Text,
-  FlatList,
-  ListRenderItem,
-  RefreshControl,
-} from "react-native";
+import { FlashList, ListRenderItem } from "@shopify/flash-list";
+import { memo, useCallback, useMemo, useState } from "react";
+import { StyleSheet, View, Text, RefreshControl } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import MobileContentCard, {
   MobileContentCardData,
 } from "@/src/components/Mobile/Cards/MobileContentCard";
 import { Colors } from "@/src/constants/Colors";
+import { MOBILE_TAB_CONFIG } from "@/src/constants/MobileNavConstants";
+import {
+  useActionSheetConfig,
+  ActionSheetContentData,
+} from "@/src/hooks/useActionSheetConfig";
+import { useSmartInfiniteScroll } from "@/src/hooks/useSmartInfiniteScroll";
 
 interface MobileContentListProps {
   title: string;
@@ -48,6 +50,8 @@ interface MobileContentListProps {
   // Loading state
   loading?: boolean;
   numColumns?: number;
+  // Whether this list sits behind a tab bar (adds tab bar height to bottom padding)
+  hasTabBar?: boolean;
 }
 
 const MobileContentList = ({
@@ -67,75 +71,102 @@ const MobileContentList = ({
   emptyMessage = "No content available",
   loading = false,
   numColumns,
+  hasTabBar = true,
 }: MobileContentListProps) => {
+  const { bottom } = useSafeAreaInsets();
+  // Tab bar is absolutely positioned; total height = paddingTop(12) + TAB_BAR_HEIGHT + Math.max(bottom, 12)
+  const listBottomPadding = horizontal
+    ? 0
+    : hasTabBar
+      ? MOBILE_TAB_CONFIG.TAB_BAR_HEIGHT + Math.max(bottom, 12) + 12
+      : Math.max(bottom, 12);
+
   // Calculate number of columns for grid layout
   const columns =
     numColumns || (cardSize === "small" ? 3 : cardSize === "large" ? 1 : 2);
 
-  // Handle play content
-  const handlePlayContent = useCallback(
-    (
-      showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
-      mediaType: "movie" | "tv",
-      backdropUrl?: string,
-      backdropBlurhash?: string,
-    ) => {
-      onPlayContent(
-        showId,
-        mediaType,
-        seasonNumber,
-        episodeNumber,
-        backdropUrl,
-        backdropBlurhash,
-      );
+  // Single action sheet instance for the entire list
+  const { generateConfig, invalidateItemStatus } = useActionSheetConfig();
+  const [selectedItem, setSelectedItem] =
+    useState<MobileContentCardData | null>(null);
+
+  const handleClose = useCallback(() => setSelectedItem(null), []);
+
+  const actionSheetConfig = useMemo(() => {
+    if (!selectedItem) return null;
+    const contentData: ActionSheetContentData = {
+      id: selectedItem.showId || selectedItem.id,
+      tmdbId: selectedItem.tmdbId,
+      title: selectedItem.title,
+      mediaType: selectedItem.mediaType || "movie",
+      seasonNumber: selectedItem.seasonNumber,
+      episodeNumber: selectedItem.episodeNumber,
+      isUnavailable: selectedItem.isUnavailable,
+      isComingSoon: selectedItem.isComingSoon,
+      comingSoonDate: selectedItem.comingSoonDate,
+      backdrop: selectedItem.backdropUrl,
+      backdropBlurhash:
+        selectedItem.backdropBlurhash || selectedItem.thumbnailBlurhash,
+    };
+    return generateConfig(contentData, "card", {
+      onClose: handleClose,
+      onPlay: (data) => {
+        handleClose();
+        onPlayContent(
+          data.id,
+          data.mediaType,
+          data.seasonNumber,
+          data.episodeNumber,
+          data.backdrop,
+          data.backdropBlurhash,
+        );
+      },
+      onInfo: (data) => {
+        handleClose();
+        onInfoContent(
+          data.id,
+          data.mediaType,
+          data.seasonNumber,
+          data.episodeNumber,
+          data.backdrop,
+          data.backdropBlurhash,
+        );
+      },
+    });
+  }, [selectedItem, generateConfig, handleClose, onPlayContent, onInfoContent]);
+
+  const handleCardPress = useCallback(
+    (item: MobileContentCardData) => {
+      invalidateItemStatus({
+        id: item.showId || item.id,
+        tmdbId: item.tmdbId,
+        title: item.title,
+        mediaType: item.mediaType || "movie",
+      });
+      setSelectedItem(item);
     },
-    [onPlayContent],
+    [invalidateItemStatus],
   );
 
-  // Handle info content
-  const handleInfoContent = useCallback(
-    (
-      showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
-      mediaType: "movie" | "tv",
-      backdropUrl?: string,
-      backdropBlurhash?: string,
-    ) => {
-      onInfoContent(
-        showId,
-        mediaType,
-        seasonNumber,
-        episodeNumber,
-        backdropUrl,
-        backdropBlurhash,
-      );
-    },
-    [onInfoContent],
-  );
-
-  // Render individual content card
   const renderItem: ListRenderItem<MobileContentCardData> = useCallback(
     ({ item }) => (
       <MobileContentCard
         item={item}
-        onPlay={handlePlayContent}
-        onInfo={handleInfoContent}
+        onPress={handleCardPress}
         layout={layout}
         size={cardSize}
       />
     ),
-    [handlePlayContent, handleInfoContent, layout, cardSize],
+    [handleCardPress, layout, cardSize],
   );
 
-  // Handle end reached for infinite scroll
-  const handleEndReached = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage && onLoadMore) {
-      onLoadMore();
-    }
-  }, [hasNextPage, isFetchingNextPage, onLoadMore]);
+  const smartScroll = useSmartInfiniteScroll({
+    hasNextPage,
+    isFetching: isFetchingNextPage,
+    onLoadMore: onLoadMore ?? (() => {}),
+    horizontal,
+    predictAheadMs: 1200,
+  });
 
   // Render loading footer
   const renderFooter = useCallback(() => {
@@ -191,24 +222,24 @@ const MobileContentList = ({
         </View>
       )}
 
-      <FlatList
+      <FlashList
         data={data}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         horizontal={horizontal}
         numColumns={horizontal ? 1 : columns}
-        key={`${horizontal ? "horizontal" : "vertical"}-${columns}`} // Force re-render when layout changes
+        key={`${horizontal ? "horizontal" : "vertical"}-${columns}`}
         showsHorizontalScrollIndicator={false}
         showsVerticalScrollIndicator={!horizontal}
         contentContainerStyle={[
           styles.listContent,
-          horizontal && styles.horizontalContent,
-          data.length === 0 && styles.emptyListContent,
+          horizontal
+            ? styles.horizontalContent
+            : { paddingBottom: listBottomPadding },
         ]}
-        columnWrapperStyle={!horizontal && columns > 1 ? styles.row : undefined}
-        // Infinite scroll
-        onEndReached={handleEndReached}
-        onEndReachedThreshold={0.5}
+        drawDistance={500}
+        // Smart infinite scroll
+        {...smartScroll}
         ListFooterComponent={renderFooter}
         // Pull to refresh
         refreshControl={
@@ -223,25 +254,18 @@ const MobileContentList = ({
         }
         // Empty state
         ListEmptyComponent={renderEmpty}
-        // Performance optimizations
-        removeClippedSubviews={true}
-        maxToRenderPerBatch={horizontal ? 10 : 6}
-        windowSize={horizontal ? 21 : 10}
-        initialNumToRender={horizontal ? 6 : 4}
-        getItemLayout={
-          layout === "grid" && !horizontal
-            ? (data, index) => {
-                const itemHeight =
-                  cardSize === "small" ? 200 : cardSize === "large" ? 300 : 250;
-                return {
-                  length: itemHeight,
-                  offset: itemHeight * Math.floor(index / columns),
-                  index,
-                };
-              }
-            : undefined
-        }
       />
+
+      {selectedItem && actionSheetConfig && (
+        <MobileActionSheet
+          visible
+          onClose={handleClose}
+          title={actionSheetConfig.title}
+          subtitle={actionSheetConfig.subtitle}
+          actions={actionSheetConfig.actions}
+          onBack={actionSheetConfig.onBack}
+        />
+      )}
     </View>
   );
 };
@@ -257,10 +281,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 60,
   },
-  emptyListContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-  },
   emptyText: {
     color: Colors.dark.videoDescriptionText,
     fontSize: 16,
@@ -275,7 +295,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   listContent: {
-    paddingBottom: 20,
+    paddingBottom: 80,
+    paddingLeft: 16,
   },
   loadingContainer: {
     alignItems: "center",
@@ -296,10 +317,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     height: 24,
     width: 120,
-  },
-  row: {
-    justifyContent: "space-around",
-    paddingHorizontal: 8,
   },
   title: {
     color: Colors.dark.whiteText,

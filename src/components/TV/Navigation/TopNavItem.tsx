@@ -32,6 +32,41 @@ interface TopNavItemProps {
   onBlur?: () => void;
 }
 
+
+function isRouteActive(route: NavigationRoute, pathname: string) {
+  const routePageName = route.path.split("/").pop();
+  const simplifiedPath = routePageName ? `/${routePageName}` : pathname;
+
+  if (route.key === "home") {
+    return (
+      pathname === "/(tv)/(protected)/(browse)/" ||
+      pathname === "/(tv)/(protected)/(browse)" ||
+      pathname === "/" ||
+      pathname.endsWith("/(browse)")
+    );
+  }
+
+  if (route.key === "movies") {
+    return (
+      pathname === route.path ||
+      pathname === simplifiedPath ||
+      pathname.startsWith("/(tv)/(protected)/(browse)/genre/movie/") ||
+      pathname.startsWith("/genre/movie/")
+    );
+  }
+
+  if (route.key === "shows") {
+    return (
+      pathname === route.path ||
+      pathname === simplifiedPath ||
+      pathname.startsWith("/(tv)/(protected)/(browse)/genre/tv/") ||
+      pathname.startsWith("/genre/tv/")
+    );
+  }
+
+  return pathname === `/${routePageName}` || pathname === route.path;
+}
+
 const TopNavItem: React.FC<TopNavItemProps> = ({
   route,
   isActive = false,
@@ -58,20 +93,10 @@ const TopNavItem: React.FC<TopNavItemProps> = ({
   }, [pathname]);
 
   // Determine active state
-  const isCurrentlyActive = useMemo(() => {
-    /* same logic as before */
-    if (route.key === "home") {
-      return (
-        pathname === "/(tv)/(protected)/(browse)/" ||
-        pathname === "/(tv)/(protected)/(browse)" ||
-        pathname === "/" ||
-        pathname.endsWith("/(browse)")
-      );
-    } else {
-      const routePageName = route.path.split("/").pop();
-      return pathname === `/${routePageName}` || pathname === route.path;
-    }
-  }, [pathname, route.path, route.key]);
+  const isCurrentlyActive = useMemo(
+    () => isRouteActive(route, pathname),
+    [pathname, route],
+  );
 
   // Animate font size when navbar focus changes
   useEffect(() => {
@@ -110,15 +135,7 @@ const TopNavItem: React.FC<TopNavItemProps> = ({
     if (!isCurrentlyActive) {
       focusTimeoutRef.current = setTimeout(() => {
         const currentPathname = pathnameRef.current;
-        let notActive =
-          route.key === "home"
-            ? !(
-                currentPathname === "/(tv)/(protected)/(browse)/" ||
-                currentPathname === "/(tv)/(protected)/(browse)" ||
-                currentPathname === "/" ||
-                currentPathname.endsWith("/(browse)")
-              )
-            : currentPathname !== route.path;
+        const notActive = !isRouteActive(route, currentPathname);
         if (notActive)
           router.push(route.path as any, {
             dangerouslySingular: true,

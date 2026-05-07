@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ImageBackground } from "expo-image";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
   StyleSheet,
@@ -12,9 +12,14 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { useShowEpisode } from "@/src/data/hooks/useContent";
+import {
+  useActionSheetConfig,
+  ActionSheetContentData,
+} from "@/src/hooks/useActionSheetConfig";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
@@ -134,6 +139,55 @@ export default function EpisodeInfoPage() {
     episode?.backdropBlurhash,
   ]);
 
+  const handleRestartEpisode = useCallback(() => {
+    if (!episode) return;
+    navigationHelper.navigateToWatch({
+      id: params.showId,
+      type: "tv",
+      season: seasonNumber,
+      episode: episodeNumber,
+      backdrop: episode?.episode?.thumbnail,
+      backdropBlurhash: episode?.episode?.thumbnailBlurhash,
+      restart: "true",
+    });
+  }, [episode, params.showId, seasonNumber, episodeNumber]);
+
+  // Action sheet
+  const { generateConfig } = useActionSheetConfig();
+  const [showActionSheet, setShowActionSheet] = useState(false);
+
+  const handleCloseActionSheet = useCallback(() => {
+    setShowActionSheet(false);
+  }, []);
+
+  const contentData = useMemo((): ActionSheetContentData => {
+    const metadata = episode?.metadata as Record<string, unknown> | undefined;
+    const parseTmdbId = (v: unknown): number | undefined => {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string") {
+        const p = parseInt(v, 10);
+        if (Number.isFinite(p)) return p;
+      }
+      return undefined;
+    };
+    const resolvedTmdbId =
+      parseTmdbId((episode as any)?.tmdbId) ??
+      parseTmdbId(metadata?.tmdbId) ??
+      parseTmdbId(metadata?.tmdb_id);
+
+    return {
+      id: params.showId,
+      tmdbId: resolvedTmdbId,
+      title: episode?.episode?.title || episode?.showTitle || "",
+      mediaType: "tv",
+      seasonNumber,
+      episodeNumber,
+      backdrop: episode?.episode?.thumbnail || episode?.backdrop,
+      backdropBlurhash:
+        episode?.episode?.thumbnailBlurhash || episode?.backdropBlurhash,
+    };
+  }, [episode, params.showId, seasonNumber, episodeNumber]);
+
   // Handle go to show info
   const handleGoToShow = useCallback(() => {
     navigationHelper.navigateToMediaInfo(
@@ -145,6 +199,28 @@ export default function EpisodeInfoPage() {
       true,
     ); // fromEpisodeInfo = true to use dismissTo
   }, [router, params.showId, seasonNumber]);
+
+  const actionSheetConfig = useMemo(() => {
+    const config = generateConfig(contentData, "episode", {
+      onClose: handleCloseActionSheet,
+      onPlay: handlePlayEpisode,
+      onRestart: handleRestartEpisode,
+      onInfo: handleGoToShow,
+    });
+    return {
+      ...config,
+      actions: config.actions.map((action) =>
+        action.id === "info" ? { ...action, title: "Show Info" } : action,
+      ),
+    };
+  }, [
+    generateConfig,
+    contentData,
+    handleCloseActionSheet,
+    handlePlayEpisode,
+    handleRestartEpisode,
+    handleGoToShow,
+  ]);
 
   // Handle go back
   const handleGoBack = useCallback(() => {
@@ -199,13 +275,13 @@ export default function EpisodeInfoPage() {
           {showData.title}
         </Text>
         <TouchableOpacity
-          style={styles.headerInfoButton}
-          onPress={handleGoToShow}
+          style={styles.headerOptionsButton}
+          onPress={() => setShowActionSheet(true)}
         >
           <Ionicons
-            name="information-circle"
-            size={24}
-            color={Colors.dark.brandPrimary}
+            name="ellipsis-horizontal"
+            size={20}
+            color={Colors.dark.whiteText}
           />
         </TouchableOpacity>
       </View>
@@ -482,6 +558,16 @@ export default function EpisodeInfoPage() {
           )}
         </View>
       </ScrollView>
+
+      <MobileActionSheet
+        visible={showActionSheet}
+        onClose={handleCloseActionSheet}
+        title={actionSheetConfig.title}
+        subtitle={actionSheetConfig.subtitle}
+        actions={actionSheetConfig.actions}
+        backdropDismiss
+        onBack={actionSheetConfig.onBack}
+      />
     </View>
   );
 }
@@ -511,7 +597,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
   },
-  headerInfoButton: {
+  headerOptionsButton: {
     padding: 8,
   },
 

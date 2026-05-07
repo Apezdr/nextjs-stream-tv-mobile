@@ -3,17 +3,12 @@
  */
 
 export const API_ENDPOINTS = {
-  // Authentication endpoints
+  // Authentication endpoints (better-auth device authorization flow)
   AUTH: {
-    REGISTER_SESSION: "/api/auth/register-session",
-    CHECK_TOKEN: "/api/auth/check-token",
-    USER_STATUS: "/api/auth/user-status",
-    NATIVE_SIGNIN: (providerId: string) => `/native-signin/${providerId}`,
-    // QR Code Authentication
-    REGISTER_QR_SESSION: "/api/auth/register-qr-session",
-    QR_SESSION_INFO: "/api/auth/qr-session-info",
-    AUTHENTICATE_QR_SESSION: "/api/auth/authenticate-qr-session",
-    CHECK_QR_TOKEN: "/api/auth/check-qr-token",
+    DEVICE_CODE: "/api/auth/device/code", // POST — get device_code + user_code
+    DEVICE_TOKEN: "/api/auth/device/token", // POST — poll for access_token
+    GET_SESSION: "/api/auth/get-session", // GET  — validate token + fetch user
+    SIGN_OUT: "/api/auth/sign-out", // POST — invalidate session server-side
   },
 
   // Content-related endpoints

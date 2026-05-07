@@ -46,6 +46,7 @@ export interface ContentItemData {
   logo?: string;
   year?: string;
   isAvailable?: boolean;
+  isTrailer?: boolean;
 }
 
 interface ContentItemProps {
@@ -61,6 +62,10 @@ interface ContentItemProps {
   size?: "small" | "medium" | "large";
   customWidth?: number;
   hasTVPreferredFocus?: boolean;
+  /** Controlled by the parent row's programmatic focus system on TV */
+  isFocused?: boolean;
+  /** Pass false to remove this item from the tvOS focus graph */
+  isTVSelectable?: boolean;
 }
 
 const ContentItem = ({
@@ -69,6 +74,8 @@ const ContentItem = ({
   size = "medium",
   customWidth,
   hasTVPreferredFocus = false,
+  isFocused = false,
+  isTVSelectable = Platform.isTV,
 }: ContentItemProps) => {
   // Use the new Zustand-based backdrop manager
   const { show: showBackdrop } = useBackdropManager();
@@ -174,27 +181,32 @@ const ContentItem = ({
       style={[
         styles.container,
         { width: dimensions.itemWidth, height: dimensions.itemHeight + 180 },
+        isFocused && styles.focused,
       ]}
       onPress={handlePress}
       onFocus={handleFocus}
       activeOpacity={1.0}
-      isTVSelectable={Platform.isTV}
+      isTVSelectable={isTVSelectable}
       hasTVPreferredFocus={hasTVPreferredFocus && Platform.isTV}
     >
       <OptimizedImage
         source={item.thumbnailUrl ? { uri: item.thumbnailUrl } : undefined}
         style={styles.thumbnail}
-        placeholder={{
-          uri: `data:image/png;base64,${item?.thumbnailBlurhash}`,
-        }}
+        placeholder={
+          item.thumbnailUrl && item.thumbnailBlurhash
+            ? { uri: `data:image/png;base64,${item.thumbnailBlurhash}` }
+            : undefined
+        }
         placeholderContentFit="cover"
-        transition={200}
+        transition={0}
         contentFit="cover"
         width={
           Math.round(dimensions.itemWidth) +
           (item.mediaType === "movie" ? 100 : 300)
         }
         quality={100}
+        cachePolicy="memory-disk"
+        recyclingKey={item.id}
       />
 
       {isUnavailableItem && (
@@ -206,12 +218,22 @@ const ContentItem = ({
         </View>
       )}
 
-      {/* Season/Episode info at the top */}
-      {item.seasonNumber && item.episodeNumber && (
-        <View style={styles.topOverlay}>
-          <Text style={styles.seasonEpisodeText}>
-            S{item.seasonNumber}E{item.episodeNumber}
-          </Text>
+      {/* Top-left badge stack: season/episode and/or trailer */}
+      {((item.seasonNumber && item.episodeNumber) || item.isTrailer) && (
+        <View style={styles.topLeftBadges}>
+          {item.seasonNumber && item.episodeNumber && (
+            <View style={styles.topOverlay}>
+              <Text style={styles.seasonEpisodeText}>
+                S{item.seasonNumber}E{item.episodeNumber}
+              </Text>
+            </View>
+          )}
+          {item.isTrailer && (
+            <View style={styles.trailerBadge}>
+              <Ionicons name="play-circle" size={10} color="#FFFFFF" />
+              <Text style={styles.trailerBadgeText}>Trailer</Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -252,7 +274,12 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     margin: 8,
     opacity: 0.22,
-    overflow: "hidden", // Default 22% opacity
+    overflow: "hidden",
+  },
+  focused: {
+    borderColor: "#FFFFFF",
+    borderWidth: 3,
+    opacity: 1,
   },
   logoContainer: {
     alignItems: "center",
@@ -304,15 +331,34 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginRight: 8,
   },
-  topOverlay: {
-    backgroundColor: Colors.dark.videoOverlayBackground,
-    borderRadius: 4,
+  topLeftBadges: {
+    alignItems: "flex-start",
+    flexDirection: "column",
+    gap: 4,
     left: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
     position: "absolute",
     top: 8,
     zIndex: 1,
+  },
+  topOverlay: {
+    backgroundColor: Colors.dark.videoOverlayBackground,
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  trailerBadge: {
+    alignItems: "center",
+    backgroundColor: "rgba(147, 51, 234, 0.9)",
+    borderRadius: 4,
+    flexDirection: "row",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  trailerBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "600",
   },
   unavailableOverlay: {
     alignItems: "center",
@@ -334,12 +380,17 @@ const styles = StyleSheet.create({
 
 // Simplified comparison function to prevent flashing
 const areEqual = (prevProps: ContentItemProps, nextProps: ContentItemProps) => {
-  // Only compare the most essential props
   return (
     prevProps.item.id === nextProps.item.id &&
+    prevProps.item.thumbnailUrl === nextProps.item.thumbnailUrl &&
+    prevProps.item.thumbnailBlurhash === nextProps.item.thumbnailBlurhash &&
+    prevProps.item.title === nextProps.item.title &&
+    prevProps.item.isAvailable === nextProps.item.isAvailable &&
     prevProps.size === nextProps.size &&
     prevProps.customWidth === nextProps.customWidth &&
-    prevProps.hasTVPreferredFocus === nextProps.hasTVPreferredFocus
+    prevProps.hasTVPreferredFocus === nextProps.hasTVPreferredFocus &&
+    prevProps.isFocused === nextProps.isFocused &&
+    prevProps.isTVSelectable === nextProps.isTVSelectable
   );
 };
 

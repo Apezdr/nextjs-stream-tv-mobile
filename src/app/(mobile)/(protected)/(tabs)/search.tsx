@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { FlashList } from "@shopify/flash-list";
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useCallback, useMemo, useState, useRef } from "react";
@@ -6,7 +7,6 @@ import {
   StyleSheet,
   View,
   Text,
-  FlatList,
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
@@ -14,12 +14,17 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
+import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
 import MobileContentCard, {
   MobileContentCardData,
 } from "@/src/components/Mobile/Cards/MobileContentCard";
 import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
+import {
+  useActionSheetConfig,
+  ActionSheetContentData,
+} from "@/src/hooks/useActionSheetConfig";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useSearchPreferencesStore } from "@/src/stores/searchPreferencesStore";
 import { navigationHelper } from "@/src/utils/navigationHelper";
@@ -114,6 +119,9 @@ const MobileSearchRowItem = ({
 export default function SearchPage() {
   const insets = useSafeAreaInsets();
   const { show: showBackdrop } = useBackdropManager();
+  const { generateConfig } = useActionSheetConfig();
+  const [selectedItem, setSelectedItem] =
+    useState<MobileContentCardData | null>(null);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -151,7 +159,11 @@ export default function SearchPage() {
   } = useQuery({
     queryKey: ["search", debouncedQuery],
     queryFn: () =>
-      contentService.search(debouncedQuery, debouncedQuery ? undefined : 30),
+      contentService.search(
+        debouncedQuery,
+        debouncedQuery ? undefined : 30,
+        true,
+      ),
     enabled: true,
   });
 
@@ -168,6 +180,7 @@ export default function SearchPage() {
       backdropBlurhash: item.backdropBlurhash,
       mediaType: item.type,
       showId: item.id,
+      tmdbId: item.tmdbId ?? item.metadata?.tmdbId ?? item.metadata?.tmdb_id,
       seasonNumber: item.seasonNumber,
       episodeNumber: item.episodeNumber,
       hdr: item.hdr,
@@ -183,70 +196,71 @@ export default function SearchPage() {
     }));
   }, [searchResults]);
 
-  // Handle play content
-  const handlePlayContent = useCallback(
-    (
-      showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
-      mediaType: "movie" | "tv",
-      backdropUrl?: string,
-      backdropBlurhash?: string,
-    ) => {
-      if (backdropUrl) {
-        showBackdrop(backdropUrl, {
-          fade: true,
-          duration: 300,
-          blurhash: backdropBlurhash,
+  // Action sheet config (lazy — only computed when a card is tapped)
+  const actionSheetConfig = useMemo(() => {
+    if (!selectedItem) return null;
+    const contentData: ActionSheetContentData = {
+      id: selectedItem.showId || selectedItem.id,
+      tmdbId: selectedItem.tmdbId,
+      title: selectedItem.title,
+      mediaType: selectedItem.mediaType || "movie",
+      seasonNumber: selectedItem.seasonNumber,
+      episodeNumber: selectedItem.episodeNumber,
+      backdrop: selectedItem.backdropUrl,
+      backdropBlurhash:
+        selectedItem.backdropBlurhash || selectedItem.thumbnailBlurhash,
+    };
+    return generateConfig(contentData, "card", {
+      onClose: () => setSelectedItem(null),
+      onPlay: (data) => {
+        setSelectedItem(null);
+        if (data.backdrop) {
+          showBackdrop(data.backdrop, {
+            fade: true,
+            duration: 300,
+            blurhash: data.backdropBlurhash,
+          });
+        }
+        navigationHelper.navigateToWatch({
+          id: data.id,
+          type: data.mediaType,
+          ...(data.seasonNumber && { season: data.seasonNumber }),
+          ...(data.episodeNumber && { episode: data.episodeNumber }),
+          ...(data.backdrop && { backdrop: data.backdrop }),
+          ...(data.backdropBlurhash && {
+            backdropBlurhash: data.backdropBlurhash,
+          }),
         });
-      }
-
-      navigationHelper.navigateToWatch({
-        id: showId,
-        type: mediaType,
-        ...(seasonNumber && { season: seasonNumber }),
-        ...(episodeNumber && { episode: episodeNumber }),
-        ...(backdropUrl && { backdrop: backdropUrl }),
-        ...(backdropBlurhash && { backdropBlurhash }),
-      });
-    },
-    [showBackdrop],
-  );
-
-  // Handle info content
-  const handleInfoContent = useCallback(
-    (
-      showId: string,
-      seasonNumber: number | undefined,
-      episodeNumber: number | undefined,
-      mediaType: "movie" | "tv",
-      backdropUrl?: string,
-      backdropBlurhash?: string,
-    ) => {
-      if (backdropUrl) {
-        showBackdrop(backdropUrl, {
-          fade: true,
-          duration: 300,
-          blurhash: backdropBlurhash,
-        });
-      }
-
-      if (mediaType === "tv" && seasonNumber && episodeNumber) {
-        navigationHelper.navigateToEpisodeInfo({
-          showId,
-          season: seasonNumber,
-          episode: episodeNumber,
-        });
-      } else {
-        navigationHelper.navigateToMediaInfo({
-          id: showId,
-          type: mediaType,
-          ...(seasonNumber && { season: seasonNumber }),
-        });
-      }
-    },
-    [showBackdrop],
-  );
+      },
+      onInfo: (data) => {
+        setSelectedItem(null);
+        if (data.backdrop) {
+          showBackdrop(data.backdrop, {
+            fade: true,
+            duration: 300,
+            blurhash: data.backdropBlurhash,
+          });
+        }
+        if (
+          data.mediaType === "tv" &&
+          data.seasonNumber &&
+          data.episodeNumber
+        ) {
+          navigationHelper.navigateToEpisodeInfo({
+            showId: data.id,
+            season: data.seasonNumber,
+            episode: data.episodeNumber,
+          });
+        } else {
+          navigationHelper.navigateToMediaInfo({
+            id: data.id,
+            type: data.mediaType,
+            ...(data.seasonNumber && { season: data.seasonNumber }),
+          });
+        }
+      },
+    });
+  }, [selectedItem, generateConfig, showBackdrop]);
 
   // Navigate to info on row item press
   const handleRowPress = useCallback(
@@ -277,6 +291,10 @@ export default function SearchPage() {
     [showBackdrop],
   );
 
+  const handleCardPress = useCallback((item: MobileContentCardData) => {
+    setSelectedItem(item);
+  }, []);
+
   // Render item based on current layout
   const renderItem = useCallback(
     ({ item }: { item: MobileContentCardData }) => {
@@ -291,23 +309,28 @@ export default function SearchPage() {
       return (
         <MobileContentCard
           item={item}
-          onPlay={handlePlayContent}
-          onInfo={handleInfoContent}
+          onPress={handleCardPress}
           layout="grid"
           size={numColumns === 3 ? "small" : "medium"}
         />
       );
     },
-    [numColumns, handlePlayContent, handleInfoContent, handleRowPress],
+    [numColumns, handleCardPress, handleRowPress],
   );
 
   const keyExtractor = useCallback(
-    (item: MobileContentCardData) => item.id,
+    (item: MobileContentCardData, index: number) =>
+      `${item.id}-${item.seasonNumber ?? ""}-${item.episodeNumber ?? ""}-${index}`,
     [],
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View
+      style={[
+        styles.container,
+        { paddingTop: insets.top, paddingBottom: insets.bottom },
+      ]}
+    >
       {/* Header with search bar */}
       <View style={styles.header}>
         <Text style={styles.title}>Search</Text>
@@ -416,20 +439,27 @@ export default function SearchPage() {
           </Text>
         </View>
       ) : (
-        <FlatList
+        <FlashList
           key={`grid-${numColumns}`}
           data={transformedResults}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           numColumns={numColumns}
-          columnWrapperStyle={numColumns > 1 ? styles.columnWrapper : undefined}
           contentContainerStyle={styles.gridContainer}
           showsVerticalScrollIndicator={false}
           keyboardDismissMode="on-drag"
-          removeClippedSubviews
-          maxToRenderPerBatch={8}
-          initialNumToRender={10}
-          windowSize={7}
+          getItemType={() => (numColumns === 1 ? "row" : "card")}
+        />
+      )}
+
+      {selectedItem && actionSheetConfig && (
+        <MobileActionSheet
+          visible
+          onClose={() => setSelectedItem(null)}
+          title={actionSheetConfig.title}
+          subtitle={actionSheetConfig.subtitle}
+          actions={actionSheetConfig.actions}
+          onBack={actionSheetConfig.onBack}
         />
       )}
     </View>
@@ -439,10 +469,6 @@ export default function SearchPage() {
 const styles = StyleSheet.create({
   clearButton: {
     padding: 4,
-  },
-  columnWrapper: {
-    justifyContent: "space-around",
-    paddingHorizontal: 8,
   },
   container: {
     backgroundColor: Colors.dark.background,

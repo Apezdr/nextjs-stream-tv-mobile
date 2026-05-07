@@ -63,9 +63,12 @@ export const MOBILE_TAB_CONFIG = {
 
 // Mobile-specific colors for tabs
 export const MOBILE_TAB_COLORS = {
-  ACTIVE_BACKGROUND: "#1C1C1C", // Dark gray background for active tab
-  ACTIVE_TINT: "#E50914", // Netflix red
-  INACTIVE_TINT: "#8C8C8C", // Gray
-  BACKGROUND: "#000000", // Black background
-  BORDER: "#1C1C1C", // Dark gray border
+  ACTIVE_BACKGROUND: "#1a1a1a", // Netflix red pill for active tab
+  ACTIVE_TINT: "#FFFFFF", // White icon/text on red pill
+  INACTIVE_BACKGROUND: "#2A2A2A", // Subtle dark circle for inactive tabs
+  INACTIVE_TINT: "#8C8C8C", // Gray icon for inactive tabs
+  CONTAINER_BACKGROUND: "#353535ea", // Floating pill container background
+  BACKGROUND: "#000000", // Black background (legacy)
+  BORDER: "#2A2A2A", // Dark gray border
+  SHADOW: "#000000", // Shadow color
 } as const;

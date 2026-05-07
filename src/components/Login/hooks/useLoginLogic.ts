@@ -1,6 +1,6 @@
 import * as SecureStore from "expo-secure-store";
-import { useCallback, useEffect, useState } from "react";
-import { Alert, Platform } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert } from "react-native";
 
 import type {
   LoginState,
@@ -9,15 +9,18 @@ import type {
   Provider,
 } from "../types";
 
-import { QRSessionResponse } from "@/src/data/types/auth.types";
+import type { DeviceCodeResponse } from "@/src/data/types/auth.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useAuth } from "@/src/providers/AuthProvider";
 import { getDeviceType } from "@/src/utils/deviceInfo";
 
 const RECENT_HOSTS_KEY = "recently_used_hosts";
 const MAX_RECENT_HOSTS = 5;
+const PROVIDER_FETCH_TIMEOUT_MS = 10000;
 
-export function useLoginLogic() {
+export function useLoginLogic(
+  initialStage: "enter" | "choose" | "qr" = "enter",
+) {
   const isTVPlatform = getDeviceType() === "tv";
   const { show: showBackdrop, hide: hideBackdrop } = useBackdropManager();
 
@@ -34,17 +37,25 @@ export function useLoginLogic() {
 
   // State
   const [host, setHost] = useState("");
-  const [stage, setStage] = useState<"enter" | "choose" | "qr">("enter");
+  const [stage, setStage] = useState<"enter" | "choose" | "qr">(initialStage);
   const [loading, setLoading] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [providersError, setProvidersError] = useState<string | null>(null);
   const [recentlyUsedHosts, setRecentlyUsedHosts] = useState<string[]>([]);
-  const [qrSessionId, setQrSessionId] = useState<string | null>(null);
+  const [deviceCode, setDeviceCode] = useState<string | null>(null);
+  const [userCode, setUserCode] = useState<string | null>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [qrPolling, setQrPolling] = useState(false);
   const [shouldPlayLogo, setShouldPlayLogo] = useState(false);
   const [loadingProviderId, setLoadingProviderId] = useState<string | null>(
     null,
   );
+  const [isQRExpired, setIsQRExpired] = useState(false);
+  const [qrTerminalError, setQrTerminalError] = useState<
+    "expired" | "access_denied" | "server_down" | null
+  >(null);
+  const qrExpiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Load recently used hosts from storage
   const loadRecentlyUsedHosts = useCallback(async () => {
@@ -95,17 +106,71 @@ export function useLoginLogic() {
     setHost(selectedHost);
   }, []);
 
+  const loadProviders = useCallback(async () => {
+    if (!server) return;
+
+    const abortController = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      abortController.abort();
+    }, PROVIDER_FETCH_TIMEOUT_MS);
+
+    setProvidersLoading(true);
+    setProvidersError(null);
+
+    try {
+      const response = await fetch(`${server}/api/auth/providers`, {
+        signal: abortController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Provider request failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as
+        | { providers?: Provider[] }
+        | Provider[];
+
+      const providerList = Array.isArray(data)
+        ? data
+        : Array.isArray(data.providers)
+          ? data.providers
+          : [];
+
+      setProviders(providerList);
+
+      if (providerList.length === 0) {
+        setProvidersError(
+          "No sign-in providers are configured on this server.",
+        );
+      }
+    } catch (error) {
+      setProviders([]);
+
+      if (error instanceof Error && error.name === "AbortError") {
+        setProvidersError("Loading sign-in options timed out. Please retry.");
+        return;
+      }
+
+      setProvidersError("Unable to load sign-in options. Please retry.");
+      console.error("Failed to load auth providers:", error);
+    } finally {
+      clearTimeout(timeoutHandle);
+      setProvidersLoading(false);
+    }
+  }, [server]);
+
   // ── Try to connect to server
-  const tryConnect = useCallback(async () => {
+  const tryConnect = useCallback(async (): Promise<boolean> => {
     if (!host.trim()) {
-      return Alert.alert("Validation Error", "Please enter a site name");
+      Alert.alert("Validation Error", "Please enter a site name");
+      return false;
     }
     setLoading(true);
     try {
       const { ok } = await fetch(`https://${host}/api/status`).then((r) =>
         r.json(),
       );
-      console.log(ok);
+      console.log("isApiStatusOk?", ok);
       if (!ok) throw new Error("Status check failed");
       await setServer(`https://${host}`);
 
@@ -118,12 +183,16 @@ export function useLoginLogic() {
         duration: isTVPlatform ? 800 : 500, // Slower fade on TV for better experience
       });
 
-      // For tvOS devices, skip provider selection and go directly to QR code
-      if (Platform.isTVOS) {
+      setProviders([]);
+      setProvidersError(null);
+
+      // For all TV devices, skip provider selection and go directly to QR code
+      if (isTVPlatform) {
         setStage("qr");
       } else {
         setStage("choose");
       }
+      return true;
     } catch (e: unknown) {
       let errorHeader = "Validation Error";
       let errorMessage = e instanceof Error ? e.message : "Connection failed";
@@ -138,6 +207,7 @@ export function useLoginLogic() {
       }
 
       Alert.alert(errorHeader, errorMessage);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -162,11 +232,33 @@ export function useLoginLogic() {
 
   // ── Cancel QR authentication
   const cancelQR = useCallback(() => {
+    if (qrExpiryTimerRef.current) {
+      clearTimeout(qrExpiryTimerRef.current);
+      qrExpiryTimerRef.current = null;
+    }
+    setIsQRExpired(false);
+    setQrTerminalError(null);
     cancelQRAuthentication();
-    setQrSessionId(null);
+    setDeviceCode(null);
+    setUserCode(null);
     setQrCode(null);
     setQrPolling(false);
   }, [cancelQRAuthentication]);
+
+  // ── Refresh QR code — resets all device-code state so the effect triggers a
+  // fresh signInWithQRCode call and starts a new expiry countdown.
+  const refreshQRCode = useCallback(() => {
+    if (qrExpiryTimerRef.current) {
+      clearTimeout(qrExpiryTimerRef.current);
+      qrExpiryTimerRef.current = null;
+    }
+    setIsQRExpired(false);
+    setQrTerminalError(null);
+    setDeviceCode(null);
+    setUserCode(null);
+    setQrCode(null);
+    setQrPolling(false);
+  }, []);
 
   // ── Enhanced provider sign-in with loading state (replacing original)
   const enhancedSignInWithProvider = useCallback(
@@ -202,12 +294,9 @@ export function useLoginLogic() {
   // ── Fetch providers whenever we hit the "choose" stage
   useEffect(() => {
     if (stage === "choose" && server) {
-      fetch(`${server}/api/auth/providers`)
-        .then((r) => r.json())
-        .then((obj) => setProviders(Object.values(obj) as Provider[]))
-        .catch(() => Alert.alert("Error", "Unable to load providers"));
+      void loadProviders();
     }
-  }, [stage, server]);
+  }, [stage, server, loadProviders]);
 
   // ── Start logo animation with delay when entering choose stage
   useEffect(() => {
@@ -222,21 +311,35 @@ export function useLoginLogic() {
     }
   }, [stage]);
 
-  // ── Handle QR code session setup and polling
+  // ── Handle device authorization flow setup and polling
   useEffect(() => {
-    const initializeQRSession = async () => {
+    const initializeDeviceFlow = async () => {
       if (!server || !signInWithQRCode) return;
 
       try {
         setLoading(true);
-        const response = (await signInWithQRCode()) as QRSessionResponse;
-        setQrSessionId(response.qrSessionId);
-        // Generate QR code URL pointing to mobile web page
-        const qrUrl = `${server}/qr-auth?qrSessionId=${response.qrSessionId}`;
-        setQrCode(qrUrl);
+        const response = (await signInWithQRCode()) as DeviceCodeResponse;
+        setDeviceCode(response.device_code);
+        setUserCode(response.user_code);
+        // Use verification_uri_complete directly as the QR code value
+        setQrCode(response.verification_uri_complete);
+        setIsQRExpired(false);
+        setQrTerminalError(null);
+
+        // Start a client-side expiry countdown using the server-provided expires_in.
+        // When it fires, stop polling and surface the expired state so the user
+        // can refresh the code rather than getting a cryptic server error.
+        if (qrExpiryTimerRef.current) clearTimeout(qrExpiryTimerRef.current);
+        qrExpiryTimerRef.current = setTimeout(() => {
+          setIsQRExpired(true);
+          setQrTerminalError("expired");
+          cancelQRAuthentication?.();
+          setQrPolling(false);
+        }, response.expires_in * 1000);
+
         setQrPolling(true);
       } catch (error) {
-        console.error("Failed to initialize QR session:", error);
+        console.error("Failed to initialize device auth flow:", error);
         Alert.alert("Error", "Failed to generate QR code");
         setStage("choose");
       } finally {
@@ -245,12 +348,23 @@ export function useLoginLogic() {
     };
 
     const startPolling = async () => {
-      if (!qrSessionId || !pollQRAuthentication) return;
+      if (!deviceCode || !pollQRAuthentication) return;
 
       try {
-        // The AuthProvider handles the polling internally
-        // When authentication completes, the user state will be updated automatically
-        await pollQRAuthentication(qrSessionId);
+        await pollQRAuthentication(deviceCode, (errCode) => {
+          // Server signalled a terminal error — cancel client timer and surface UI
+          if (qrExpiryTimerRef.current) {
+            clearTimeout(qrExpiryTimerRef.current);
+            qrExpiryTimerRef.current = null;
+          }
+          setIsQRExpired(errCode === "expired");
+          setQrTerminalError(errCode);
+          // Don't stop polling for server_down — the timeout/expiry timers
+          // handle cleanup; we just surface the error to the UI.
+          if (errCode !== "server_down") {
+            setQrPolling(false);
+          }
+        });
         setQrPolling(false);
       } catch (error) {
         console.error("QR polling error:", error);
@@ -260,13 +374,12 @@ export function useLoginLogic() {
       }
     };
 
-    if (stage === "qr" && server && !qrSessionId) {
-      initializeQRSession();
-    } else if (stage === "qr" && qrSessionId && qrPolling) {
+    if (stage === "qr" && server && !deviceCode && !user) {
+      initializeDeviceFlow();
+    } else if (stage === "qr" && deviceCode && qrPolling && !user) {
       startPolling();
     }
 
-    // Cleanup when leaving QR stage
     if (stage !== "qr") {
       setQrPolling(false);
     }
@@ -277,16 +390,24 @@ export function useLoginLogic() {
   }, [
     stage,
     server,
-    qrSessionId,
+    deviceCode,
     qrPolling,
+    user,
     signInWithQRCode,
     pollQRAuthentication,
   ]);
 
-  // ── Reset QR state when leaving QR stage
+  // ── Reset QR/device state when leaving QR stage
   useEffect(() => {
     if (stage !== "qr") {
-      setQrSessionId(null);
+      if (qrExpiryTimerRef.current) {
+        clearTimeout(qrExpiryTimerRef.current);
+        qrExpiryTimerRef.current = null;
+      }
+      setIsQRExpired(false);
+      setQrTerminalError(null);
+      setDeviceCode(null);
+      setUserCode(null);
       setQrCode(null);
       setQrPolling(false);
     }
@@ -297,12 +418,17 @@ export function useLoginLogic() {
     stage,
     loading,
     providers,
+    providersLoading,
+    providersError,
     recentlyUsedHosts,
-    qrSessionId,
+    deviceCode,
+    userCode,
     qrCode,
     qrPolling,
     shouldPlayLogo,
     loadingProviderId,
+    isQRExpired,
+    qrTerminalError,
   };
 
   const actions: LoginActions = {
@@ -311,14 +437,19 @@ export function useLoginLogic() {
     setLoading,
     setProviders,
     setRecentlyUsedHosts,
-    setQrSessionId,
+    setDeviceCode,
+    setUserCode,
     setQrCode,
     setQrPolling,
     setShouldPlayLogo,
     setLoadingProviderId,
+    setIsQRExpired,
+    setQrTerminalError,
+    refreshQRCode,
     selectRecentHost,
     removeFromRecentlyUsed,
     tryConnect,
+    reloadProviders: loadProviders,
     signInWithProvider: enhancedSignInWithProvider,
   };
 

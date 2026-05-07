@@ -195,19 +195,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       try {
         const authData = await AsyncStorage.getItem("auth");
         if (authData) {
-          const { sessionId, authToken } = JSON.parse(authData);
-
-          // Add session ID as header
-          if (sessionId) {
-            config.headers["x-session-id"] = sessionId;
-
-            // Also add as query parameter for compatibility
-            const url = new URL(config.url || "", config.baseURL);
-            if (!url.searchParams.has("sessionId")) {
-              url.searchParams.append("sessionId", sessionId);
-              config.url = url.pathname + url.search;
-            }
-          }
+          const { authToken } = JSON.parse(authData);
 
           // Add Bearer token
           if (authToken && !config.headers.Authorization) {
@@ -309,13 +297,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
               // Get the updated auth data from AsyncStorage
               const authData = await AsyncStorage.getItem("auth");
               if (authData) {
-                const { sessionId, authToken } = JSON.parse(authData);
-
-                // Update the original request with new auth headers
-                if (sessionId && originalRequest) {
-                  originalRequest.headers = originalRequest.headers || {};
-                  originalRequest.headers["x-session-id"] = sessionId;
-                }
+                const { authToken } = JSON.parse(authData);
 
                 if (authToken && originalRequest) {
                   originalRequest.headers = originalRequest.headers || {};

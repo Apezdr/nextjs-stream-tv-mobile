@@ -27,17 +27,19 @@ export default function ExpandableOverview({
   overviewType = "Overview",
 }: ExpandableOverviewProps) {
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [isTruncated, setIsTruncated] = useState(false);
   const [showReadMore, setShowReadMore] = useState(false);
   const { window } = useDimensions();
   const screenWidth = window.width;
   const screenHeight = window.height;
 
+  // Must measure the FULL (unclamped) text — when numberOfLines is set on a
+  // Text, onTextLayout only receives the visible lines, so truncation detection
+  // never fires.  We render a hidden zero-height copy with no line limit to get
+  // the real line count and use that to decide whether to show "Read More".
   const handleTextLayout = useCallback(
     (event: NativeSyntheticEvent<TextLayoutEventData>) => {
       const { lines } = event.nativeEvent;
       const truncated = lines.length > maxLines;
-      setIsTruncated(truncated);
       setShowReadMore(truncated);
       onTruncationChange?.(truncated);
     },
@@ -55,10 +57,16 @@ export default function ExpandableOverview({
   return (
     <>
       <View style={styles.container}>
+        {/* Hidden full-text render for accurate line counting */}
+        <View style={styles.measurementContainer}>
+          <Text style={styles.overviewText} onTextLayout={handleTextLayout}>
+            {overview}
+          </Text>
+        </View>
+        {/* Visible clamped text */}
         <Text
           style={styles.overviewText}
           numberOfLines={maxLines}
-          onTextLayout={handleTextLayout}
           ellipsizeMode="tail"
         >
           {overview}
@@ -145,6 +153,10 @@ const styles = StyleSheet.create({
   container: {
     alignItems: "flex-start",
   },
+  measurementContainer: {
+    height: 0,
+    overflow: "hidden",
+  },
   expandButton: {
     alignSelf: "flex-start",
     backgroundColor: "rgba(255, 255, 255, 0.1)",
@@ -200,6 +212,6 @@ const styles = StyleSheet.create({
   overviewText: {
     color: Colors.dark.whiteText,
     fontSize: 11,
-    lineHeight: 11,
+    lineHeight: 12,
   },
 });

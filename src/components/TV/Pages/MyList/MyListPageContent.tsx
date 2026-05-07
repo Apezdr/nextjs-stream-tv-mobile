@@ -267,6 +267,20 @@ const MyListPageContent = memo(function MyListPageContent() {
         return;
       }
 
+      if (mediaType === "tv") {
+        const rawItem = watchlistItems.find(
+          (i) => i.id === showId || String(i.tmdbId) === showId,
+        );
+        console.log("[MyList][TV] Selecting item", {
+          showId,
+          rawItemId: rawItem?.id,
+          rawTmdbId: rawItem?.tmdbId,
+          title: rawItem?.title,
+          seasonNumber,
+          episodeNumber,
+        });
+      }
+
       if (mediaType === "tv" && seasonNumber && episodeNumber) {
         navigationHelper.navigateToWatch({
           id: showId,

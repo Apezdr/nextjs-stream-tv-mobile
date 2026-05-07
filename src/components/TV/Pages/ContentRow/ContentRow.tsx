@@ -1,18 +1,19 @@
-import React, { memo, useCallback, useMemo, useRef, useEffect } from "react";
+import React, { memo, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
   Text,
-  FlatList,
   TouchableOpacity as RNTouchableOpacity,
   Platform,
   TVFocusGuideView,
+  FlatList,
 } from "react-native";
 
 import ContentItem, {
   ContentItemData,
 } from "@/src/components/TV/Pages/ContentRow/ContentItem";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import { useSmartInfiniteScroll } from "@/src/hooks/useSmartInfiniteScroll";
 
 interface TVTouchableProps extends React.ComponentProps<
   typeof RNTouchableOpacity
@@ -38,15 +39,15 @@ interface ContentRowProps {
   itemSize?: "small" | "medium" | "large";
   showMoreButton?: boolean;
   onShowMore?: () => void;
-  // Infinite scroll
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
-  loadMoreThreshold?: number; // ratio 0–1 of items before end
+  loadMoreThreshold?: number;
   trapFocusDown?: boolean;
   trapFocusLeft?: boolean;
   trapFocusRight?: boolean;
   showHeader?: boolean;
+  preferFirstItemFocus?: boolean;
 }
 
 const ContentRow = ({
@@ -59,31 +60,14 @@ const ContentRow = ({
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
-  loadMoreThreshold = 0.3, // start prefetch when 30% from end
   trapFocusDown = false,
   trapFocusLeft = false,
   trapFocusRight = true,
   showHeader = true,
+  preferFirstItemFocus = false,
 }: ContentRowProps) => {
-  // Simplified load guard - just track if we're currently loading
-  const isLoadingMore = useRef(false);
-
-  // Reset loading state when items change (new data arrived)
-  useEffect(() => {
-    isLoadingMore.current = false;
-  }, [items.length]);
-
-  // Reset loading state when fetching status changes
-  useEffect(() => {
-    if (!isFetchingNextPage) {
-      isLoadingMore.current = false;
-    }
-  }, [isFetchingNextPage]);
-
-  // Get dynamic dimensions
   const { window } = useDimensions();
 
-  // calculate item width + total spacing
   const itemDimensions = useMemo(() => {
     const itemWidth =
       itemSize === "small"
@@ -91,35 +75,30 @@ const ContentRow = ({
         : itemSize === "large"
           ? window.width / 2.7
           : window.width / 3.5;
-    const itemMargin = 16; // your 8px each side
-    return { itemWidth, totalItemWidth: itemWidth + itemMargin };
+    const totalItemWidth = itemWidth + 16; // 8px margin each side
+    const totalItemHeight = Math.ceil(itemWidth * 0.6) + 180 + 16;
+    return { itemWidth, totalItemWidth, totalItemHeight };
   }, [itemSize, window.width]);
 
-  // Simplified and reliable end reached handler
-  const handleEndReached = useCallback(() => {
-    // Only proceed if we have a next page, aren't already fetching, have a load function, and aren't already loading
-    if (
-      hasNextPage &&
-      !isFetchingNextPage &&
-      onLoadMore &&
-      !isLoadingMore.current
-    ) {
-      isLoadingMore.current = true;
-      onLoadMore();
-    }
-  }, [hasNextPage, isFetchingNextPage, onLoadMore]);
+  const smartScroll = useSmartInfiniteScroll({
+    hasNextPage,
+    isFetching: isFetchingNextPage,
+    onLoadMore: onLoadMore ?? (() => {}),
+    horizontal: true,
+    predictAheadMs: 1000,
+  });
 
   const renderItem = useCallback(
-    ({ item }: { item: ContentItemData }) => (
+    ({ item, index }: { item: ContentItemData; index: number }) => (
       <ContentItem
         item={item}
         onSelect={(
-          showId: string,
-          seasonNumber: number | undefined,
-          episodeNumber: number | undefined,
-          mediaType: "movie" | "tv",
-          backdropUrl?: string,
-          backdropBlurhash?: string,
+          showId,
+          seasonNumber,
+          episodeNumber,
+          mediaType,
+          backdropUrl,
+          backdropBlurhash,
         ) =>
           onSelectContent(
             showId,
@@ -131,25 +110,16 @@ const ContentRow = ({
           )
         }
         size={itemSize}
+        hasTVPreferredFocus={preferFirstItemFocus && index === 0}
       />
     ),
-    [onSelectContent, itemSize],
+    [onSelectContent, itemSize, preferFirstItemFocus],
   );
 
   const keyExtractor = useCallback((item: ContentItemData) => item.id, []);
 
-  const getItemLayout = useCallback(
-    (_data: ArrayLike<ContentItemData> | null | undefined, index: number) => ({
-      length: itemDimensions.totalItemWidth,
-      offset: itemDimensions.totalItemWidth * index,
-      index,
-    }),
-    [itemDimensions.totalItemWidth],
-  );
-
-  // Stable footer component to prevent flickering
   const renderFooter = useMemo(() => {
-    if (!isFetchingNextPage && !isLoadingMore.current) return null;
+    if (!isFetchingNextPage) return null;
     return (
       <View style={styles.loadingFooter}>
         <Text style={styles.loadingText}>Loading more…</Text>
@@ -189,17 +159,10 @@ const ContentRow = ({
           showsHorizontalScrollIndicator={Platform.isTV}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
-          getItemLayout={getItemLayout}
-          initialNumToRender={Platform.isTV ? 52 : 8}
-          maxToRenderPerBatch={Platform.isTV ? 60 : 8}
-          updateCellsBatchingPeriod={Platform.isTV ? 12 : 50}
-          decelerationRate="fast"
-          scrollEventThrottle={16}
-          onEndReached={handleEndReached}
-          onEndReachedThreshold={0.5}
+          {...smartScroll}
           ListFooterComponent={renderFooter}
           contentContainerStyle={styles.scrollContent}
-          style={styles.scrollView}
+          style={{ height: itemDimensions.totalItemHeight }}
         />
       </TVFocusGuideView>
     </View>
@@ -222,7 +185,6 @@ const styles = StyleSheet.create({
   },
   loadingText: { color: "#999", fontSize: 12 },
   scrollContent: { paddingHorizontal: 2 },
-  scrollView: { flexGrow: 0, width: "100%" },
   showMoreButton: { padding: 8 },
   showMoreText: { color: "#999", fontSize: 16 },
   title: { color: "#FFF", fontSize: 24, fontWeight: "bold" },

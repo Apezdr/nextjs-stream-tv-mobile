@@ -1,12 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useRef, useCallback, useState } from "react";
+import React, { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import {
+  ActivityIndicator,
   View,
   StyleSheet,
   Text,
   TouchableOpacity,
-  Modal,
+  BackHandler,
   Platform,
+  ScrollView,
+  useWindowDimensions,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -15,12 +18,14 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 
 import { usePortal } from "@/src/components/common/Portal";
 import { Colors } from "@/src/constants/Colors";
-import { useDimensions } from "@/src/hooks/useDimensions";
 
 export interface ActionSheetAction {
   id: string;
@@ -28,6 +33,12 @@ export interface ActionSheetAction {
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   variant?: "default" | "primary" | "destructive";
+  /** Show a spinner instead of the icon while an async action is in progress */
+  isLoading?: boolean;
+  /** When true, tapping this action does not close the sheet */
+  preventDismiss?: boolean;
+  /** Prevent interaction while loading */
+  disabled?: boolean;
 }
 
 interface MobileActionSheetProps {
@@ -37,6 +48,8 @@ interface MobileActionSheetProps {
   subtitle?: string;
   actions: ActionSheetAction[];
   backdropDismiss?: boolean;
+  /** When provided, the device back button calls this instead of closing the sheet */
+  onBack?: () => void;
 }
 
 const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
@@ -46,19 +59,16 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
   subtitle,
   actions,
   backdropDismiss = true,
+  onBack,
 }) => {
   const insets = useSafeAreaInsets();
   const { addPortal, removePortal } = usePortal();
+  const { height: screenHeight } = useWindowDimensions();
 
-  // Get dynamic dimensions that will update with orientation changes
-  const { window, screen } = useDimensions();
-  const screenHeight = window.height;
-  const fullScreenHeight = screen.height;
+  // Cap the visible sheet height so long lists don't overflow the screen
+  const maxSheetHeight = Math.round(screenHeight * 0.85);
 
-  // Calculate status bar height for full screen coverage like MobileBanner
-  const statusBarHeight = fullScreenHeight - screenHeight;
-
-  // Calculate sheet height dynamically
+  // Calculate sheet height dynamically (used for off-screen animation start/end)
   const headerHeight = title || subtitle ? 60 : 20;
   const actionHeight = 56;
   const sheetHeight =
@@ -74,26 +84,39 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
   const isMountedRef = useRef(true);
   const [shouldRenderIcons, setShouldRenderIcons] = useState(false);
   const portalKey = useRef(
-    `action-sheet-${Math.random().toString(36).substr(2, 9)}`,
+    `action-sheet-${Math.random().toString(36).slice(2, 11)}`,
   ).current;
 
-  // Gesture for swipe-to-dismiss
-  const panGesture = Gesture.Pan()
-    .onUpdate((event) => {
-      if (event.translationY > 0) {
-        panTranslateY.value = event.translationY;
-      }
-    })
-    .onEnd((event) => {
-      if (event.translationY > 150 || event.velocityY > 500) {
-        // Dismiss
-        scheduleOnRN(removePortal, portalKey);
-        scheduleOnRN(onClose);
-      } else {
-        // Snap back
-        panTranslateY.value = withSpring(0);
-      }
-    });
+  // Keep a stable ref to onClose so the memoized gesture always calls the latest version
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  const callOnClose = useCallback(() => {
+    onCloseRef.current();
+  }, []);
+
+  // Gesture for swipe-to-dismiss — memoized so portal content doesn't re-render on every render
+  const panGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .onUpdate((event) => {
+          if (event.translationY > 0) {
+            panTranslateY.value = event.translationY;
+          }
+        })
+        .onEnd((event) => {
+          if (event.translationY > 150 || event.velocityY > 500) {
+            // Dismiss
+            scheduleOnRN(removePortal, portalKey);
+            scheduleOnRN(callOnClose);
+          } else {
+            // Snap back
+            panTranslateY.value = withSpring(0);
+          }
+        }),
+    [callOnClose, removePortal, portalKey, panTranslateY],
+  );
 
   const showSheet = useCallback(() => {
     if (!isMountedRef.current) return;
@@ -153,11 +176,14 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
   const handleActionPress = useCallback(
     (action: ActionSheetAction) => {
       if (!isMountedRef.current) return;
+      if (action.disabled) return;
 
-      // Immediately close the action sheet and remove from portal
-      // to prevent back button interference during navigation
-      removePortal(portalKey);
-      onClose();
+      if (!action.preventDismiss) {
+        // Immediately close the action sheet and remove from portal
+        // to prevent back button interference during navigation
+        removePortal(portalKey);
+        onClose();
+      }
 
       // Execute action immediately without waiting for animation
       action.onPress();
@@ -189,6 +215,23 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
     }
   }, [visible, showSheet, sheetHeight]);
 
+  // Android hardware back button
+  useEffect(() => {
+    if (!visible) return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        if (onBack) {
+          onBack();
+        } else {
+          handleClose();
+        }
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, [visible, handleClose, onBack]);
+
   // Animated styles
   const sheetAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value + panTranslateY.value }],
@@ -199,37 +242,46 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
     opacity: backdropOpacity.value,
   }));
 
-  // Manage portal lifecycle - only depend on visibility to avoid infinite loops
-  useEffect(() => {
-    if (visible) {
-      const modalContent = (
-        <Modal
-          transparent
-          visible={true}
-          animationType="fade"
-          onRequestClose={handleClose}
-        >
-          {/* Backdrop */}
-          <Animated.View style={[styles.backdrop, backdropAnimatedStyle]}>
-            <TouchableOpacity
-              style={styles.backdropTouchable}
-              activeOpacity={1}
-              onPress={handleBackdropPress}
-            />
-          </Animated.View>
+  // Manage portal lifecycle
+  // Renders directly in the Portal's View (no Modal wrapper) so that
+  // SafeAreaProvider context flows through correctly on Android edge-to-edge.
 
-          {/* Action Sheet */}
+  // Effect 1: controls when the portal is mounted/unmounted.
+  // Kept separate so that content updates (actions, loading state) never
+  // cause a remove+add cycle that produces a single-frame blank flash.
+  useEffect(() => {
+    if (!visible) removePortal(portalKey);
+    return () => removePortal(portalKey);
+  }, [visible, removePortal, portalKey]);
+
+  // Effect 2: pushes updated content into the portal without touching its
+  // lifecycle. addPortal replaces in-place (same key → React reconciles,
+  // no unmount), so animations and gesture state are preserved.
+  useEffect(() => {
+    if (!visible) return;
+
+    const sheetContent = (
+      <View style={StyleSheet.absoluteFill}>
+        {/* Backdrop */}
+        <Animated.View style={[styles.backdrop, backdropAnimatedStyle]}>
+          <TouchableOpacity
+            style={styles.backdropTouchable}
+            activeOpacity={1}
+            onPress={handleBackdropPress}
+          />
+        </Animated.View>
+
+        {/* Action Sheet */}
+        <Animated.View
+          style={[
+            styles.container,
+            sheetAnimatedStyle,
+            { maxHeight: maxSheetHeight },
+          ]}
+        >
+          {/* Drag-to-dismiss zone: handle + header only */}
           <GestureDetector gesture={panGesture}>
-            <Animated.View
-              style={[
-                styles.container,
-                sheetAnimatedStyle,
-                {
-                  height: sheetHeight,
-                  paddingBottom: insets.bottom,
-                },
-              ]}
-            >
+            <View>
               {/* Handle */}
               <View style={styles.handle} />
 
@@ -240,70 +292,96 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
                   {subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
                 </View>
               )}
+            </View>
+          </GestureDetector>
 
-              {/* Actions */}
-              <View style={styles.actionsContainer}>
-                {actions.map((action, index) => (
-                  <TouchableOpacity
-                    key={action.id}
-                    style={[
-                      styles.actionButton,
-                      index < actions.length - 1 && styles.actionButtonBorder,
-                    ]}
-                    onPress={() => handleActionPress(action)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.actionContent}>
-                      {shouldRenderIcons && (
-                        <View
-                          style={[
-                            styles.actionIconContainer,
-                            action.variant === "primary" &&
-                              styles.primaryIconContainer,
-                            action.variant === "destructive" &&
-                              styles.destructiveIconContainer,
-                          ]}
-                        >
-                          <Ionicons
-                            name={action.icon}
-                            size={20}
-                            color={
-                              action.variant === "primary"
-                                ? Colors.dark.whiteText
-                                : action.variant === "destructive"
-                                  ? Colors.dark.whiteText
-                                  : Colors.dark.brandPrimary
-                            }
-                          />
-                        </View>
-                      )}
-                      <Text
+          {/* Scrollable actions — outside the pan gesture so scroll doesn't dismiss */}
+          <ScrollView
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.actionsContainer}
+          >
+            {actions.map((action, index) => (
+              <TouchableOpacity
+                key={action.id}
+                style={[
+                  styles.actionButton,
+                  index < actions.length - 1 && styles.actionButtonBorder,
+                  action.disabled && styles.actionButtonDisabled,
+                ]}
+                onPress={() => handleActionPress(action)}
+                activeOpacity={action.disabled ? 1 : 0.7}
+                disabled={action.disabled}
+              >
+                <View style={styles.actionContent}>
+                  {action.isLoading ? (
+                    <View style={styles.actionIconContainer}>
+                      <ActivityIndicator
+                        size="small"
+                        color={Colors.dark.brandPrimary}
+                      />
+                    </View>
+                  ) : (
+                    shouldRenderIcons && (
+                      <View
                         style={[
-                          styles.actionText,
+                          styles.actionIconContainer,
+                          action.variant === "primary" &&
+                            styles.primaryIconContainer,
                           action.variant === "destructive" &&
-                            styles.destructiveText,
+                            styles.destructiveIconContainer,
                         ]}
                       >
-                        {action.title}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </Animated.View>
-          </GestureDetector>
-        </Modal>
-      );
+                        <Ionicons
+                          name={action.icon}
+                          size={20}
+                          color={
+                            action.variant === "primary"
+                              ? Colors.dark.whiteText
+                              : action.variant === "destructive"
+                                ? Colors.dark.whiteText
+                                : Colors.dark.brandPrimary
+                          }
+                        />
+                      </View>
+                    )
+                  )}
+                  <Text
+                    style={[
+                      styles.actionText,
+                      action.variant === "destructive" &&
+                        styles.destructiveText,
+                      action.disabled && styles.actionTextDisabled,
+                    ]}
+                  >
+                    {action.title}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
-      addPortal(portalKey, modalContent);
-    } else {
-      removePortal(portalKey);
-    }
+          {/* Bottom safe area — measured in the regular React tree, not a Modal window */}
+          <SafeAreaView edges={["bottom"]} />
+        </Animated.View>
+      </View>
+    );
 
-    return () => {
-      removePortal(portalKey);
-    };
-  }, [visible, shouldRenderIcons]);
+    addPortal(portalKey, sheetContent);
+  }, [
+    visible,
+    shouldRenderIcons,
+    actions,
+    title,
+    subtitle,
+    handleBackdropPress,
+    handleActionPress,
+    panGesture,
+    backdropAnimatedStyle,
+    sheetAnimatedStyle,
+    addPortal,
+    portalKey,
+  ]);
 
   return null;
 };
@@ -316,6 +394,9 @@ const styles = StyleSheet.create({
   actionButtonBorder: {
     borderBottomColor: Colors.dark.outline,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  actionButtonDisabled: {
+    opacity: 0.6,
   },
   actionContent: {
     alignItems: "center",
@@ -335,6 +416,9 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: "500",
+  },
+  actionTextDisabled: {
+    opacity: 0.7,
   },
   actionsContainer: {
     paddingTop: 8,

@@ -45,6 +45,7 @@ export interface MediaItem {
   };
   episodeNumber?: number; // For TV shows
   seasonNumber?: number; // For TV shows
+  isTrailer?: boolean; // Whether this item is a trailer
   watchHistory?: WatchHistory; // Optional watch history data
 }
 
@@ -494,7 +495,8 @@ export interface WatchlistContentParams {
 }
 
 export interface WatchlistWritePayload {
-  tmdbId: number;
+  tmdbId?: number;
+  mediaId?: string;
   mediaType: "movie" | "tv";
   title: string;
   playlistId?: string;
@@ -508,7 +510,8 @@ export interface WatchlistWriteResponse {
 }
 
 export interface WatchlistStatusParams {
-  tmdbId: number;
+  tmdbId?: number;
+  mediaId?: string;
   mediaType: "movie" | "tv";
   playlistId?: string;
 }
