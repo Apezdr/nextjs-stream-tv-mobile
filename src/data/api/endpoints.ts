@@ -43,6 +43,8 @@ export const API_ENDPOINTS = {
     STATUS: "/api/authenticated/system-status",
     SYNC_VALIDATION: "/api/authenticated/sync/updateValidationStatus",
     UPDATE_PLAYBACK: "/api/authenticated/sync/updatePlayback",
+    PRESENCE_END: "/api/authenticated/sync/presence/end",
+    CLIENT_ERROR: "/api/authenticated/client-error",
   },
 
   // Admin endpoints

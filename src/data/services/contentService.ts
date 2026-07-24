@@ -67,6 +67,13 @@ function logHorizontalListRequest(
 export interface PlaybackUpdateRequest {
   videoId: string;
   playbackTime: number;
+  // Optional: omitting this skips the presence write for this call (WatchHistory
+  // still updates normally). Deliberately omitted on any "final position" update
+  // that's paired with an endPlaybackPresence() call for the same session, since
+  // the presence upsert has no awareness of a concurrent presence/end delete and
+  // whichever request lands last on the server wins.
+  sessionId?: string;
+  isPaused: boolean;
   mediaMetadata: {
     mediaType: "tv" | "movie";
     mediaId: string;
@@ -374,6 +381,16 @@ export const contentService = {
       headers: {
         "User-Agent": userAgent,
       },
+    });
+  },
+
+  /**
+   * End a playback presence session (e.g. player closed, app backgrounded while paused).
+   * Idempotent — safe to call even if the session is already gone.
+   */
+  endPlaybackPresence: async (sessionId: string): Promise<void> => {
+    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.PRESENCE_END, {
+      sessionId,
     });
   },
 

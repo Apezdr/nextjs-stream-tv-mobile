@@ -110,11 +110,11 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
 
     const currentPageCount = query.data?.pages.length || 0;
 
-    // Prefetch the next page silently
-    infiniteContentPrefetch.prefetchNextPage(
+    // Warm one page beyond what's currently loaded
+    infiniteContentPrefetch.prefetchPages(
       queryClient,
       { type, sort, sortOrder, limit },
-      currentPageCount,
+      currentPageCount + 1,
     );
   }, [
     query.hasNextPage,
@@ -134,15 +134,12 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
 
       const currentPageCount = query.data?.pages.length || 0;
 
-      // Prefetch multiple pages ahead based on scroll velocity
-      for (let i = 0; i < distance; i++) {
-        const targetPage = currentPageCount + i;
-        infiniteContentPrefetch.prefetchNextPage(
-          queryClient,
-          { type, sort, sortOrder, limit },
-          targetPage,
-        );
-      }
+      // Warm `distance` pages ahead in a single sequential prefetch
+      infiniteContentPrefetch.prefetchPages(
+        queryClient,
+        { type, sort, sortOrder, limit },
+        currentPageCount + distance,
+      );
     },
     [
       query.hasNextPage,
@@ -162,25 +159,15 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       if (!query.hasNextPage) return;
 
       const currentPageCount = query.data?.pages.length || 0;
-
-      // Load fewer pages in parallel to reduce memory pressure
-      const prefetchPromises = [];
       const actualMaxPages = Math.min(maxPages, 2); // Cap at 2 pages max
 
-      for (let i = 0; i < actualMaxPages; i++) {
-        const targetPage = currentPageCount + i;
-        prefetchPromises.push(
-          infiniteContentPrefetch.prefetchNextPage(
-            queryClient,
-            { type, sort, sortOrder, limit },
-            targetPage,
-          ),
-        );
-      }
-
-      // Execute prefetches with error handling
+      // Warm up to `actualMaxPages` beyond what's loaded, reducing memory pressure
       try {
-        await Promise.allSettled(prefetchPromises);
+        await infiniteContentPrefetch.prefetchPages(
+          queryClient,
+          { type, sort, sortOrder, limit },
+          currentPageCount + actualMaxPages,
+        );
       } catch (error) {
         console.warn("Bulk prefetch failed:", error);
       }
@@ -390,11 +377,17 @@ export function getFlattenedInfiniteData(
  * Prefetch helpers for infinite content
  */
 export const infiniteContentPrefetch = {
-  // Prefetch next page for smoother scrolling
-  prefetchNextPage: (
+  /**
+   * Warm the SAME infinite-query cache that useInfiniteContentList reads from,
+   * ensuring at least `pages` pages are loaded. This MUST use
+   * prefetchInfiniteQuery against the `infiniteContentList` key — a plain
+   * prefetchQuery against the non-infinite `contentList` key writes to a
+   * different cache entry that the live list never consumes.
+   */
+  prefetchPages: (
     queryClient: ReturnType<typeof useQueryClient>,
     params: HorizontalListParams,
-    currentPageCount: number,
+    pages: number,
   ) => {
     const {
       type = "all",
@@ -404,29 +397,28 @@ export const infiniteContentPrefetch = {
       isTVdevice = true,
     } = params;
 
-    return queryClient.prefetchQuery({
-      queryKey: queryKeys.contentList({
+    return queryClient.prefetchInfiniteQuery({
+      queryKey: queryKeys.infiniteContentList({
         type,
         sort,
         sortOrder,
-        page: currentPageCount,
         limit,
-        isTVdevice: isTVdevice,
+        isTVdevice,
       }),
-      queryFn: () => {
+      queryFn: async ({ pageParam = 0 }) => {
         const requestParams = {
           type,
           sort,
           sortOrder,
-          page: currentPageCount,
+          page: pageParam,
           limit,
-          isTVdevice: isTVdevice,
+          isTVdevice,
         };
         const queryParams = buildQueryParams(requestParams);
 
         // Debug logging for prefetch requests
         logHorizontalListRequest(
-          "infiniteContentPrefetch.prefetchNextPage",
+          "infiniteContentPrefetch.prefetchPages",
           API_ENDPOINTS.CONTENT.HORIZONTAL_LIST,
           queryParams,
           requestParams,
@@ -436,6 +428,22 @@ export const infiniteContentPrefetch = {
           `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
         );
       },
+      initialPageParam: 0,
+      // Mirror the live query's pagination logic so prefetched pages chain
+      // consistently with subsequent fetchNextPage calls.
+      getNextPageParam: (
+        lastPage: ContentListResponse,
+        allPages: ContentListResponse[],
+      ) => {
+        if (!lastPage.currentItems || lastPage.currentItems.length < limit) {
+          return undefined;
+        } else if (lastPage.nextItem === null) {
+          return undefined;
+        }
+        return allPages.length;
+      },
+      // Fetch sequentially up to this many pages (reusing already-cached pages).
+      pages,
     });
   },
 };

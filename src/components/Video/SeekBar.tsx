@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Pressable,
   useTVEventHandler,
+  type LayoutChangeEvent,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -14,6 +15,7 @@ import Animated, {
   withTiming,
   withRepeat,
   withSequence,
+  cancelAnimation,
 } from "react-native-reanimated";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
@@ -47,6 +49,9 @@ interface SeekBarProps {
 
 export interface SeekBarRef {
   focus: () => void;
+  // Returns the underlying focusable View so callers can pass it to a
+  // TVFocusGuideView `destinations` array for deterministic initial focus.
+  getNode: () => View | null;
 }
 
 // Skip amount in seconds for quick navigation
@@ -79,10 +84,10 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
       isPlaying,
       onStartSeeking,
       onStopSeeking,
-      hasTVPreferredFocus = true,
+      hasTVPreferredFocus = false,
       playerState = "normal",
       stateMessage,
-      stateProgress,
+      stateProgress: _stateProgress,
     },
     ref: React.ForwardedRef<SeekBarRef>,
   ) => {
@@ -94,7 +99,7 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
     const [isFocused, setIsFocused] = useState(false);
     const pressableRef = useRef<View>(null);
 
-    // Expose focus method to parent components
+    // Expose focus method and underlying node to parent components
     useImperativeHandle(
       ref,
       () => ({
@@ -103,6 +108,7 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
             pressableRef.current.focus();
           }
         },
+        getNode: () => pressableRef.current,
       }),
       [],
     );
@@ -130,9 +136,17 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
     const ACCELERATION_RATE = 38; // +38 sec/sec²
     const MAX_RATE = 620; // cap at 620× real-time
 
-    // Animation values for loading states
-    const shimmerTranslateX = useSharedValue(-100);
-    const loadingProgress = useSharedValue(0);
+    // Measured seek-bar width drives the shimmer in pixel space so the sweep
+    // is consistent regardless of container width changes during load.
+    const [barWidth, setBarWidth] = useState(0);
+    const shimmerTranslateX = useSharedValue(0);
+
+    const handleSeekBarLayout = (event: LayoutChangeEvent) => {
+      const width = event.nativeEvent.layout.width;
+      if (width !== barWidth) {
+        setBarWidth(width);
+      }
+    };
 
     // Setup animations based on player state
     useEffect(() => {
@@ -143,39 +157,25 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
         playerState === "stalled" ||
         playerState === "codec-loading";
 
-      if (isLoadingState) {
-        // Simple sweeping shimmer from left to right using percentage
+      if (isLoadingState && barWidth > 0) {
+        // Sweep the shimmer in pixels: start fully off the left edge, end fully
+        // off the right edge. SHIMMER_WIDTH_RATIO matches the highlight's CSS
+        // width of 30% so the math lines up.
+        const SHIMMER_WIDTH_RATIO = 0.3;
+        const shimmerWidth = barWidth * SHIMMER_WIDTH_RATIO;
         shimmerTranslateX.value = withRepeat(
           withSequence(
-            withTiming(-100, { duration: 0 }), // Start off-screen left
-            withTiming(100, { duration: 1500 }), // Sweep to off-screen right
+            withTiming(-shimmerWidth, { duration: 0 }),
+            withTiming(barWidth, { duration: 1500 }),
           ),
           -1,
           false,
         );
-
-        // Loading progress for states that have progress
-        if (
-          playerState === "watch-history-applying" &&
-          stateProgress !== undefined
-        ) {
-          loadingProgress.value = withTiming(stateProgress, { duration: 300 });
-        } else {
-          // Indeterminate: gentle breathing animation
-          loadingProgress.value = withRepeat(
-            withSequence(
-              withTiming(0.6, { duration: 1000 }),
-              withTiming(0.3, { duration: 1000 }),
-            ),
-            -1,
-            true,
-          );
-        }
       } else {
-        shimmerTranslateX.value = -100;
-        loadingProgress.value = 0;
+        cancelAnimation(shimmerTranslateX);
+        shimmerTranslateX.value = -(barWidth * 0.3);
       }
-    }, [playerState, stateProgress, shimmerTranslateX, loadingProgress]);
+    }, [playerState, barWidth, shimmerTranslateX]);
 
     // Update seek time when currentTime changes (but not when actively seeking)
     useEffect(() => {
@@ -311,18 +311,12 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
     const seekProgressPercentage =
       duration > 0 ? (seekTime / duration) * 100 : 0;
 
-    // Shimmer highlight style - moves independently using percentage
+    // Shimmer highlight style - translate in pixels driven by measured bar width
     const animatedShimmerStyle = useAnimatedStyle(() => {
       return {
-        transform: [{ translateX: `${shimmerTranslateX.value}%` }],
+        transform: [{ translateX: shimmerTranslateX.value }],
       };
     }, [shimmerTranslateX]);
-
-    const animatedLoadingProgressStyle = useAnimatedStyle(() => {
-      return {
-        width: `${loadingProgress.value * 100}%`,
-      };
-    }, [loadingProgress]);
 
     // Get state-specific icon and message
     const getStateIcon = () => {
@@ -477,7 +471,7 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
           </View>
 
           {/* Seek bar background */}
-          <View style={styles.seekBarContainer}>
+          <View style={styles.seekBarContainer} onLayout={handleSeekBarLayout}>
             <View style={styles.seekBarBackground} />
 
             {/* Current progress */}
@@ -501,14 +495,6 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
             {/* Loading overlay for loading states */}
             {isLoadingState && (
               <View style={styles.loadingOverlay}>
-                {/* Base loading bar with breathing animation */}
-                <Animated.View
-                  style={[
-                    styles.loadingProgressBar,
-                    animatedLoadingProgressStyle,
-                  ]}
-                />
-
                 {/* Shimmer highlight that sweeps across */}
                 <Animated.View
                   style={[styles.shimmerHighlight, animatedShimmerStyle]}
@@ -588,12 +574,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 0,
     top: 0,
-  },
-
-  loadingProgressBar: {
-    backgroundColor: "rgba(255, 255, 255, 0.3)",
-    borderRadius: 3,
-    height: "100%",
   },
 
   mainContentContainer: {

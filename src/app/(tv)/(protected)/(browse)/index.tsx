@@ -29,6 +29,45 @@ export default function TVHomePage() {
   // Use the new Zustand-based backdrop manager
   const { hide: hideBackdrop } = useBackdropManager();
 
+  // Stepped scrolling: pin a focused row's title near the top of the viewport.
+  // We record each section's Y offset (relative to the ScrollView content) and
+  // programmatically scroll to it when any item in that row gains focus.
+  const TOP_INSET = 24; // px of breathing room above the pinned title
+  const scrollRef = useRef<ScrollView>(null);
+  const rowOffsets = useRef<Record<string, number>>({});
+  const lastFocusedRow = useRef<string | null>(null);
+  const handleRowFocus = useCallback((key: string) => {
+    // Only scroll when the focused row actually changes; left/right navigation
+    // within a row re-fires focus events and must not re-trigger a vertical scroll.
+    if (lastFocusedRow.current === key) return;
+    lastFocusedRow.current = key;
+    const y = rowOffsets.current[key];
+    if (y == null) return;
+    scrollRef.current?.scrollTo({
+      y: Math.max(0, y - TOP_INSET),
+      animated: true,
+    });
+  }, []);
+
+  // Stable per-row focus callbacks so ContentRow's renderItem stays memoized
+  // (inline arrows would re-render every ContentItem on each parent render).
+  const onRecentlyWatchedFocus = useCallback(
+    () => handleRowFocus("recentlyWatched"),
+    [handleRowFocus],
+  );
+  const onRecentlyAddedFocus = useCallback(
+    () => handleRowFocus("recentlyAdded"),
+    [handleRowFocus],
+  );
+  const onTVShowsFocus = useCallback(
+    () => handleRowFocus("tvShows"),
+    [handleRowFocus],
+  );
+  const onMoviesFocus = useCallback(
+    () => handleRowFocus("movies"),
+    [handleRowFocus],
+  );
+
   // Conditional logging for performance optimization
   const DEBUG_HOME_PAGE = __DEV__ && false; // Enable only when needed for debugging
   const logDebug = useCallback((message: string, data?: any) => {
@@ -342,6 +381,21 @@ export default function TVHomePage() {
     return transformMediaItems(flattenedData);
   }, [movies.data, transformMediaItems]);
 
+  // Determine the last row that actually has content. We trap downward focus on
+  // it so pressing "down" from the bottom row doesn't scroll into empty space.
+  const lastRowKey = useMemo(() => {
+    if (transformedMovies.length) return "movies";
+    if (transformedTVShows.length) return "tvShows";
+    if (transformedRecentlyAdded.length) return "recentlyAdded";
+    if (transformedRecentlyWatched.length) return "recentlyWatched";
+    return null;
+  }, [
+    transformedMovies.length,
+    transformedTVShows.length,
+    transformedRecentlyAdded.length,
+    transformedRecentlyWatched.length,
+  ]);
+
   // State for managing TV show season queries
   const [pendingTVNavigation, setPendingTVNavigation] = useState<{
     showId: string;
@@ -473,11 +527,16 @@ export default function TVHomePage() {
     <View style={styles.container}>
       {/* Content browser with stepped scrolling */}
       <ScrollView
+        ref={scrollRef}
         style={styles.contentBrowser}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
         nestedScrollEnabled={true}
-        snapToAlignment="center"
+        // On tvOS the remote's touch surface pans the ScrollView directly,
+        // bypassing the focus graph. Disabling the elastic bounce/overscroll
+        // stops the view from drifting past the last row into empty space.
+        bounces={false}
+        overScrollMode="never"
       >
         {/* Video preview banner */}
         <TVBanner />
@@ -494,7 +553,15 @@ export default function TVHomePage() {
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedRecentlyWatched.length ? (
-          <View style={styles.sectionContainer}>
+          <View
+            style={[
+              styles.sectionContainer,
+              lastRowKey === "recentlyWatched" && styles.sectionContainerLast,
+            ]}
+            onLayout={(e) => {
+              rowOffsets.current.recentlyWatched = e.nativeEvent.layout.y;
+            }}
+          >
             <ContentRow
               title="Continue Watching"
               items={transformedRecentlyWatched}
@@ -502,8 +569,11 @@ export default function TVHomePage() {
               itemSize="small"
               hasNextPage={recentlyWatched.hasNextPage}
               isFetchingNextPage={recentlyWatched.isFetchingNextPage}
-              onLoadMore={() => recentlyWatched.fetchNextPage()}
+              onLoadMore={recentlyWatched.fetchNextPage}
               loadMoreThreshold={0.4}
+              onRowFocus={onRecentlyWatchedFocus}
+              trapFocusDown={lastRowKey === "recentlyWatched"}
+              isLastRow={lastRowKey === "recentlyWatched"}
             />
           </View>
         ) : null}
@@ -520,7 +590,15 @@ export default function TVHomePage() {
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedRecentlyAdded.length ? (
-          <View style={styles.sectionContainer}>
+          <View
+            style={[
+              styles.sectionContainer,
+              lastRowKey === "recentlyAdded" && styles.sectionContainerLast,
+            ]}
+            onLayout={(e) => {
+              rowOffsets.current.recentlyAdded = e.nativeEvent.layout.y;
+            }}
+          >
             <ContentRow
               title="Recently Added"
               items={transformedRecentlyAdded}
@@ -528,8 +606,11 @@ export default function TVHomePage() {
               itemSize="medium"
               hasNextPage={recentlyAdded.hasNextPage}
               isFetchingNextPage={recentlyAdded.isFetchingNextPage}
-              onLoadMore={() => recentlyAdded.fetchNextPage()}
+              onLoadMore={recentlyAdded.fetchNextPage}
               loadMoreThreshold={0.4}
+              onRowFocus={onRecentlyAddedFocus}
+              trapFocusDown={lastRowKey === "recentlyAdded"}
+              isLastRow={lastRowKey === "recentlyAdded"}
             />
           </View>
         ) : null}
@@ -546,7 +627,15 @@ export default function TVHomePage() {
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedTVShows.length ? (
-          <View style={styles.sectionContainer}>
+          <View
+            style={[
+              styles.sectionContainer,
+              lastRowKey === "tvShows" && styles.sectionContainerLast,
+            ]}
+            onLayout={(e) => {
+              rowOffsets.current.tvShows = e.nativeEvent.layout.y;
+            }}
+          >
             <ContentRow
               title="TV Shows"
               items={transformedTVShows}
@@ -554,8 +643,11 @@ export default function TVHomePage() {
               itemSize="medium"
               hasNextPage={tvShows.hasNextPage}
               isFetchingNextPage={tvShows.isFetchingNextPage}
-              onLoadMore={() => tvShows.fetchNextPage()}
+              onLoadMore={tvShows.fetchNextPage}
               loadMoreThreshold={0.4}
+              onRowFocus={onTVShowsFocus}
+              trapFocusDown={lastRowKey === "tvShows"}
+              isLastRow={lastRowKey === "tvShows"}
             />
           </View>
         ) : null}
@@ -572,7 +664,15 @@ export default function TVHomePage() {
             <Text style={styles.errorText}>Failed to load content</Text>
           </View>
         ) : transformedMovies.length ? (
-          <View style={styles.sectionContainer}>
+          <View
+            style={[
+              styles.sectionContainer,
+              lastRowKey === "movies" && styles.sectionContainerLast,
+            ]}
+            onLayout={(e) => {
+              rowOffsets.current.movies = e.nativeEvent.layout.y;
+            }}
+          >
             <ContentRow
               title="Movies"
               items={transformedMovies}
@@ -580,8 +680,11 @@ export default function TVHomePage() {
               itemSize="medium"
               hasNextPage={movies.hasNextPage}
               isFetchingNextPage={movies.isFetchingNextPage}
-              onLoadMore={() => movies.fetchNextPage()}
+              onLoadMore={movies.fetchNextPage}
               loadMoreThreshold={0.4}
+              onRowFocus={onMoviesFocus}
+              trapFocusDown={lastRowKey === "movies"}
+              isLastRow={lastRowKey === "movies"}
             />
           </View>
         ) : null}
@@ -599,7 +702,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   contentContainer: {
-    paddingBottom: 30,
+    paddingBottom: 0,
     paddingHorizontal: 20,
     paddingTop: 12,
   },
@@ -624,6 +727,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     minHeight: 280, // Consistent section height for stepped scrolling
     paddingVertical: 10,
+  },
+  // Last row: no trailing margin/padding so there's no dead space to scroll into.
+  sectionContainerLast: {
+    marginBottom: 0,
+    paddingBottom: 0,
   },
   sectionTitle: {
     color: Colors.dark.whiteText,

@@ -1,6 +1,6 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
+import { BufferOptions, VideoView } from "expo-video";
 import {
   useEffect,
   useState,
@@ -25,16 +25,14 @@ import MobileVideoControls from "@/src/components/Mobile/Video/MobileVideoContro
 import { Colors } from "@/src/constants/Colors";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
-import {
-  contentService,
-  PlaybackUpdateRequest,
-} from "@/src/data/services/contentService";
+import { contentService } from "@/src/data/services/contentService";
 import {
   MediaDetailsResponse,
   TVDeviceEpisode,
 } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
+import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
 function parseNumericParam(value: string | undefined): number | undefined {
@@ -104,303 +102,6 @@ function useContentLoader(
     loading,
     contentError,
   };
-}
-
-// Custom hook for playback tracking (simplified for mobile)
-function usePlaybackTracking(
-  player: VideoPlayer,
-  videoData: MediaDetailsResponse | null,
-  videoURL: string | null,
-  params: {
-    id: string;
-    type: "tv" | "movie";
-    season?: string;
-    episode?: string;
-  },
-) {
-  const lastUpdateTimeRef = useRef<number>(0);
-  const updateIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const listenersRef = useRef<{ remove: () => void }[]>([]);
-  const isMountedRef = useRef(true);
-
-  // Helper function to check if player is still valid
-  const isPlayerValid = useCallback((player: VideoPlayer | null): boolean => {
-    if (!player) return false;
-
-    try {
-      // Try to access a property to check if the native object is still valid
-      const _ = player.currentTime;
-      return true;
-    } catch (error) {
-      // If accessing the property throws, the native object has been released
-      return false;
-    }
-  }, []);
-
-  // Expose function to flush current progress immediately
-  const flushCurrentProgress = useCallback(async (): Promise<void> => {
-    if (!player || !videoData || !videoURL || !isPlayerValid(player)) {
-      return;
-    }
-
-    try {
-      const currentTime = player.currentTime;
-      if (typeof currentTime === "number" && currentTime > 0) {
-        console.log("[MobilePlaybackTracking] Force flushing current progress");
-
-        const playbackData: PlaybackUpdateRequest = {
-          videoId: videoURL,
-          playbackTime: currentTime,
-          mediaMetadata: {
-            mediaType: videoData.type || params.type,
-            mediaId: videoData.id || params.id,
-            ...(params.type === "tv" && {
-              showId: params.id,
-              seasonNumber:
-                videoData.seasonNumber || parseNumericParam(params.season),
-              episodeNumber:
-                videoData.episodeNumber || parseNumericParam(params.episode),
-            }),
-          },
-        };
-
-        await contentService.updatePlaybackProgress(playbackData);
-        lastUpdateTimeRef.current = currentTime;
-
-        console.log(
-          `[MobilePlaybackTracking] Updated progress: ${currentTime}s`,
-        );
-      }
-    } catch (error) {
-      console.error("[MobilePlaybackTracking] Error in force flush:", error);
-    }
-  }, [
-    player,
-    videoData,
-    videoURL,
-    isPlayerValid,
-    params.type,
-    params.id,
-    params.season,
-    params.episode,
-  ]);
-
-  const sendPlaybackUpdate = useCallback(
-    async (currentTime: number) => {
-      if (
-        !isMountedRef.current ||
-        !videoData ||
-        !videoURL ||
-        currentTime <= 0
-      ) {
-        return;
-      }
-
-      try {
-        const playbackData: PlaybackUpdateRequest = {
-          videoId: videoURL,
-          playbackTime: currentTime,
-          mediaMetadata: {
-            mediaType: videoData.type || params.type,
-            mediaId: videoData.id || params.id,
-            ...(params.type === "tv" && {
-              showId: params.id,
-              seasonNumber:
-                videoData.seasonNumber || parseNumericParam(params.season),
-              episodeNumber:
-                videoData.episodeNumber || parseNumericParam(params.episode),
-            }),
-          },
-        };
-
-        console.log(
-          `[MobilePlaybackTracking] Sending update at ${currentTime}s`,
-        );
-
-        await contentService.updatePlaybackProgress(playbackData);
-
-        if (isMountedRef.current) {
-          console.log(
-            `[MobilePlaybackTracking] Updated progress: ${currentTime}s`,
-          );
-        }
-      } catch (error) {
-        if (isMountedRef.current) {
-          console.error(
-            "[MobilePlaybackTracking] Failed to update progress:",
-            error,
-          );
-        }
-      }
-    },
-    [videoData, videoURL, params],
-  );
-
-  // Cleanup functions
-  const cleanupListeners = useCallback(() => {
-    listenersRef.current.forEach((listener) => {
-      try {
-        listener.remove();
-      } catch (error) {
-        console.error(
-          "[MobilePlaybackTracking] Error removing listener:",
-          error,
-        );
-      }
-    });
-    listenersRef.current = [];
-  }, []);
-
-  const cleanupInterval = useCallback(() => {
-    if (updateIntervalRef.current) {
-      clearInterval(updateIntervalRef.current);
-      updateIntervalRef.current = null;
-    }
-  }, []);
-
-  // Main effect for setting up tracking
-  useEffect(() => {
-    if (!player || !videoURL || !videoData || !isPlayerValid(player)) return;
-
-    isMountedRef.current = true;
-
-    // Clear any existing listeners and intervals
-    cleanupListeners();
-    cleanupInterval();
-
-    let initTimeoutId: NodeJS.Timeout;
-
-    const setupTracking = () => {
-      if (!isMountedRef.current || !player || !isPlayerValid(player)) return;
-
-      try {
-        const handleTimeUpdate = () => {
-          if (!isMountedRef.current || !player || !isPlayerValid(player))
-            return;
-
-          try {
-            const currentTime = player.currentTime;
-            if (typeof currentTime !== "number") return;
-
-            const timeSinceLastUpdate = currentTime - lastUpdateTimeRef.current;
-
-            // Update if 30 seconds have passed or if there's a significant jump (seeking)
-            if (
-              timeSinceLastUpdate >= 30 ||
-              Math.abs(timeSinceLastUpdate) > 10
-            ) {
-              lastUpdateTimeRef.current = currentTime;
-              sendPlaybackUpdate(currentTime);
-            }
-          } catch (error) {
-            console.error(
-              "[MobilePlaybackTracking] Player released during time update:",
-              error,
-            );
-            cleanupInterval();
-            cleanupListeners();
-          }
-        };
-
-        const handlePlayingChange = ({ isPlaying }: { isPlaying: boolean }) => {
-          if (!isMountedRef.current || !player || !isPlayerValid(player))
-            return;
-
-          try {
-            if (!isPlaying) {
-              const currentTime = player.currentTime;
-              if (typeof currentTime === "number" && currentTime > 0) {
-                lastUpdateTimeRef.current = currentTime;
-                sendPlaybackUpdate(currentTime);
-              }
-            }
-          } catch (error) {
-            console.error(
-              "[MobilePlaybackTracking] Player released during playing change:",
-              error,
-            );
-            cleanupInterval();
-            cleanupListeners();
-          }
-        };
-
-        // Set up periodic updates
-        updateIntervalRef.current = setInterval(() => {
-          if (!isMountedRef.current || !player || !isPlayerValid(player)) {
-            cleanupInterval();
-            return;
-          }
-
-          try {
-            const isPlaying = player.playing;
-            if (isPlaying) {
-              handleTimeUpdate();
-            }
-          } catch (error) {
-            console.error(
-              "[MobilePlaybackTracking] Player released during interval update:",
-              error,
-            );
-            cleanupInterval();
-            cleanupListeners();
-          }
-        }, 30000);
-
-        // Set up event listeners
-        try {
-          const timeUpdateListener = player.addListener(
-            "timeUpdate",
-            handleTimeUpdate,
-          );
-          const playingChangeListener = player.addListener(
-            "playingChange",
-            handlePlayingChange,
-          );
-
-          // Store listeners for cleanup
-          listenersRef.current.push(timeUpdateListener, playingChangeListener);
-        } catch (error) {
-          console.error(
-            "[MobilePlaybackTracking] Error setting up listeners:",
-            error,
-          );
-        }
-      } catch (error) {
-        console.error(
-          "[MobilePlaybackTracking] Error in setupTracking:",
-          error,
-        );
-      }
-    };
-
-    // Small delay to ensure player is fully initialized
-    initTimeoutId = setTimeout(setupTracking, 100);
-
-    return () => {
-      clearTimeout(initTimeoutId);
-      cleanupListeners();
-      cleanupInterval();
-    };
-  }, [
-    player,
-    videoURL,
-    videoData,
-    sendPlaybackUpdate,
-    cleanupListeners,
-    cleanupInterval,
-    isPlayerValid,
-  ]);
-
-  // Cleanup effect when component unmounts
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-      cleanupListeners();
-      cleanupInterval();
-    };
-  }, [cleanupListeners, cleanupInterval]);
-
-  return { flushCurrentProgress };
 }
 
 export default function MobileWatchPage() {
@@ -673,18 +374,23 @@ export default function MobileWatchPage() {
     fallbackTimeoutMs: 5000,
   });
 
+  // Enable playback + presence tracking using effective data
+  const { flushCurrentProgress, endSession, getSessionId } =
+    usePlaybackPresenceTracking(
+      player,
+      effectiveVideoData,
+      effectiveVideoURL,
+      params,
+    );
+
   // Handle video codec errors and provide user-friendly messages
   const videoError = useVideoErrorHandling({
     player,
+    videoURL: effectiveVideoURL,
+    getPlaybackSessionId: getSessionId,
+    mediaId: params.id ?? null,
+    mediaType: params.type ?? null,
   });
-
-  // Enable playback tracking using effective data
-  const { flushCurrentProgress } = usePlaybackTracking(
-    player,
-    effectiveVideoData,
-    effectiveVideoURL,
-    params,
-  );
 
   // Function to fetch episode data for TV shows
   const fetchEpisodeData = useCallback(async () => {
@@ -781,9 +487,20 @@ export default function MobileWatchPage() {
           episode.episodeNumber,
         );
 
-        // Phase 1: Send final playback update for current episode
+        // Phase 1: Send final playback update for current episode, and end
+        // its presence session. sessionId is deliberately omitted from this
+        // update — it's paired with endSession() below for the same session,
+        // and the two must never share a sessionId on the wire (see the
+        // resurrection footgun note on PlaybackUpdateRequest).
         if (player && effectiveVideoData && effectiveVideoURL) {
           const currentTime = player.currentTime;
+          const outgoingSessionId = getSessionId();
+          console.log(
+            "[MobileWatchPage] Ending presence session for outgoing episode",
+            outgoingSessionId,
+          );
+          endSession();
+
           if (currentTime > 0) {
             console.log(
               "[MobileWatchPage] Sending final playback update for current episode",
@@ -791,6 +508,7 @@ export default function MobileWatchPage() {
             await contentService.updatePlaybackProgress({
               videoId: effectiveVideoURL,
               playbackTime: currentTime,
+              isPaused: !player.playing,
               mediaMetadata: {
                 mediaType: effectiveVideoData.type || params.type,
                 mediaId: effectiveVideoData.id || params.id,
@@ -892,6 +610,8 @@ export default function MobileWatchPage() {
       effectiveEpisodeNumber,
       currentSeasonNumber,
       router,
+      endSession,
+      getSessionId,
     ],
   );
 
@@ -999,8 +719,11 @@ export default function MobileWatchPage() {
   // Mobile-optimized exit handler
   const handleExit = useCallback(async () => {
     try {
-      // Flush current progress before navigation
-      await flushCurrentProgress();
+      // Flush current progress before navigation. sessionId is omitted here
+      // since we're ending the presence session right below — the two must
+      // never share a sessionId on the wire (see PlaybackUpdateRequest).
+      await flushCurrentProgress({ includeSessionId: false });
+      await endSession();
     } catch (error) {
       console.error(
         "[MobileWatchPage] Error flushing progress on exit:",
@@ -1011,13 +734,14 @@ export default function MobileWatchPage() {
     // Restore system bars
     SystemBars.setHidden(false);
     router.back();
-  }, [flushCurrentProgress, router]);
+  }, [flushCurrentProgress, endSession, router]);
 
   // Mobile-optimized info navigation
   const handleInfoPress = useCallback(async () => {
     try {
-      // Flush current progress before navigation
-      await flushCurrentProgress();
+      // Flush current progress before navigation (sessionId omitted — see handleExit).
+      await flushCurrentProgress({ includeSessionId: false });
+      await endSession();
     } catch (error) {
       console.error(
         "[MobileWatchPage] Error flushing progress on info navigation:",
@@ -1038,7 +762,14 @@ export default function MobileWatchPage() {
       false,
       true,
     ); // fromEpisodeInfo = false, fromWatch = true
-  }, [flushCurrentProgress, router, params.id, params.type, params.season]);
+  }, [
+    flushCurrentProgress,
+    endSession,
+    router,
+    params.id,
+    params.type,
+    params.season,
+  ]);
 
   // Handle PiP start
   const handlePiPStart = useCallback(() => {

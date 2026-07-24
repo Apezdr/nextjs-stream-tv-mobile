@@ -25,6 +25,11 @@ interface TVTouchableProps extends React.ComponentProps<
 const TouchableOpacity =
   RNTouchableOpacity as React.ComponentType<TVTouchableProps>;
 
+// Trigger load-more when the focused item is within this many items of the end.
+// A small fixed look-ahead is reliable for focus-stepped TV navigation and keeps
+// eagerness bounded on long lists (unlike a fraction-of-length threshold).
+const LOAD_MORE_LOOKAHEAD = 5;
+
 interface ContentRowProps {
   title: string;
   items: ContentItemData[];
@@ -48,6 +53,10 @@ interface ContentRowProps {
   trapFocusRight?: boolean;
   showHeader?: boolean;
   preferFirstItemFocus?: boolean;
+  /** Fired when any item in this row gains focus (used to snap-scroll the row into view) */
+  onRowFocus?: () => void;
+  /** Drops the row's trailing margin so the last row has no dead scroll space below it */
+  isLastRow?: boolean;
 }
 
 const ContentRow = ({
@@ -60,11 +69,17 @@ const ContentRow = ({
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
+  loadMoreThreshold = 0.5,
   trapFocusDown = false,
-  trapFocusLeft = false,
+  // Trap horizontal focus on both edges by default (symmetric with trapFocusRight)
+  // so holding left/right at the start/end of a row keeps focus on the row instead
+  // of jumping to an adjacent row. Screens that need left-exit can override.
+  trapFocusLeft = true,
   trapFocusRight = true,
   showHeader = true,
   preferFirstItemFocus = false,
+  onRowFocus,
+  isLastRow = false,
 }: ContentRowProps) => {
   const { window } = useDimensions();
 
@@ -80,13 +95,36 @@ const ContentRow = ({
     return { itemWidth, totalItemWidth, totalItemHeight };
   }, [itemSize, window.width]);
 
+  // Velocity/onEndReached-based loading. Kept as a fallback for fast (touch /
+  // held-key) scrolling; the focus-index trigger below handles the common TV
+  // case of stepping through a list where velocity never builds.
   const smartScroll = useSmartInfiniteScroll({
     hasNextPage,
     isFetching: isFetchingNextPage,
     onLoadMore: onLoadMore ?? (() => {}),
     horizontal: true,
     predictAheadMs: 1000,
+    endReachedThreshold: loadMoreThreshold,
   });
+
+  // Focus-index load-more: on TV the list scrolls in discrete focus steps, so a
+  // short/carefully-navigated row (e.g. Continue Watching) never builds enough
+  // scroll velocity to trip the predictor. Triggering when the focused item is
+  // within LOAD_MORE_LOOKAHEAD of the end is reliable regardless of velocity.
+  const handleItemFocus = useCallback(
+    (index: number) => {
+      onRowFocus?.();
+      if (
+        hasNextPage &&
+        !isFetchingNextPage &&
+        onLoadMore &&
+        index >= items.length - LOAD_MORE_LOOKAHEAD
+      ) {
+        onLoadMore();
+      }
+    },
+    [onRowFocus, hasNextPage, isFetchingNextPage, onLoadMore, items.length],
+  );
 
   const renderItem = useCallback(
     ({ item, index }: { item: ContentItemData; index: number }) => (
@@ -111,9 +149,11 @@ const ContentRow = ({
         }
         size={itemSize}
         hasTVPreferredFocus={preferFirstItemFocus && index === 0}
+        index={index}
+        onFocus={handleItemFocus}
       />
     ),
-    [onSelectContent, itemSize, preferFirstItemFocus],
+    [onSelectContent, itemSize, preferFirstItemFocus, handleItemFocus],
   );
 
   const keyExtractor = useCallback((item: ContentItemData) => item.id, []);
@@ -130,7 +170,7 @@ const ContentRow = ({
   if (items.length === 0) return null;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isLastRow && styles.containerLast]}>
       {showHeader && (
         <View style={styles.headerContainer}>
           <Text style={styles.title}>{title}</Text>
@@ -171,6 +211,7 @@ const ContentRow = ({
 
 const styles = StyleSheet.create({
   container: { marginBottom: 30 },
+  containerLast: { marginBottom: 0 },
   headerContainer: {
     alignItems: "center",
     flexDirection: "row",

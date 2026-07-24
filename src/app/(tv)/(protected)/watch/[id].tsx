@@ -1,7 +1,7 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
+import { BufferOptions, VideoView } from "expo-video";
 import {
   useEffect,
   useState,
@@ -20,16 +20,14 @@ import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
 import { setWatchMode, tvQueryHelpers } from "@/src/data/query/queryClient";
-import {
-  contentService,
-  PlaybackUpdateRequest,
-} from "@/src/data/services/contentService";
+import { contentService } from "@/src/data/services/contentService";
 import {
   MediaDetailsResponse,
   TVDeviceEpisode,
 } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
+import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
 
 function parseNumericParam(value: string | undefined): number | undefined {
@@ -99,313 +97,6 @@ function useContentLoader(
     loading,
     contentError,
   };
-}
-
-// Custom hook for playback tracking with improved memory leak prevention
-function usePlaybackTracking(
-  player: VideoPlayer,
-  videoData: MediaDetailsResponse | null,
-  videoURL: string | null,
-  params: {
-    id: string;
-    type: "tv" | "movie";
-    season?: string;
-    episode?: string;
-  },
-) {
-  const lastUpdateTimeRef = useRef<number>(0);
-  const updateIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const listenersRef = useRef<{ remove: () => void }[]>([]);
-  const isMountedRef = useRef(true);
-  const pendingUpdateRef = useRef<Promise<void> | null>(null);
-
-  // Helper function to check if player is still valid
-  const isPlayerValid = useCallback((player: VideoPlayer | null): boolean => {
-    if (!player) return false;
-
-    try {
-      // Try to access a property to check if the native object is still valid
-      const _ = player.currentTime;
-      return true;
-    } catch (error) {
-      // If accessing the property throws, the native object has been released
-      return false;
-    }
-  }, []);
-
-  // Expose function to flush current progress immediately (for navigation events)
-  const flushCurrentProgress = useCallback(async (): Promise<void> => {
-    if (!player || !videoData || !videoURL || !isPlayerValid(player)) {
-      return;
-    }
-
-    try {
-      const currentTime = player.currentTime;
-      if (typeof currentTime === "number" && currentTime > 0) {
-        console.log(
-          "[PlaybackTracking] Force flushing current progress before navigation",
-        );
-
-        const playbackData: PlaybackUpdateRequest = {
-          videoId: videoURL,
-          playbackTime: currentTime,
-          mediaMetadata: {
-            mediaType: videoData.type || params.type,
-            mediaId: videoData.id || params.id,
-            ...(params.type === "tv" && {
-              showId: params.id,
-              seasonNumber:
-                videoData.seasonNumber || parseNumericParam(params.season),
-              episodeNumber:
-                videoData.episodeNumber || parseNumericParam(params.episode),
-            }),
-          },
-        };
-
-        await contentService.updatePlaybackProgress(playbackData);
-        lastUpdateTimeRef.current = currentTime;
-
-        console.log(`[PlaybackTracking] Updated progress: ${currentTime}s`);
-      }
-    } catch (error) {
-      console.error("[PlaybackTracking] Error in force flush:", error);
-    }
-  }, [
-    player,
-    videoData,
-    videoURL,
-    isPlayerValid,
-    params.type,
-    params.id,
-    params.season,
-    params.episode,
-  ]);
-
-  const sendPlaybackUpdate = useCallback(
-    async (currentTime: number) => {
-      if (
-        !isMountedRef.current ||
-        !videoData ||
-        !videoURL ||
-        currentTime <= 0
-      ) {
-        return;
-      }
-
-      try {
-        const playbackData: PlaybackUpdateRequest = {
-          videoId: videoURL,
-          playbackTime: currentTime,
-          mediaMetadata: {
-            mediaType: videoData.type || params.type,
-            mediaId: videoData.id || params.id,
-            ...(params.type === "tv" && {
-              showId: params.id,
-              seasonNumber:
-                videoData.seasonNumber || parseNumericParam(params.season),
-              episodeNumber:
-                videoData.episodeNumber || parseNumericParam(params.episode),
-            }),
-          },
-        };
-
-        console.log(
-          `[PlaybackTracking] Sending update for ${playbackData.mediaMetadata.mediaType} ${playbackData.mediaMetadata.mediaId} at ${currentTime}s`,
-        );
-
-        // Store the promise to handle cleanup
-        const updatePromise =
-          contentService.updatePlaybackProgress(playbackData);
-        pendingUpdateRef.current = updatePromise;
-
-        await updatePromise;
-
-        // Clear the pending update if it's still the same one
-        if (pendingUpdateRef.current === updatePromise) {
-          pendingUpdateRef.current = null;
-        }
-
-        if (isMountedRef.current) {
-          console.log(`[PlaybackTracking] Updated progress: ${currentTime}s`);
-        }
-      } catch (error) {
-        if (isMountedRef.current) {
-          console.error("[PlaybackTracking] Failed to update progress:", error);
-        }
-      }
-    },
-    [videoData, videoURL, params],
-  );
-
-  // Cleanup function to remove all listeners
-  const cleanupListeners = useCallback(() => {
-    listenersRef.current.forEach((listener) => {
-      try {
-        listener.remove();
-      } catch (error) {
-        console.error("[PlaybackTracking] Error removing listener:", error);
-      }
-    });
-    listenersRef.current = [];
-  }, []);
-
-  // Cleanup function to clear interval
-  const cleanupInterval = useCallback(() => {
-    if (updateIntervalRef.current) {
-      clearInterval(updateIntervalRef.current);
-      updateIntervalRef.current = null;
-    }
-  }, []);
-
-  // Main effect for setting up tracking
-  useEffect(() => {
-    if (!player || !videoURL || !videoData || !isPlayerValid(player)) return;
-
-    isMountedRef.current = true;
-
-    // Clear any existing listeners and intervals
-    cleanupListeners();
-    cleanupInterval();
-
-    let initTimeoutId: NodeJS.Timeout;
-
-    const setupTracking = () => {
-      if (!isMountedRef.current || !player || !isPlayerValid(player)) return;
-
-      try {
-        const handleTimeUpdate = () => {
-          if (!isMountedRef.current || !player || !isPlayerValid(player))
-            return;
-
-          try {
-            const currentTime = player.currentTime;
-            if (typeof currentTime !== "number") return;
-
-            const timeSinceLastUpdate = currentTime - lastUpdateTimeRef.current;
-
-            // Update if 30 seconds have passed or if there's a significant jump (seeking)
-            if (
-              timeSinceLastUpdate >= 30 ||
-              Math.abs(timeSinceLastUpdate) > 10
-            ) {
-              lastUpdateTimeRef.current = currentTime;
-              sendPlaybackUpdate(currentTime);
-            }
-          } catch (error) {
-            console.error(
-              "[PlaybackTracking] Player released during time update:",
-              error,
-            );
-            // Player has been released, clean up
-            cleanupInterval();
-            cleanupListeners();
-          }
-        };
-
-        const handlePlayingChange = ({ isPlaying }: { isPlaying: boolean }) => {
-          if (!isMountedRef.current || !player || !isPlayerValid(player))
-            return;
-
-          try {
-            if (!isPlaying) {
-              const currentTime = player.currentTime;
-              if (typeof currentTime === "number" && currentTime > 0) {
-                lastUpdateTimeRef.current = currentTime;
-                sendPlaybackUpdate(currentTime);
-              }
-            }
-          } catch (error) {
-            console.error(
-              "[PlaybackTracking] Player released during playing change:",
-              error,
-            );
-            // Player has been released, clean up
-            cleanupInterval();
-            cleanupListeners();
-          }
-        };
-
-        // Set up periodic updates
-        updateIntervalRef.current = setInterval(() => {
-          if (!isMountedRef.current || !player || !isPlayerValid(player)) {
-            cleanupInterval();
-            return;
-          }
-
-          try {
-            const isPlaying = player.playing;
-            if (isPlaying) {
-              handleTimeUpdate();
-            }
-          } catch (error) {
-            console.error(
-              "[PlaybackTracking] Player released during interval update:",
-              error,
-            );
-            // Player has been released, clean up immediately
-            cleanupInterval();
-            cleanupListeners();
-          }
-        }, 30000);
-
-        // Set up event listeners
-        try {
-          const timeUpdateListener = player.addListener(
-            "timeUpdate",
-            handleTimeUpdate,
-          );
-          const playingChangeListener = player.addListener(
-            "playingChange",
-            handlePlayingChange,
-          );
-
-          // Store listeners for cleanup
-          listenersRef.current.push(timeUpdateListener, playingChangeListener);
-        } catch (error) {
-          console.error(
-            "[PlaybackTracking] Error setting up listeners:",
-            error,
-          );
-        }
-      } catch (error) {
-        console.error("[PlaybackTracking] Error in setupTracking:", error);
-      }
-    };
-
-    // Small delay to ensure player is fully initialized
-    initTimeoutId = setTimeout(setupTracking, 100);
-
-    return () => {
-      clearTimeout(initTimeoutId);
-      cleanupListeners();
-      cleanupInterval();
-    };
-  }, [
-    player,
-    videoURL,
-    videoData,
-    sendPlaybackUpdate,
-    cleanupListeners,
-    cleanupInterval,
-    isPlayerValid,
-  ]);
-
-  // Cleanup effect when component unmounts
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-
-      // Clean up everything
-      cleanupListeners();
-      cleanupInterval();
-
-      // Note: We don't send progress here anymore as it's handled by
-      // navigation event handlers before unmount occurs
-    };
-  }, [cleanupListeners, cleanupInterval]);
-
-  // Return both the hook functionality and the flush function
-  return { flushCurrentProgress };
 }
 
 export default function WatchPage() {
@@ -606,25 +297,42 @@ export default function WatchPage() {
     fallbackTimeoutMs: 5000,
   });
 
+  // Enable playback + presence tracking using effective data
+  const { flushCurrentProgress, endSession, getSessionId } =
+    usePlaybackPresenceTracking(
+      player,
+      effectiveVideoData,
+      effectiveVideoURL,
+      params,
+    );
+
   // Handle video codec errors and provide user-friendly messages
   const videoError = useVideoErrorHandling({
     player,
+    videoURL: effectiveVideoURL,
+    getPlaybackSessionId: getSessionId,
+    mediaId: params.id ?? null,
+    mediaType: params.type ?? null,
   });
 
-  // Enable playback tracking using effective data
-  const { flushCurrentProgress } = usePlaybackTracking(
-    player,
-    effectiveVideoData,
-    effectiveVideoURL,
-    params,
-  );
+  // Refs let the fetch callback read the latest "first load" state without
+  // listing them as deps. Including them in the deps array would re-create
+  // `fetchEpisodeData` after the first fetch, which in turn re-fires the
+  // mount-time effect that calls it — producing the two back-to-back
+  // "Lazily fetching episode data" logs on a single navigation.
+  const hasLoadedEpisodesOnceRef = useRef(hasLoadedEpisodesOnce);
+  hasLoadedEpisodesOnceRef.current = hasLoadedEpisodesOnce;
+  const episodesLengthRef = useRef(episodes.length);
+  episodesLengthRef.current = episodes.length;
+  const isEpisodeSwitchingStateRef = useRef(isEpisodeSwitching);
+  isEpisodeSwitchingStateRef.current = isEpisodeSwitching;
 
   // Function to fetch episode data using the preferred API pattern
   const fetchEpisodeData = useCallback(async () => {
     if (params.type !== "tv" || !params.id) return;
 
     // Don't fetch episode data during episode switching to prevent skeleton flash
-    if (isEpisodeSwitching || isEpisodeSwitchingRef.current) {
+    if (isEpisodeSwitchingStateRef.current || isEpisodeSwitchingRef.current) {
       console.log(
         "[WatchPage] Skipping episode data fetch during episode switching",
       );
@@ -632,7 +340,8 @@ export default function WatchPage() {
     }
 
     // Smart loading state: Only show skeleton for first load when no episodes exist
-    const isFirstLoad = !hasLoadedEpisodesOnce && episodes.length === 0;
+    const isFirstLoad =
+      !hasLoadedEpisodesOnceRef.current && episodesLengthRef.current === 0;
 
     try {
       if (isFirstLoad) {
@@ -669,14 +378,7 @@ export default function WatchPage() {
         setIsLoadingEpisodes(false);
       }
     }
-  }, [
-    params.type,
-    params.id,
-    currentSeasonNumber,
-    isEpisodeSwitching,
-    hasLoadedEpisodesOnce,
-    episodes.length,
-  ]);
+  }, [params.type, params.id, currentSeasonNumber]);
 
   // Reset episode loading state when season changes
   useEffect(() => {
@@ -736,9 +438,20 @@ export default function WatchPage() {
           episode.episodeNumber,
         );
 
-        // Phase 1: Send final playback update for current episode
+        // Phase 1: Send final playback update for current episode, and end
+        // its presence session. sessionId is deliberately omitted from this
+        // update — it's paired with endSession() below for the same session,
+        // and the two must never share a sessionId on the wire (see the
+        // resurrection footgun note on PlaybackUpdateRequest).
         if (player && effectiveVideoData && effectiveVideoURL) {
           const currentTime = player.currentTime;
+          const outgoingSessionId = getSessionId();
+          console.log(
+            "[WatchPage] Ending presence session for outgoing episode",
+            outgoingSessionId,
+          );
+          endSession();
+
           if (currentTime > 0) {
             console.log(
               "[WatchPage] Sending final playback update for current episode",
@@ -746,6 +459,7 @@ export default function WatchPage() {
             await contentService.updatePlaybackProgress({
               videoId: effectiveVideoURL,
               playbackTime: currentTime,
+              isPaused: !player.playing,
               mediaMetadata: {
                 mediaType: effectiveVideoData.type || params.type,
                 mediaId: effectiveVideoData.id || params.id,
@@ -845,6 +559,8 @@ export default function WatchPage() {
       effectiveEpisodeNumber,
       currentSeasonNumber,
       router,
+      endSession,
+      getSessionId,
     ],
   );
 
@@ -877,8 +593,12 @@ export default function WatchPage() {
         "[WatchPage] Exiting watch mode - resuming background queries",
       );
 
-      // Restore normal mode
-      setMode("browse");
+      // Restore React Query browse-mode optimizations. We intentionally do not
+      // call `setMode("browse")` here — BrowseLayout's effect re-establishes
+      // browse mode when the user lands back on a browse route, and doing it
+      // from this cleanup bounces the mode briefly before the route swap,
+      // triggering an extra TVAppStateProvider render and TVBanner cleanup
+      // cascade.
       setWatchMode(false);
 
       // Resume background queries
@@ -886,10 +606,16 @@ export default function WatchPage() {
     };
   }, [setMode]);
 
-  // Screensaver sync and keep awake management
+  // Screensaver sync and keep awake management. Reading
+  // `setVideoPlayingState` through a ref keeps this effect's deps stable
+  // (`player` is the only true dep) so we don't tear down and re-attach the
+  // playingChange listener — and re-log "Component unmounting - deactivated
+  // keep awake" — on every parent render.
+  const setVideoPlayingStateRef = useRef(setVideoPlayingState);
+  setVideoPlayingStateRef.current = setVideoPlayingState;
   useEffect(() => {
     const sub = player.addListener("playingChange", ({ isPlaying }) => {
-      setVideoPlayingState(isPlaying);
+      setVideoPlayingStateRef.current(isPlaying);
 
       // Keep screen awake during video playback to prevent Android screensaver
       if (isPlaying) {
@@ -909,12 +635,15 @@ export default function WatchPage() {
       deactivateKeepAwake();
       console.log("[WatchPage] Component unmounting - deactivated keep awake");
     };
-  }, [player, setVideoPlayingState]);
+  }, [player]);
 
   const handleExit = useCallback(async () => {
     try {
-      // Flush current progress before navigation
-      await flushCurrentProgress();
+      // Flush current progress before navigation. sessionId is omitted here
+      // since we're ending the presence session right below — the two must
+      // never share a sessionId on the wire (see PlaybackUpdateRequest).
+      await flushCurrentProgress({ includeSessionId: false });
+      await endSession();
     } catch (error) {
       console.error("[WatchPage] Error flushing progress on exit:", error);
     }
@@ -925,6 +654,7 @@ export default function WatchPage() {
     router.back();
   }, [
     flushCurrentProgress,
+    endSession,
     setVideoPlayingState,
     resetActivityTimer,
     setMode,
@@ -933,8 +663,9 @@ export default function WatchPage() {
 
   const handleInfoPress = useCallback(async () => {
     try {
-      // Flush current progress before navigation
-      await flushCurrentProgress();
+      // Flush current progress before navigation (sessionId omitted — see handleExit).
+      await flushCurrentProgress({ includeSessionId: false });
+      await endSession();
     } catch (error) {
       console.error(
         "[WatchPage] Error flushing progress on info navigation:",
@@ -957,6 +688,7 @@ export default function WatchPage() {
     });
   }, [
     flushCurrentProgress,
+    endSession,
     resetActivityTimer,
     router,
     params.id,
@@ -1000,9 +732,12 @@ export default function WatchPage() {
     [effectiveVideoData],
   );
 
-  // Optimized backdrop management - only show when actually visible to user
+  // Optimized backdrop management - only show when actually visible to user.
+  // Split into two effects: a re-run-safe show/hide effect with NO cleanup
+  // (previously the cleanup hid the backdrop on every dep change, producing the
+  // 4× "Component unmounting - hiding backdrop" flicker during initial load),
+  // and a separate mount-only effect that hides on actual unmount.
   useEffect(() => {
-    // Show backdrop during initial loading, episode switching, or watch history application
     const shouldShowBackdrop =
       showFullLoading || isEpisodeSwitching || !isControlsReady;
 
@@ -1012,7 +747,6 @@ export default function WatchPage() {
         effectiveBackdropURL,
       );
 
-      // Determine loading message based on current status
       let message: string | undefined;
       if (showFullLoading) {
         message = "Loading video...";
@@ -1033,19 +767,10 @@ export default function WatchPage() {
         blurhash: effectiveBackdropBlurhash as string | undefined,
         message,
       });
-    }
-
-    // Hide backdrop when controls are ready
-    if (!shouldShowBackdrop && isControlsReady) {
+    } else if (!shouldShowBackdrop && isControlsReady) {
       console.log("[WatchPage] Hiding backdrop - controls are ready");
       hideBackdrop({ fade: true, duration: 500 });
     }
-
-    // Cleanup on unmount
-    return () => {
-      console.log("[WatchPage] Component unmounting - hiding backdrop");
-      hideBackdrop({ fade: true, duration: 300 });
-    };
   }, [
     effectiveBackdropURL,
     effectiveBackdropBlurhash,
@@ -1056,6 +781,16 @@ export default function WatchPage() {
     showBackdrop,
     hideBackdrop,
   ]);
+
+  // Hide backdrop only on true unmount, not on every dep change above.
+  const hideBackdropRef = useRef(hideBackdrop);
+  hideBackdropRef.current = hideBackdrop;
+  useEffect(() => {
+    return () => {
+      console.log("[WatchPage] Component unmounting - hiding backdrop");
+      hideBackdropRef.current({ fade: true, duration: 300 });
+    };
+  }, []);
 
   // Render
   if (showFullLoading) {

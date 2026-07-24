@@ -66,6 +66,10 @@ interface ContentItemProps {
   isFocused?: boolean;
   /** Pass false to remove this item from the tvOS focus graph */
   isTVSelectable?: boolean;
+  /** Position of this item in the row, reported on focus so the row can trigger load-more */
+  index?: number;
+  /** Fired when this item gains focus; receives its index (row uses it for snap-scroll + load-more) */
+  onFocus?: (index: number) => void;
 }
 
 const ContentItem = ({
@@ -76,6 +80,8 @@ const ContentItem = ({
   hasTVPreferredFocus = false,
   isFocused = false,
   isTVSelectable = Platform.isTV,
+  index = 0,
+  onFocus,
 }: ContentItemProps) => {
   // Use the new Zustand-based backdrop manager
   const { show: showBackdrop } = useBackdropManager();
@@ -159,10 +165,10 @@ const ContentItem = ({
     isUnavailableItem,
   ]);
 
-  // Focus handler
+  // Focus handler — report our index so the row can snap-scroll and trigger load-more
   const handleFocus = useCallback(() => {
-    // Focus handling logic can be added here if needed
-  }, []);
+    onFocus?.(index);
+  }, [onFocus, index]);
 
   // omit the blurhash from the console log
   // if (item.episodeNumber) {
@@ -390,7 +396,9 @@ const areEqual = (prevProps: ContentItemProps, nextProps: ContentItemProps) => {
     prevProps.customWidth === nextProps.customWidth &&
     prevProps.hasTVPreferredFocus === nextProps.hasTVPreferredFocus &&
     prevProps.isFocused === nextProps.isFocused &&
-    prevProps.isTVSelectable === nextProps.isTVSelectable
+    prevProps.isTVSelectable === nextProps.isTVSelectable &&
+    prevProps.index === nextProps.index &&
+    prevProps.onFocus === nextProps.onFocus
   );
 };
 

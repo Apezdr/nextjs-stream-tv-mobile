@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as React from "react";
-import { useRef, useCallback, useTransition, useMemo } from "react";
+import { useRef, useState, useCallback, useTransition, useMemo } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   Easing,
+  runOnJS,
 } from "react-native-reanimated";
 
 import OptimizedImage from "../common/OptimizedImage";
@@ -22,12 +23,26 @@ import EpisodeProgressBar from "@/src/components/TV/MediaInfo/EpisodeProgressBar
 import { Colors } from "@/src/constants/Colors";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 
+// Container height when only the "View Available Episodes" label is visible.
+const COLLAPSED_HEIGHT = 30;
+// Container height when the full episode strip is visible. Sized to fit the
+// section title, the thumbnail, the title, and the progress bar without
+// clipping the last row of pixels under `overflow: 'hidden'`.
+const EXPANDED_HEIGHT = 200;
+// How far the episode content has to translate downward to be hidden entirely
+// below the visible label area when collapsed.
+const HIDE_TRANSLATE = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
+
 interface EpisodeCarouselProps {
   episodes: TVDeviceEpisode[];
   currentEpisodeNumber: number;
   onEpisodeSelect: (episode: TVDeviceEpisode) => void;
   isLoading?: boolean;
   disabled?: boolean;
+  // Fires when the carousel finishes expanding (true) or completes its
+  // collapse animation (false). Parents use this to move the show logo out
+  // of the carousel's way when expanded.
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 const EpisodeCarousel = React.memo(
@@ -37,6 +52,7 @@ const EpisodeCarousel = React.memo(
     onEpisodeSelect,
     isLoading = false,
     disabled = false,
+    onExpandedChange,
   }: EpisodeCarouselProps) {
     const scrollViewRef = useRef<ScrollView>(null);
     const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -47,22 +63,43 @@ const EpisodeCarousel = React.memo(
     // React 19 optimized focus state management - Container focus only
     const [isPending, startTransition] = useTransition();
 
-    // Animation values for focus state - use height to tuck/reveal
-    // TODO: FEATURE ENHANCEMENT - Fix focus guide breaking when carousel is collapsed
-    // Instead of animating the height of the scroll view container, we should:
-    // 1. Apply a translateY transform to the scroll view content to move it up/down
-    // 2. Animate the height of the container separately to maintain clipping bounds
-    // 3. This approach would preserve the existing expand/collapse functionality while
-    //    ensuring the TVFocusGuideView doesn't break when the carousel is collapsed
-    // Benefits:
-    // - Focus guide remains intact and functional in collapsed state
-    // - Smoother animation as content slides rather than height-clips
-    // - Better TV remote navigation experience
-    // - Maintains all existing visual behaviors and timing
-    const containerHeight = useSharedValue(0); // Start with 0 height to allow label positioning outside
-    const contentOpacity = useSharedValue(0); // Start hidden
-    const labelOpacity = useSharedValue(1); // Start with label visible
-    const episodesFadeOpacity = useSharedValue(0); // For fade-in effect of episodes
+    // Layout mode is state-driven so the container's height only reflows at
+    // the boundaries of the animation (twice per cycle), not on every frame.
+    // The visible transition is carried by translateY — a compositor-only
+    // transform — keeping the bulk of the animation off the layout pass.
+    const [carouselMode, setCarouselMode] = useState<"collapsed" | "expanded">(
+      "collapsed",
+    );
+    const contentTranslateY = useSharedValue(HIDE_TRANSLATE); // Off-screen below
+    const contentOpacity = useSharedValue(0);
+    const labelOpacity = useSharedValue(1);
+    const episodesFadeOpacity = useSharedValue(0);
+
+    // Generation counter that lets us cancel a collapse's deferred layout
+    // swap. The collapse animation's completion callback fires on the UI
+    // thread, then queues a `runOnJS(setCarouselMode)("collapsed")` to the JS
+    // thread. If the user re-enters the carousel between those two events,
+    // the queued setter would otherwise win the race and leave us with
+    // `carouselMode === "collapsed"` while focus sits on a current-episode
+    // Pressable (container at 30, content translated off-screen — invisible).
+    // `expandCarousel` bumps the generation; the deferred finalizer checks
+    // its captured token and bails if the generation has moved on.
+    const collapseGenRef = useRef(0);
+
+    // Latest `onExpandedChange` callback held in a ref so the expand/collapse
+    // helpers (declared with empty deps below) always see the current value
+    // without re-creating themselves when the parent passes a fresh inline
+    // function.
+    const onExpandedChangeRef = useRef(onExpandedChange);
+    onExpandedChangeRef.current = onExpandedChange;
+
+    // Tracks the mode we last reported to the parent via `onExpandedChange`.
+    // `expandCarousel` is called on every Pressable focus (including LEFT /
+    // RIGHT navigation between episodes), but the parent only cares when the
+    // mode genuinely transitions. Gating on this ref stops the parent from
+    // seeing a flood of `(true)` callbacks while focus moves inside an already
+    // expanded carousel.
+    const lastNotifiedModeRef = useRef<"collapsed" | "expanded">("collapsed");
 
     // Episodes are already stable from props, no need to re-memoize
 
@@ -83,23 +120,34 @@ const EpisodeCarousel = React.memo(
         // Scroll to position with some delay to ensure layout is complete
         setTimeout(() => {
           scrollViewRef.current?.scrollTo({
-            x: currentEpisodeIndex * 145, // Approximate item width + margin
+            x: currentEpisodeIndex * 149, // item width (134) + marginRight (15)
             animated: false,
           });
         }, 100);
       }
     }, [currentEpisodeIndex, episodes.length]);
 
-    // React 19 optimized animation control functions
-    // Shared values are stable references, no need to include in dependencies
+    // Expand: flip the layout mode FIRST so the container reserves
+    // EXPANDED_HEIGHT in the same frame the content begins sliding in. The
+    // captions/SeekBar above snap up once instead of reflowing every frame.
+    // Bumping the generation invalidates any in-flight collapse's deferred
+    // finalizer so it can't race in and re-set the mode to "collapsed" after
+    // we've already moved focus back into the carousel.
     const expandCarousel = useCallback(() => {
-      // First fade out the label quickly
+      collapseGenRef.current += 1;
+      setCarouselMode("expanded");
+      // Only notify the parent on a real collapsed → expanded transition.
+      // Subsequent focus events that re-call expandCarousel while we're
+      // already expanded are no-ops at the parent level.
+      if (lastNotifiedModeRef.current !== "expanded") {
+        lastNotifiedModeRef.current = "expanded";
+        onExpandedChangeRef.current?.(true);
+      }
       labelOpacity.value = withTiming(0, {
         duration: 150,
         easing: Easing.out(Easing.cubic),
       });
-      // Then expand height and fade in content
-      containerHeight.value = withTiming(180, {
+      contentTranslateY.value = withTiming(0, {
         duration: 300,
         easing: Easing.out(Easing.cubic),
       });
@@ -107,43 +155,61 @@ const EpisodeCarousel = React.memo(
         duration: 300,
         easing: Easing.out(Easing.cubic),
       });
-      // Fade in episodes with slight delay for staggered effect
       episodesFadeOpacity.value = withTiming(1, {
         duration: 400,
         easing: Easing.out(Easing.cubic),
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // Shared values are stable, no dependencies needed
+    }, []);
 
+    // Runs on the JS thread after the collapse animation completes naturally.
+    // If `expandCarousel` was called between the animation completing and this
+    // running, the captured `gen` no longer matches and we skip the layout
+    // swap + label fade-in. Without this gate, a late `runOnJS` from the
+    // collapse's completion would override the synchronous
+    // `setCarouselMode("expanded")` from the in-progress expand, leaving
+    // focus on a hidden Pressable.
+    const finalizeCollapse = useCallback((gen: number) => {
+      if (collapseGenRef.current !== gen) return;
+      setCarouselMode("collapsed");
+      if (lastNotifiedModeRef.current !== "collapsed") {
+        lastNotifiedModeRef.current = "collapsed";
+        onExpandedChangeRef.current?.(false);
+      }
+      labelOpacity.value = withTiming(1, {
+        duration: 200,
+        easing: Easing.out(Easing.cubic),
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Collapse: slide the content down out of the clipped region, then flip
+    // layout mode to "collapsed" in the deferred finalizer so the
+    // captions/SeekBar above only snap down AFTER the visible motion ends.
     const collapseCarousel = useCallback(() => {
-      // First fade out episodes quickly
       episodesFadeOpacity.value = withTiming(0, {
         duration: 150,
         easing: Easing.in(Easing.cubic),
       });
-      // Then collapse height and fade out content
-      containerHeight.value = withTiming(
-        0,
+      contentOpacity.value = withTiming(0, {
+        duration: 250,
+        easing: Easing.in(Easing.cubic),
+      });
+      const myGen = collapseGenRef.current;
+      contentTranslateY.value = withTiming(
+        HIDE_TRANSLATE,
         {
           duration: 250,
           easing: Easing.in(Easing.cubic),
         },
         (finished) => {
-          // Only fade in the label after height animation completes
           if (finished) {
-            labelOpacity.value = withTiming(1, {
-              duration: 200,
-              easing: Easing.out(Easing.cubic),
-            });
+            runOnJS(finalizeCollapse)(myGen);
           }
         },
       );
-      contentOpacity.value = withTiming(0, {
-        duration: 250,
-        easing: Easing.in(Easing.cubic),
-      });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // Shared values are stable, no dependencies needed
+    }, [finalizeCollapse]);
 
     // Episode-level focus handlers for proper collapse management
     const handleEpisodeFocus = useCallback(() => {
@@ -169,7 +235,7 @@ const EpisodeCarousel = React.memo(
         startTransition(() => {
           collapseCarousel();
         });
-      }, 300); // 300ms delay for cross-platform TV compatibility
+      }, 5); // 5ms delay for cross-platform TV compatibility
     }, [collapseCarousel]); // startTransition is stable
 
     // React 19 optimized single container focus handlers
@@ -227,10 +293,11 @@ const EpisodeCarousel = React.memo(
       };
     }, []);
 
-    // Animated style for the container - height-based tucking
-    const animatedContainerStyle = useAnimatedStyle(() => {
+    // Animated style for the sliding episode-content wrapper. translateY is a
+    // compositor-only transform, so each frame is cheap.
+    const animatedContentTransformStyle = useAnimatedStyle(() => {
       return {
-        height: containerHeight.value,
+        transform: [{ translateY: contentTranslateY.value }],
       };
     });
 
@@ -262,19 +329,35 @@ const EpisodeCarousel = React.memo(
       return `${minutes}m`;
     }, []);
 
-    // Memoize destinations array to prevent TVFocusGuideView re-renders
-    const focusDestinations = useMemo(() => {
-      return currentEpisodeRef.current ? [currentEpisodeRef.current] : [];
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [currentEpisodeNumber]); // Only recreate when current episode changes
+    // Track the current-episode Pressable's actual mounted node via a callback
+    // ref backed by state. The previous `useMemo` read `currentEpisodeRef.current`
+    // during render — but refs bind on commit (after render), so the memo
+    // captured a stale (or null) value when `currentEpisodeNumber` changed,
+    // which left `destinations` pointing at the wrong Pressable and broke
+    // DOWN-navigation from the SeekBar into the carousel. The callback ref
+    // runs on commit, so `currentEpisodeNode` is always the actually-mounted
+    // Pressable.
+    const [currentEpisodeNode, setCurrentEpisodeNode] = useState<View | null>(
+      null,
+    );
+    const setCurrentEpisodeRef = useCallback((node: View | null) => {
+      currentEpisodeRef.current = node;
+      setCurrentEpisodeNode(node);
+    }, []);
+    const focusDestinations = useMemo(
+      () => (currentEpisodeNode ? [currentEpisodeNode] : []),
+      [currentEpisodeNode],
+    );
 
     // Show loading placeholder or actual content
+    const containerHeight =
+      carouselMode === "expanded" ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT;
+
     if (isLoading) {
       return (
-        <Animated.View style={[styles.container, animatedContainerStyle]}>
+        <View style={[styles.container, { height: containerHeight }]}>
           <TVFocusGuideView
-            autoFocus
-            destinations={[]} // No destinations during loading
+            destinations={[]}
             style={styles.focusGuide}
             trapFocusLeft
             trapFocusRight
@@ -293,7 +376,11 @@ const EpisodeCarousel = React.memo(
             </Animated.View>
 
             <Animated.View
-              style={[animatedContentStyle, animatedEpisodesStyle]}
+              style={[
+                animatedContentStyle,
+                animatedEpisodesStyle,
+                animatedContentTransformStyle,
+              ]}
             >
               <ScrollView
                 horizontal
@@ -316,14 +403,19 @@ const EpisodeCarousel = React.memo(
               </ScrollView>
             </Animated.View>
           </TVFocusGuideView>
-        </Animated.View>
+        </View>
       );
     }
 
     return (
-      <Animated.View style={[styles.container, animatedContainerStyle]}>
+      <View style={[styles.container, { height: containerHeight }]}>
+        {/* `autoFocus` intentionally omitted: with it set, the guide proactively
+            claims focus on every re-render via `destinations`, which fired
+            `handleEpisodeFocus` (cancelling the 300ms collapse timer) right
+            after the parent moved focus to the SeekBar — leaving the carousel
+            permanently expanded. `destinations` alone handles DOWN-incoming
+            targeting; `onFocus` still expands on natural user navigation. */}
         <TVFocusGuideView
-          autoFocus
           destinations={focusDestinations}
           style={styles.focusGuide}
           trapFocusLeft
@@ -331,7 +423,10 @@ const EpisodeCarousel = React.memo(
           trapFocusDown
           onFocus={handleContainerFocus}
         >
-          {/* "View Available Episodes" label - shown when collapsed */}
+          {/* "View Available Episodes" label - shown when collapsed. Pure
+              visual hint, non-focusable. DOWN-from-captions routes through
+              the guide's `destinations` to the current-episode Pressable
+              directly, so the label never needs to capture focus. */}
           <Animated.View
             style={[styles.viewEpisodesLabel, animatedLabelStyle]}
             focusable={false}
@@ -354,7 +449,13 @@ const EpisodeCarousel = React.memo(
               />
             </View>
           </Animated.View>
-          <Animated.View style={[animatedContentStyle, animatedEpisodesStyle]}>
+          <Animated.View
+            style={[
+              animatedContentStyle,
+              animatedEpisodesStyle,
+              animatedContentTransformStyle,
+            ]}
+          >
             <Text style={styles.sectionTitle}>Episodes</Text>
             <ScrollView
               ref={scrollViewRef}
@@ -372,7 +473,7 @@ const EpisodeCarousel = React.memo(
                     key={episode.episodeNumber}
                     ref={
                       episode.episodeNumber === currentEpisodeNumber
-                        ? currentEpisodeRef
+                        ? setCurrentEpisodeRef
                         : null
                     }
                     focusable={!disabled}
@@ -416,36 +517,47 @@ const EpisodeCarousel = React.memo(
                           <Text style={styles.watchedText}>✓</Text>
                         </View>
                       )}
+                      {/* Watch-progress bar overlaid on the bottom of the
+                          thumbnail, Netflix-style. EpisodeProgressBar returns
+                          null when there's no watch history, so the overlay
+                          collapses to nothing for unwatched episodes. */}
+                      <View
+                        style={styles.thumbnailProgressOverlay}
+                        pointerEvents="none"
+                      >
+                        <EpisodeProgressBar
+                          watchHistory={episode.watchHistory}
+                          duration={episode.duration}
+                          compact
+                        />
+                      </View>
                     </View>
                     <Text style={styles.episodeTitle} numberOfLines={1}>
                       {episode.title}
                     </Text>
-
-                    {/* Progress bar */}
-                    <View style={styles.progressBarContainer}>
-                      <EpisodeProgressBar
-                        watchHistory={episode.watchHistory}
-                        duration={episode.duration}
-                      />
-                      <Text style={styles.durationText}>
-                        {formatDuration(episode.duration)}
-                      </Text>
-                    </View>
+                    <Text style={styles.durationText}>
+                      {formatDuration(episode.duration)}
+                    </Text>
                   </Pressable>
                 );
               })}
             </ScrollView>
           </Animated.View>
         </TVFocusGuideView>
-      </Animated.View>
+      </View>
     );
   },
   (prevProps, nextProps) => {
-    // Custom comparison function for React.memo to prevent unnecessary re-renders
+    // Custom comparison function for React.memo to prevent unnecessary re-renders.
+    // `disabled` must be included so toggling `isEpisodeSwitching` actually
+    // propagates: each Pressable's `focusable={!disabled}` only takes effect
+    // when this component re-renders.
     return (
+      prevProps.disabled === nextProps.disabled &&
       prevProps.currentEpisodeNumber === nextProps.currentEpisodeNumber &&
       prevProps.isLoading === nextProps.isLoading &&
       prevProps.onEpisodeSelect === nextProps.onEpisodeSelect &&
+      prevProps.onExpandedChange === nextProps.onExpandedChange &&
       prevProps.episodes.length === nextProps.episodes.length &&
       // Deep comparison of episodes array - check if episodes actually changed
       prevProps.episodes.every((prevEpisode, index) => {
@@ -473,6 +585,7 @@ export default EpisodeCarousel;
 
 const styles = StyleSheet.create({
   container: {
+    overflow: "hidden",
     width: "100%",
   },
   focusGuide: {
@@ -480,12 +593,9 @@ const styles = StyleSheet.create({
   },
   viewEpisodesLabel: {
     alignItems: "center",
-    bottom: -18,
+    height: COLLAPSED_HEIGHT,
     justifyContent: "center",
-    left: 0,
     paddingVertical: 8,
-    position: "absolute",
-    right: 0,
   },
   viewEpisodesContent: {
     alignItems: "center",
@@ -517,10 +627,17 @@ const styles = StyleSheet.create({
   },
   episodeItem: {
     alignItems: "center",
+    // Transparent border reserves the same 2px on every item so the layout
+    // doesn't shift when an item becomes the current episode (which adds a
+    // visible border). With box-sizing: border-box, this also keeps the
+    // thumbnail's 130px width flush inside the 134px container regardless
+    // of selection state.
+    borderColor: "transparent",
     borderRadius: 8,
+    borderWidth: 2,
     marginRight: 15,
-    padding: 5,
-    width: 130,
+    paddingBottom: 5,
+    width: 134,
   },
   episodeItemFocused: {
     backgroundColor: "rgba(255, 255, 255, 0.15)",
@@ -531,7 +648,6 @@ const styles = StyleSheet.create({
   },
   currentEpisode: {
     borderColor: Colors.dark.tint,
-    borderWidth: 2,
   },
   thumbnailContainer: {
     marginBottom: 5,
@@ -563,15 +679,19 @@ const styles = StyleSheet.create({
     textAlign: "center",
     width: "100%",
   },
-  progressBarContainer: {
-    paddingHorizontal: 5,
-    width: "100%",
-  },
   durationText: {
     color: "#999999",
     fontSize: 10,
     marginTop: 2,
+    paddingHorizontal: 5,
     textAlign: "right",
+    width: "100%",
+  },
+  thumbnailProgressOverlay: {
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
   },
   hdrBadge: {
     backgroundColor: "#FFD700",

@@ -6,14 +6,19 @@ import TVTopNavigation from "@/src/components/TV/Navigation/TVTopNavigation";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 
 export default function BrowseLayout() {
-  const { setMode } = useTVAppState();
+  const { currentMode, setMode } = useTVAppState();
   const pathname = usePathname();
 
-  // Ensure we're in browse mode for all browse routes
+  // Ensure we're in browse mode for all browse routes. The guard prevents a
+  // mount-time ping-pong with WatchPage: when the user navigates from browse
+  // to watch, this layout stays alive in the stack and its effect would
+  // otherwise re-fire and bounce the mode back to "browse" immediately after
+  // WatchPage sets it to "watch".
   useEffect(() => {
-    console.log("BrowseLayout: Setting mode to browse");
-    setMode("browse");
-  }, [setMode]);
+    if (currentMode !== "browse") {
+      setMode("browse");
+    }
+  }, [currentMode, setMode]);
 
   return (
     <View style={styles.container}>

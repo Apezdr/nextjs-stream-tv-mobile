@@ -67,7 +67,10 @@ interface CaptionControlsProps {
   selectedSubtitleBackground?: SubtitleBackgroundOption;
   onSubtitleBackgroundChange?: (background: SubtitleBackgroundOption) => void;
   onActivityReset?: () => void;
-  shouldAllowFocusDown?: boolean; // Whether to allow focus to move down to the next control
+  // Forwarded to the wrapping TVFocusGuideView's trapFocusDown prop. Set true
+  // when there's nothing below to navigate to (focus should stay in captions);
+  // set false when a focusable section (e.g. the episode carousel) sits below.
+  trapFocusDown?: boolean;
 }
 
 // Button data structure for FlatList
@@ -178,7 +181,7 @@ const CaptionControls = memo(
     selectedSubtitleBackground,
     onSubtitleBackgroundChange,
     onActivityReset,
-    shouldAllowFocusDown = false,
+    trapFocusDown = true,
   }: CaptionControlsProps) => {
     const [showMoreOptions, setShowMoreOptions] = useState(false);
     const [showStyleSettings, setShowStyleSettings] = useState(false);
@@ -486,7 +489,7 @@ const CaptionControls = memo(
         autoFocus
         trapFocusLeft
         trapFocusRight
-        trapFocusDown={shouldAllowFocusDown}
+        trapFocusDown={trapFocusDown}
       >
         <View style={styles.captionControlsContainer}>
           <View style={styles.captionControls}>
@@ -494,7 +497,7 @@ const CaptionControls = memo(
               autoFocus
               trapFocusLeft
               trapFocusRight
-              trapFocusDown={shouldAllowFocusDown}
+              trapFocusDown={trapFocusDown}
             >
               <FlatList
                 data={buttonData}

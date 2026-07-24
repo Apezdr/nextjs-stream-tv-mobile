@@ -4,15 +4,22 @@ import { useEvent } from "expo";
 import { Image } from "expo-image";
 import { VideoPlayer } from "expo-video";
 import * as React from "react";
-import { memo, useEffect, useRef, useState, useCallback } from "react";
+import { memo, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
   Text,
   Pressable,
   Animated,
+  Modal,
   TVFocusGuideView,
 } from "react-native";
+import Reanimated, {
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 
 import CaptionControls, {
   SubtitleStyle,
@@ -21,7 +28,7 @@ import CaptionControls, {
   SUBTITLE_BACKGROUND_OPTIONS,
 } from "./CaptionControls";
 import EpisodeCarousel from "./EpisodeCarousel";
-import SeekBar, { type PlayerState } from "./SeekBar";
+import SeekBar, { type PlayerState, type SeekBarRef } from "./SeekBar";
 import SubtitlePlayer from "./SubtitlePlayer";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
@@ -115,8 +122,23 @@ const StandaloneVideoControls = memo(
       unregisterSeekHandler,
     } = useRemoteActivity();
 
-    // State for SeekBar preferred focus management
-    const [seekBarShouldFocus, setSeekBarShouldFocus] = useState(true); // Initially true for first load
+    // Ref to the SeekBar's imperative handle. The outer TVFocusGuideView's
+    // `destinations` array points at the SeekBar's underlying focusable node
+    // for deterministic initial focus, and we call `seekBarRef.current.focus()`
+    // imperatively after an episode select. Replaces a prior dynamic
+    // `hasTVPreferredFocus={!seekBarShouldFocus}` toggle that flipped on a
+    // 200ms timer and raced with user DOWN-presses, intermittently re-stealing
+    // focus from the captions/episode carousel.
+    const seekBarRef = useRef<SeekBarRef>(null);
+    const [seekBarNode, setSeekBarNode] = useState<View | null>(null);
+    const seekBarRefCallback = useCallback((node: SeekBarRef | null) => {
+      seekBarRef.current = node;
+      setSeekBarNode(node ? node.getNode() : null);
+    }, []);
+    const focusDestinations = useMemo(
+      () => (seekBarNode ? [seekBarNode] : undefined),
+      [seekBarNode],
+    );
 
     // Subtitle preferences (persisted)
     const subtitlesEnabled = useSubtitlePreferencesStore((s) => s.subtitlesEnabled);
@@ -153,7 +175,9 @@ const StandaloneVideoControls = memo(
     const [selectedSubtitleBackground, setSelectedSubtitleBackground] =
       useState<SubtitleBackgroundOption>(SUBTITLE_BACKGROUND_OPTIONS[0]);
 
-    // Use expo-video's useEvent hook for efficient, stateful player data
+    // Use expo-video's useEvent hook for efficient, stateful player data.
+    // Initial values are read from the player so we don't start with stale zeros
+    // when the controls mount after a watch-history seek has already happened.
     const { isPlaying } = useEvent(player, "playingChange", {
       isPlaying: player?.playing || false,
     });
@@ -167,81 +191,131 @@ const StandaloneVideoControls = memo(
       status: player?.status || "idle",
     });
 
-    // Local state for duration (doesn't change frequently)
-    const [duration, setDuration] = useState(0);
+    // Initialize duration from the player so the very first render doesn't fall
+    // into the `duration <= 0 → buffering` branch when expo-video has already
+    // resolved the source.
+    const [duration, setDuration] = useState(() => player?.duration || 0);
 
     // Player state detection for unified state management
     const [playerState, setPlayerState] = useState<PlayerState>("normal");
-    const [watchHistoryState, setWatchHistoryState] = useState<
-      "loading" | "applying" | "normal"
-    >("normal");
+
+    // Restart-from-beginning confirmation modal visibility
+    const [showRestartConfirm, setShowRestartConfirm] = useState(false);
 
     // Determine current player state based on various conditions
     useEffect(() => {
-      // Watch history states take priority
-      if (watchHistoryState === "loading") {
-        setPlayerState("watch-history-loading");
-        return;
-      }
-      if (watchHistoryState === "applying") {
-        setPlayerState("watch-history-applying");
-        return;
-      }
-
       // Episode switching state
       if (isEpisodeSwitching) {
         setPlayerState("buffering");
         return;
       }
 
-      // Initial loading state - when we have no duration yet, we're loading
-      if (duration <= 0) {
-        setPlayerState("buffering");
-        return;
-      }
-
-      // Player status-based states
+      // Player status-based states. We intentionally do NOT gate on
+      // `currentTime === 0 && !isPlaying` here: that branch mis-fires after a
+      // watch-history seek because expo-video's `timeUpdate` event hasn't
+      // delivered the resumed position yet, locking the seek bar into a
+      // permanent "buffering" shimmer until a remount.
       switch (status) {
         case "loading":
-          setPlayerState("buffering");
-          break;
-        case "readyToPlay":
-          if (currentTime === 0 && !isPlaying) {
-            // Ready but not started yet
+          // Only treat "loading" as buffering if we don't already have a
+          // resolved duration. Once duration is known, the player has loaded
+          // the source and any subsequent "loading" emit is a transient seek.
+          if (duration <= 0) {
             setPlayerState("buffering");
           } else {
             setPlayerState("normal");
           }
+          break;
+        case "readyToPlay":
+          setPlayerState("normal");
           break;
         case "error":
           setPlayerState("error");
           break;
         case "idle":
-          if (duration > 0) {
-            setPlayerState("normal");
-          } else {
-            setPlayerState("buffering");
-          }
-          break;
         default:
-          // For unknown status, check if we have valid duration
           if (duration > 0) {
             setPlayerState("normal");
           } else {
             setPlayerState("buffering");
           }
       }
-    }, [
-      status,
-      currentTime,
-      isPlaying,
-      isEpisodeSwitching,
-      watchHistoryState,
-      duration,
-    ]);
+    }, [status, isEpisodeSwitching, duration]);
 
     // Create animated value for opacity
     const fadeAnim = useRef(new Animated.Value(1)).current;
+
+    // 0 = collapsed (logo at default position), 1 = carousel expanded
+    // (logo moved to top center, out of the way of the episode title/desc
+    // that gets pushed up by the growing carousel). Reanimated shared value
+    // so this runs on the same UI-thread runtime as the carousel's own
+    // animations — mixing react-native's legacy Animated with Reanimated for
+    // simultaneous animations was the source of the visible jitter.
+    const carouselExpandedAnim = useSharedValue(0);
+    // Tracks the last target we actually committed to `withTiming`. Used to
+    // dedup repeated calls with the same target.
+    const logoAnimTargetRef = useRef(0);
+    // Debounce handle so rapid expand/contract toggles don't bounce the logo:
+    // we only commit a withTiming once the carousel has held a state for the
+    // settle window below.
+    const logoAnimDebounceRef = useRef<NodeJS.Timeout | null>(null);
+    const handleCarouselExpandedChange = useCallback(
+      (expanded: boolean) => {
+        const nextTarget = expanded ? 1 : 0;
+        if (logoAnimTargetRef.current === nextTarget) {
+          // Target hasn't changed from the last committed value — drop any
+          // pending debounce (it would have committed the same target anyway)
+          // and bail.
+          if (logoAnimDebounceRef.current) {
+            clearTimeout(logoAnimDebounceRef.current);
+            logoAnimDebounceRef.current = null;
+          }
+          return;
+        }
+        if (logoAnimDebounceRef.current) {
+          clearTimeout(logoAnimDebounceRef.current);
+        }
+        logoAnimDebounceRef.current = setTimeout(() => {
+          logoAnimDebounceRef.current = null;
+          logoAnimTargetRef.current = nextTarget;
+          carouselExpandedAnim.value = withTiming(nextTarget, {
+            duration: 300,
+          });
+        }, 150);
+      },
+      [carouselExpandedAnim],
+    );
+    useEffect(() => {
+      return () => {
+        if (logoAnimDebounceRef.current) {
+          clearTimeout(logoAnimDebounceRef.current);
+          logoAnimDebounceRef.current = null;
+        }
+      };
+    }, []);
+    const animatedLogoStyle = useAnimatedStyle(() => {
+      return {
+        transform: [
+          {
+            translateX: interpolate(
+              carouselExpandedAnim.value,
+              [0, 1],
+              // From left: 5% to centered: 50% - half-of-logo-width.
+              // 100 = half of the logoContainer's 200px width.
+              [0, window.width * 0.45 - 100],
+            ),
+          },
+          {
+            translateY: interpolate(
+              carouselExpandedAnim.value,
+              [0, 1],
+              // From top: 27% to top: 5%, in pixels.
+              [0, -window.height * 0.22],
+            ),
+          },
+        ],
+      };
+    });
 
     // Create animated values for loading dots
     const dotAnim1 = useRef(new Animated.Value(0.4)).current;
@@ -301,12 +375,19 @@ const StandaloneVideoControls = memo(
       }
     }, [isEpisodeSwitching, dotAnim1, dotAnim2, dotAnim3]);
 
-    // Set up duration tracking when player status changes
+    // Set up duration tracking. We re-read player.duration on every
+    // statusChange AND timeUpdate so the value is captured as soon as the
+    // player resolves it. Listening only to statusChange used to work because
+    // the page remounted several times during load (re-running the effect each
+    // time); with the load now stabilized, statusChange may fire only once
+    // before duration is populated, which would leave `duration` at 0 and
+    // hide CaptionControls + EpisodeCarousel (both gated on duration > 0)
+    // and break down-navigation from the seek bar.
     useEffect(() => {
-      if (player && player.duration) {
+      if (player && player.duration && player.duration !== duration) {
         setDuration(player.duration);
       }
-    }, [player, status]);
+    }, [player, status, currentTime, duration]);
 
     // Wrapper function to reset activity timer when buttons are pressed
     const handleButtonPress = useCallback(
@@ -377,6 +458,25 @@ const StandaloneVideoControls = memo(
       [player],
     );
 
+    // Restart the current media from the beginning and resume playback. Invoked
+    // after the user confirms in the restart confirmation modal.
+    const handleRestart = useCallback(() => {
+      if (!player) return;
+      try {
+        player.currentTime = 0;
+        player.play();
+      } catch (error) {
+        console.warn("🎬 StandaloneVideoControls: Error restarting:", error);
+      }
+      setShowRestartConfirm(false);
+      // Return focus to the SeekBar once the modal has dismissed. Deferring past
+      // the dismiss avoids the native TV focus engine restoring focus to the
+      // (now-unmounted) confirm button after the modal's slide-out animation.
+      requestAnimationFrame(() => {
+        seekBarRef.current?.focus();
+      });
+    }, [player]);
+
     // Initialize caption language from persisted preferences
     useEffect(() => {
       if (videoInfo?.captionURLs && selectedCaptionLanguage === undefined) {
@@ -415,23 +515,6 @@ const StandaloneVideoControls = memo(
       }
     }, [videoInfo?.captionURLs, selectedCaptionLanguage, subtitlesEnabled, preferredLanguage]);
 
-    // Reset SeekBar focus state after it's been applied (for initial load and episode changes)
-    useEffect(() => {
-      if (seekBarShouldFocus) {
-        console.log("🎯 SeekBar focus state set to true, will reset in 200ms");
-        // Reset after a brief delay to allow focus transfer, then disable for normal navigation
-        const timer = setTimeout(() => {
-          console.log("🎯 Resetting SeekBar focus state to false");
-          setSeekBarShouldFocus(false);
-        }, 200);
-        return () => clearTimeout(timer);
-      }
-    }, [seekBarShouldFocus]);
-
-    useEffect(() => {
-      setSeekBarShouldFocus(true); // Reset focus state
-    }, []);
-
     const controlsContainerStyle = overlayMode
       ? [styles.controls, styles.overlayControls]
       : styles.controls;
@@ -454,8 +537,44 @@ const StandaloneVideoControls = memo(
             },
           ]}
         >
-          {/* Main Focus Guide for all controls */}
-          <TVFocusGuideView autoFocus style={styles.mainControlsContainer}>
+          {/* Logo slides from its default position (top: 27%, left: 5%) to
+              top-center when the episode carousel expands.
+
+              Lifted OUT of the flex flow (specifically out of `middleSection`
+              which has `flex: 1` and shrinks ~170px when the carousel
+              expands). Anchored here, the logo's positioning ancestor is the
+              full-screen overlay container, so `top: 27%` is a stable 27% of
+              the screen and doesn't move when the carousel's height swap
+              fires.
+
+              `renderToHardwareTextureAndroid` and `shouldRasterizeIOS` tell
+              the OS to rasterize the moving subtree (image + container clip)
+              into one GPU texture, then translate that texture instead of
+              re-running the clip + image sampler every frame. */}
+          <Reanimated.View
+            style={[styles.logoContainer, animatedLogoStyle]}
+            renderToHardwareTextureAndroid
+            shouldRasterizeIOS
+          >
+            {overlayMode && videoInfo?.logo ? (
+              <Image
+                source={{ uri: videoInfo.logo }}
+                style={styles.logo}
+                priority={"high"}
+              />
+            ) : videoInfo?.showTitle ? (
+              <Text style={styles.videoTitle}>{videoInfo.showTitle}</Text>
+            ) : null}
+          </Reanimated.View>
+
+          {/* Main Focus Guide for all controls. `destinations` directs initial
+              focus to the SeekBar without the dynamic `hasTVPreferredFocus`
+              toggle anti-pattern. */}
+          <TVFocusGuideView
+            autoFocus
+            destinations={focusDestinations}
+            style={styles.mainControlsContainer}
+          >
             {/* 1. Top Section */}
             <View style={styles.topSection}>
               <View style={styles.topLeftSection}>
@@ -491,6 +610,22 @@ const StandaloneVideoControls = memo(
                     />
                   </Pressable>
                 )}
+                <Pressable
+                  style={({ focused, pressed }) => [
+                    styles.controlButton,
+                    styles.infoButton,
+                    focused && styles.controlButtonFocused,
+                    pressed && styles.controlButtonPressed,
+                  ]}
+                  onPress={handleButtonPress(() => setShowRestartConfirm(true))}
+                  focusable={true}
+                >
+                  <Ionicons
+                    name="play-skip-back"
+                    size={24}
+                    color="rgba(255, 255, 255, 0.69)"
+                  />
+                </Pressable>
               </View>
               <View style={styles.topRightSection}>
                 {/* Future: Content rating, quality indicators, etc. */}
@@ -499,18 +634,6 @@ const StandaloneVideoControls = memo(
 
             {/* 2. Middle Section - Primary Controls */}
             <View style={styles.middleSection}>
-              <View style={styles.logoContainer}>
-                {overlayMode && videoInfo?.logo ? (
-                  <Image
-                    source={{ uri: videoInfo.logo }}
-                    style={styles.logo}
-                    priority={"high"}
-                  />
-                ) : videoInfo?.showTitle ? (
-                  <Text style={styles.videoTitle}>{videoInfo.showTitle}</Text>
-                ) : null}
-              </View>
-
               {/* <TVFocusGuideView autoFocus>
             <View style={styles.primaryControls}>
               <Pressable 
@@ -645,6 +768,7 @@ const StandaloneVideoControls = memo(
             {/* 4. Seek Bar Section - Always show, even during loading */}
             <View style={styles.seekBarSection}>
               <SeekBar
+                ref={seekBarRefCallback}
                 currentTime={currentTime}
                 duration={duration}
                 onSeek={handleSeek}
@@ -653,7 +777,6 @@ const StandaloneVideoControls = memo(
                 isPlaying={isPlaying}
                 onStartSeeking={startContinuousActivity}
                 onStopSeeking={stopContinuousActivity}
-                hasTVPreferredFocus={!seekBarShouldFocus}
                 playerState={playerState}
                 stateMessage={
                   episodeSwitchError
@@ -673,10 +796,15 @@ const StandaloneVideoControls = memo(
                   selectedSubtitleBackground={selectedSubtitleBackground}
                   onSubtitleBackgroundChange={setSelectedSubtitleBackground}
                   onActivityReset={resetActivityTimer}
-                  shouldAllowFocusDown={
-                    videoInfo?.type !== "tv" &&
-                    (!episodes || episodes.length === 0)
-                  } // Allow focus to move down to the next control
+                  // Trap DOWN only when there's no carousel below to navigate
+                  // to. The prop matches its semantics now: name == value.
+                  trapFocusDown={
+                    !(
+                      videoInfo?.type === "tv" &&
+                      !!episodes &&
+                      episodes.length > 0
+                    )
+                  }
                 />
               )}
 
@@ -693,10 +821,13 @@ const StandaloneVideoControls = memo(
                         resetActivityTimer();
                         if (onEpisodeSelect) {
                           onEpisodeSelect(episode);
-                          // Transfer focus to SeekBar using hasTVPreferredFocus toggle
-                          setSeekBarShouldFocus(true);
+                          // Transfer focus back to the SeekBar imperatively.
+                          // This replaces the prior 200ms `seekBarShouldFocus`
+                          // toggle, which raced with user navigation.
+                          seekBarRef.current?.focus();
                         }
                       }}
+                      onExpandedChange={handleCarouselExpandedChange}
                       isLoading={isLoadingEpisodes}
                       disabled={isEpisodeSwitching}
                     />
@@ -727,6 +858,58 @@ const StandaloneVideoControls = memo(
             </View>
           </TVFocusGuideView>
         </Animated.View>
+
+        {/* Restart-from-beginning confirmation modal */}
+        <Modal
+          visible={showRestartConfirm}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowRestartConfirm(false)}
+        >
+          <TVFocusGuideView
+            autoFocus
+            trapFocusUp
+            trapFocusDown
+            trapFocusLeft
+            trapFocusRight
+            style={styles.restartModalOverlay}
+          >
+            <View style={styles.restartModalCard}>
+              <Text style={styles.restartModalTitle}>
+                Restart from beginning?
+              </Text>
+              <Text style={styles.restartModalMessage}>
+                This will start the video over from the beginning.
+              </Text>
+              <View style={styles.restartModalButtons}>
+                <Pressable
+                  style={({ focused, pressed }) => [
+                    styles.restartConfirmButton,
+                    focused && styles.restartButtonFocused,
+                    pressed && styles.controlButtonPressed,
+                  ]}
+                  onPress={handleRestart}
+                  focusable
+                  hasTVPreferredFocus
+                  isTVSelectable
+                >
+                  <Text style={styles.restartButtonText}>Restart</Text>
+                </Pressable>
+                <Pressable
+                  style={({ focused, pressed }) => [
+                    styles.restartCancelButton,
+                    focused && styles.restartButtonFocused,
+                    pressed && styles.controlButtonPressed,
+                  ]}
+                  onPress={() => setShowRestartConfirm(false)}
+                  focusable
+                >
+                  <Text style={styles.restartButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          </TVFocusGuideView>
+        </Modal>
       </View>
     );
   },
@@ -902,6 +1085,78 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 40,
     justifyContent: "center",
+  },
+
+  restartButtonFocused: {
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    borderColor: "#FFFFFF",
+  },
+
+  restartButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  restartCancelButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderColor: "transparent",
+    borderRadius: 8,
+    borderWidth: 2,
+    minWidth: 130,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+  },
+
+  restartConfirmButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderColor: "transparent",
+    borderRadius: 8,
+    borderWidth: 2,
+    minWidth: 130,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+  },
+
+  restartModalButtons: {
+    flexDirection: "row",
+    gap: 16,
+    justifyContent: "center",
+  },
+
+  restartModalCard: {
+    backgroundColor: "rgba(20, 20, 20, 0.98)",
+    borderColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 14,
+    borderWidth: 1,
+    maxWidth: 520,
+    paddingHorizontal: 32,
+    paddingVertical: 28,
+    width: "80%",
+  },
+
+  restartModalMessage: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 16,
+    marginBottom: 24,
+    textAlign: "center",
+  },
+
+  restartModalOverlay: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    flex: 1,
+    justifyContent: "center",
+  },
+
+  restartModalTitle: {
+    color: "#FFFFFF",
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 12,
+    textAlign: "center",
   },
 
   retryButton: {

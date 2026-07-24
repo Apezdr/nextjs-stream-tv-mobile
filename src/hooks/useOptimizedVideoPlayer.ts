@@ -16,11 +16,47 @@ export function useOptimizedVideoPlayer(
 ) {
   const isFocused = useIsFocused();
 
+  // Pin the URL passed to expo-video's `useVideoPlayer` to the FIRST resolved
+  // URL for this mount. Internally `useVideoPlayer` releases the old player
+  // and creates a new one whenever the source string changes (its deps are
+  // `[JSON.stringify(parsedSource)]`). When the watch page's seamless episode
+  // switch updates `effectiveVideoURL` after calling `player.replaceAsync`,
+  // that change would otherwise trigger a release while VideoView is still
+  // mounted with a stale `player` prop, crashing React Fabric dev-mode prop
+  // diffing with "Cannot use shared object that was already released" on
+  // `audioMixingMode`. By keeping the source argument stable, the player
+  // instance is reused across in-session source swaps and the caller is
+  // expected to use `player.replaceAsync()` for source changes (which the
+  // watch page already does for episode switches).
+  const pinnedSourceRef = useRef<string | null>(null);
+  if (pinnedSourceRef.current === null && videoURL) {
+    pinnedSourceRef.current = videoURL;
+  }
+  const pinnedSource = pinnedSourceRef.current;
+
   // Use the original useVideoPlayer - conditionally apply onPlayerSetup
   const player = useVideoPlayer(
-    videoURL,
+    pinnedSource,
     deferSetup ? undefined : onPlayerSetup,
   );
+
+  // If the caller's `videoURL` changes after the player was created (e.g.
+  // params drift catching up after `router.setParams` during episode
+  // switching), swap the source via `replaceAsync` on the SAME player. This
+  // is a no-op when the source is already loaded.
+  const lastReplacedURLRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!player || !videoURL) return;
+    if (videoURL === pinnedSource) return;
+    if (videoURL === lastReplacedURLRef.current) return;
+    lastReplacedURLRef.current = videoURL;
+    player.replaceAsync({ uri: videoURL }).catch((err) => {
+      console.warn(
+        "[useOptimizedVideoPlayer] replaceAsync for URL drift failed:",
+        err,
+      );
+    });
+  }, [player, videoURL, pinnedSource]);
 
   // Track the saved state when we clean up
   const savedState = useRef<SavedPlayerState | null>(null);
@@ -275,8 +311,27 @@ export function useOptimizedVideoPlayer(
     return () => subscription?.remove();
   }, []);
 
-  // Only manage resources on focus transitions, but skip during PiP mode
+  // Only manage resources on focus transitions, but skip during PiP mode.
+  // The hasRunFocusEffectRef gate prevents the cleanup branch from firing
+  // on initial mount: `useIsFocused()` legitimately returns false until
+  // React Navigation finishes mounting the screen, and running cleanup
+  // during that window tears down resources before the screen is ever
+  // visible.
+  const hasRunFocusEffectRef = useRef(false);
   useEffect(() => {
+    if (!hasRunFocusEffectRef.current) {
+      hasRunFocusEffectRef.current = true;
+      // On the very first run, only act on the focused-true case (a normal
+      // mount) and skip the unfocused-cleanup branch entirely.
+      if (isFocused && savedState.current && !isPiPModeRef.current) {
+        console.log(
+          "[useOptimizedVideoPlayer] Screen focused - restoring resources",
+        );
+        restore();
+      }
+      return;
+    }
+
     if (!isFocused) {
       // Don't cleanup if we're likely in PiP mode
       if (!isPiPModeRef.current) {

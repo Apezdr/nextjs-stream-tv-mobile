@@ -220,13 +220,16 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
     };
   }, []);
 
-  // Mode management
+  // Mode management. Skip the state update when the requested mode is
+  // unchanged so stray callers cannot trigger a render or kick off downstream
+  // effects (e.g. TVBanner mode-transition cleanup) for a no-op transition.
   const setMode = useCallback((mode: TVAppMode) => {
     setCurrentMode((prevMode) => {
+      if (prevMode === mode) return prevMode;
       console.log(`Switching TV app mode from ${prevMode} to ${mode}`);
       return mode;
     });
-  }, []); // Remove currentMode dependency to prevent unnecessary re-renders
+  }, []);
 
   // Content selection and watch mode
   const selectContentAndWatch = useCallback(
