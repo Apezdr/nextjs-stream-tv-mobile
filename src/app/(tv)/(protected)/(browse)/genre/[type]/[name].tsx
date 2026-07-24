@@ -17,12 +17,10 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   ActivityIndicator,
-  TVFocusGuideView,
 } from "react-native";
 
-import ContentRow from "@/src/components/TV/Pages/ContentRow";
+import ContentGrid from "@/src/components/TV/Pages/ContentGrid";
 import { Colors } from "@/src/constants/Colors";
 import {
   useInfiniteGenreContent,
@@ -203,6 +201,16 @@ const TVGenrePageContent = memo(function TVGenrePageContent() {
 
   const typeLabel = mediaType === "tv" ? "TV Shows" : "Movies";
 
+  const listHeader = useMemo(
+    () => (
+      <View style={styles.header}>
+        <Text style={styles.title}>{genreName}</Text>
+        <Text style={styles.subtitle}>{typeLabel}</Text>
+      </View>
+    ),
+    [genreName, typeLabel],
+  );
+
   if (isLoading && items.length === 0) {
     return (
       <View style={styles.container}>
@@ -232,31 +240,15 @@ const TVGenrePageContent = memo(function TVGenrePageContent() {
 
   return (
     <View style={styles.container}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        pagingEnabled={false}
-      >
-        <View style={styles.header}>
-          <Text style={styles.title}>{genreName}</Text>
-          <Text style={styles.subtitle}>{typeLabel}</Text>
-        </View>
-
-        <TVFocusGuideView trapFocusDown>
-          <ContentRow
-            title=""
-            showHeader={false}
-            items={items}
-            onSelectContent={handleSelectContent}
-            itemSize="small"
-            hasNextPage={!!hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            preferFirstItemFocus
-            trapFocusDown
-          />
-        </TVFocusGuideView>
-      </ScrollView>
+      <ContentGrid
+        items={items}
+        onSelectContent={handleSelectContent}
+        hasNextPage={!!hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={fetchNextPage}
+        preferFirstItemFocus
+        header={listHeader}
+      />
     </View>
   );
 });
@@ -295,12 +287,6 @@ const styles = StyleSheet.create({
     color: Colors.dark.videoDescriptionText,
     fontSize: 16,
     marginTop: 16,
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 40,
   },
   subtitle: {
     color: Colors.dark.videoDescriptionText,
