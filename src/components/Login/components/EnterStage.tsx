@@ -67,7 +67,7 @@ export default function EnterStage({
       <Card style={styles.authCard}>
         <Text style={styles.authTitle}>Connect to Server</Text>
         <Text style={styles.authSubtitle}>
-          Enter your server host or select from recent
+          Enter your server host or select from a recently connected server
         </Text>
 
         <View style={styles.enterForm}>

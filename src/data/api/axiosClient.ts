@@ -2,7 +2,6 @@
  * Axios-based HTTP client with interceptors for authentication,
  * error handling, and retry logic
  */
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios, { AxiosInstance, AxiosError } from "axios";
 
 // Define common API error response structure
@@ -14,10 +13,20 @@ interface ApiErrorResponse {
   [key: string]: unknown;
 }
 
+// Current auth token - set synchronously by EnhancedApiClient.setAuthToken().
+// Previously this was persisted to AsyncStorage and re-read per request, but
+// that write was un-awaited and raced with AuthProvider flipping `apiReady`,
+// so the very first authenticated request after login/refresh could go out
+// with no Authorization header. A plain in-memory value can't race.
+let globalAuthToken: string | null = null;
 // Global token refresh function - will be set by EnhancedApiClient
 let globalTokenRefreshFunction: (() => Promise<boolean>) | null = null;
 // Global server status check function - will be set by AuthProvider
 let globalServerStatusCheckFunction: (() => Promise<void>) | null = null;
+
+export function setAxiosAuthToken(token: string | null) {
+  globalAuthToken = token;
+}
 
 // Debouncing for server status checks to prevent excessive requests
 let serverStatusCheckTimeout: NodeJS.Timeout | null = null;
@@ -192,20 +201,8 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       }
 
       // Add authentication headers
-      try {
-        const authData = await AsyncStorage.getItem("auth");
-        if (authData) {
-          const { authToken } = JSON.parse(authData);
-
-          // Add Bearer token
-          if (authToken && !config.headers.Authorization) {
-            config.headers.Authorization = `Bearer ${authToken}`;
-          }
-        }
-      } catch (error) {
-        if (AXIOS_DEBUG_ENABLED) {
-          console.warn("Failed to retrieve auth data:", error);
-        }
+      if (globalAuthToken && !config.headers.Authorization) {
+        config.headers.Authorization = `Bearer ${globalAuthToken}`;
       }
 
       // Add request timestamp for logging
@@ -294,16 +291,14 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
                 );
               }
 
-              // Get the updated auth data from AsyncStorage
-              const authData = await AsyncStorage.getItem("auth");
-              if (authData) {
-                const { authToken } = JSON.parse(authData);
-
-                if (authToken && originalRequest) {
-                  originalRequest.headers = originalRequest.headers || {};
-                  originalRequest.headers["Authorization"] =
-                    `Bearer ${authToken}`;
-                }
+              // Re-attach the current token (refreshToken() re-validates the
+              // existing session, it doesn't rotate the bearer token, so this
+              // is the same value — just re-applied in case it wasn't set
+              // when the original request first went out).
+              if (globalAuthToken && originalRequest) {
+                originalRequest.headers = originalRequest.headers || {};
+                originalRequest.headers["Authorization"] =
+                  `Bearer ${globalAuthToken}`;
               }
 
               // Retry the original request with new token if it exists
@@ -332,7 +327,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
               "[Axios] No token refresh function available, clearing auth data",
             );
           }
-          await AsyncStorage.removeItem("auth");
+          setAxiosAuthToken(null);
         }
       }
 

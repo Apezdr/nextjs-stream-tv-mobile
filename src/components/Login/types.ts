@@ -23,6 +23,8 @@ export interface LoginState {
   loadingProviderId: string | null; // Track which provider is currently loading
   isQRExpired: boolean;
   qrTerminalError: "expired" | "access_denied" | "server_down" | null;
+  /** Human-readable reason the QR/device code could not be generated, if any */
+  qrError: string | null;
 }
 
 export interface LoginActions {
@@ -38,7 +40,11 @@ export interface LoginActions {
   setShouldPlayLogo: (should: boolean) => void;
   setLoadingProviderId: (id: string | null) => void;
   setIsQRExpired: (expired: boolean) => void;
-  setQrTerminalError: (error: "expired" | "access_denied" | "server_down" | null) => void;
+  setQrTerminalError: (
+    error: "expired" | "access_denied" | "server_down" | null,
+  ) => void;
+  /** Retry device-code generation after a failure (re-runs the init flow) */
+  retryQR: () => void;
   refreshQRCode: () => void;
   selectRecentHost: (host: string) => void;
   removeFromRecentlyUsed: (host: string) => void;

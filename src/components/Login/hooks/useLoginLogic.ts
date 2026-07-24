@@ -17,6 +17,7 @@ import { getDeviceType } from "@/src/utils/deviceInfo";
 const RECENT_HOSTS_KEY = "recently_used_hosts";
 const MAX_RECENT_HOSTS = 5;
 const PROVIDER_FETCH_TIMEOUT_MS = 10000;
+const STATUS_FETCH_TIMEOUT_MS = 10000;
 
 export function useLoginLogic(
   initialStage: "enter" | "choose" | "qr" = "enter",
@@ -55,7 +56,14 @@ export function useLoginLogic(
   const [qrTerminalError, setQrTerminalError] = useState<
     "expired" | "access_denied" | "server_down" | null
   >(null);
+  const [qrError, setQrError] = useState<string | null>(null);
+  // Bumped to force the device-flow effect to re-initialize after a failure,
+  // even though deviceCode is already null (a plain state reset wouldn't re-run it).
+  const [qrRetryNonce, setQrRetryNonce] = useState(0);
   const qrExpiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against firing two device-code requests if the effect re-runs while
+  // a request is already in flight.
+  const deviceFlowInFlightRef = useRef(false);
 
   // ── Load recently used hosts from storage
   const loadRecentlyUsedHosts = useCallback(async () => {
@@ -161,24 +169,73 @@ export function useLoginLogic(
 
   // ── Try to connect to server
   const tryConnect = useCallback(async (): Promise<boolean> => {
-    if (!host.trim()) {
+    const trimmedHost = host.trim();
+    if (!trimmedHost) {
       Alert.alert("Validation Error", "Please enter a site name");
       return false;
     }
+
     setLoading(true);
+
+    const abortController = new AbortController();
+    const timeoutHandle = setTimeout(
+      () => abortController.abort(),
+      STATUS_FETCH_TIMEOUT_MS,
+    );
+
     try {
-      const { ok } = await fetch(`https://${host}/api/status`).then((r) =>
-        r.json(),
-      );
-      console.log("isApiStatusOk?", ok);
-      if (!ok) throw new Error("Status check failed");
-      await setServer(`https://${host}`);
+      // 1) Reach the server. fetch only rejects on network-level failures
+      //    (bad host, DNS, TLS, offline, or our abort timeout).
+      let response: Response;
+      try {
+        response = await fetch(`https://${trimmedHost}/api/status`, {
+          signal: abortController.signal,
+        });
+      } catch (networkError) {
+        if (
+          networkError instanceof Error &&
+          networkError.name === "AbortError"
+        ) {
+          throw new Error(
+            `Couldn't reach ${trimmedHost} — the connection timed out. Check the site name and that the server is online.`,
+          );
+        }
+        throw new Error(
+          `Couldn't reach ${trimmedHost}. Double-check the site name and that the server is online.`,
+        );
+      }
+
+      // 2) Server answered, but with an error status.
+      if (!response.ok) {
+        throw new Error(
+          `${trimmedHost} responded with an error (HTTP ${response.status}). It may not be the streaming server, or it may be down.`,
+        );
+      }
+
+      // 3) Server answered OK — make sure it's actually our status payload.
+      const rawBody = await response.text();
+      let statusOk = false;
+      try {
+        statusOk = Boolean((JSON.parse(rawBody) as { ok?: boolean }).ok);
+      } catch {
+        throw new Error(
+          `${trimmedHost} responded, but not in the expected format. Make sure the site name points to your streaming server.`,
+        );
+      }
+
+      if (!statusOk) {
+        throw new Error(
+          `Connected to ${trimmedHost}, but it reported it isn't ready yet. Try again in a moment.`,
+        );
+      }
+
+      await setServer(`https://${trimmedHost}`);
 
       // Add to recently used hosts on successful validation
-      await addToRecentlyUsed(host);
+      await addToRecentlyUsed(trimmedHost);
 
       // Show the backdrop with poster collage once host is validated
-      showBackdrop(`https://${host}/api/public/poster-collage`, {
+      showBackdrop(`https://${trimmedHost}/api/public/poster-collage`, {
         fade: true,
         duration: isTVPlatform ? 800 : 500, // Slower fade on TV for better experience
       });
@@ -194,21 +251,12 @@ export function useLoginLogic(
       }
       return true;
     } catch (e: unknown) {
-      let errorHeader = "Validation Error";
-      let errorMessage = e instanceof Error ? e.message : "Connection failed";
-
-      if (
-        typeof errorMessage === "string" &&
-        errorMessage.includes("JSON Parse error: Unexpected character: <")
-      ) {
-        errorHeader = "Site connection failed";
-        errorMessage =
-          "We're having issues communicating with that host, it may be offline you can try again later.";
-      }
-
-      Alert.alert(errorHeader, errorMessage);
+      const errorMessage =
+        e instanceof Error ? e.message : "Connection failed. Please try again.";
+      Alert.alert("Couldn't connect", errorMessage);
       return false;
     } finally {
+      clearTimeout(timeoutHandle);
       setLoading(false);
     }
   }, [host, setServer, addToRecentlyUsed, showBackdrop, isTVPlatform]);
@@ -238,6 +286,7 @@ export function useLoginLogic(
     }
     setIsQRExpired(false);
     setQrTerminalError(null);
+    setQrError(null);
     cancelQRAuthentication();
     setDeviceCode(null);
     setUserCode(null);
@@ -254,10 +303,30 @@ export function useLoginLogic(
     }
     setIsQRExpired(false);
     setQrTerminalError(null);
+    setQrError(null);
     setDeviceCode(null);
     setUserCode(null);
     setQrCode(null);
     setQrPolling(false);
+    setQrRetryNonce((n) => n + 1);
+  }, []);
+
+  // ── Retry device-code generation after a failure. Resets the device-code
+  // state and bumps the nonce so the init effect re-runs even though
+  // deviceCode is already null.
+  const retryQR = useCallback(() => {
+    if (qrExpiryTimerRef.current) {
+      clearTimeout(qrExpiryTimerRef.current);
+      qrExpiryTimerRef.current = null;
+    }
+    setIsQRExpired(false);
+    setQrTerminalError(null);
+    setQrError(null);
+    setDeviceCode(null);
+    setUserCode(null);
+    setQrCode(null);
+    setQrPolling(false);
+    setQrRetryNonce((n) => n + 1);
   }, []);
 
   // ── Enhanced provider sign-in with loading state (replacing original)
@@ -315,9 +384,14 @@ export function useLoginLogic(
   useEffect(() => {
     const initializeDeviceFlow = async () => {
       if (!server || !signInWithQRCode) return;
+      // Skip if a device-code request is already in flight (the effect can
+      // re-run when auth-provider callbacks change identity mid-request).
+      if (deviceFlowInFlightRef.current) return;
+      deviceFlowInFlightRef.current = true;
 
       try {
         setLoading(true);
+        setQrError(null);
         const response = (await signInWithQRCode()) as DeviceCodeResponse;
         setDeviceCode(response.device_code);
         setUserCode(response.user_code);
@@ -340,9 +414,15 @@ export function useLoginLogic(
         setQrPolling(true);
       } catch (error) {
         console.error("Failed to initialize device auth flow:", error);
-        Alert.alert("Error", "Failed to generate QR code");
-        setStage("choose");
+        // Surface the real reason in the failure card instead of a generic
+        // popup, and keep stage on "qr" so the in-card "Try Again" works.
+        const reason =
+          error instanceof Error && error.message
+            ? error.message
+            : "We couldn't reach the sign-in service on this server.";
+        setQrError(reason);
       } finally {
+        deviceFlowInFlightRef.current = false;
         setLoading(false);
       }
     };
@@ -368,8 +448,11 @@ export function useLoginLogic(
         setQrPolling(false);
       } catch (error) {
         console.error("QR polling error:", error);
-        Alert.alert("Error", "QR authentication failed");
-        setStage("choose");
+        // Stop polling and surface the failure in the existing error card
+        // (keep stage on "qr" so "Try Again" works), instead of a blocking
+        // Alert + jumping to the dead "choose" stage and leaking the poll.
+        cancelQRAuthentication();
+        setQrTerminalError("server_down");
         setQrPolling(false);
       }
     };
@@ -393,6 +476,7 @@ export function useLoginLogic(
     deviceCode,
     qrPolling,
     user,
+    qrRetryNonce,
     signInWithQRCode,
     pollQRAuthentication,
   ]);
@@ -406,10 +490,12 @@ export function useLoginLogic(
       }
       setIsQRExpired(false);
       setQrTerminalError(null);
+      setQrError(null);
       setDeviceCode(null);
       setUserCode(null);
       setQrCode(null);
       setQrPolling(false);
+      deviceFlowInFlightRef.current = false;
     }
   }, [stage]);
 
@@ -429,6 +515,7 @@ export function useLoginLogic(
     loadingProviderId,
     isQRExpired,
     qrTerminalError,
+    qrError,
   };
 
   const actions: LoginActions = {
@@ -445,6 +532,7 @@ export function useLoginLogic(
     setLoadingProviderId,
     setIsQRExpired,
     setQrTerminalError,
+    retryQR,
     refreshQRCode,
     selectRecentHost,
     removeFromRecentlyUsed,

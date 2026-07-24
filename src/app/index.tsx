@@ -16,6 +16,12 @@ export default function RootIndex() {
     return null;
   }
 
+  // Signed in but not approved → hold on the pending-approval screen (which
+  // polls for the flip) instead of bouncing back to /login forever.
+  if (user && !user.approved) {
+    return <Redirect href="/pending-approval" />;
+  }
+
   // Authenticated + API ready → go to the appropriate protected area
   if (user && user.approved && apiReady) {
     return isTV ? (

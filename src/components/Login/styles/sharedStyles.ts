@@ -183,6 +183,16 @@ export const createTVFocusStyles = () =>
       marginTop: 16,
       width: "100%",
     },
+    qrErrorDetail: {
+      backgroundColor: "rgba(255, 255, 255, 0.06)",
+      borderRadius: 8,
+      color: Colors.dark.placeholderText,
+      fontSize: 13,
+      marginTop: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      textAlign: "center",
+    },
     qrContainer: {
       alignItems: "center",
       marginVertical: 2,

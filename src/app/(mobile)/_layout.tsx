@@ -17,6 +17,12 @@ export default function MobileLayout() {
     return <Redirect href="/login" />;
   }
 
+  if (!user.approved) {
+    // signed in but not approved → pending-approval screen (keeps protected
+    // areas consistent with the root index guard)
+    return <Redirect href="/pending-approval" />;
+  }
+
   // logged in → render protected routes
   return (
     <Stack

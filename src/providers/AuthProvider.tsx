@@ -9,19 +9,22 @@ import {
   useRef,
   PropsWithChildren,
 } from "react";
-import { AppState, AppStateStatus } from "react-native";
+import { Alert, AppState, AppStateStatus } from "react-native";
 
 import {
   createBetterAuthClient,
+  serverOrigin,
   type BetterAuthClient,
 } from "@/src/data/api/authClient";
 import { API_ENDPOINTS } from "@/src/data/api/endpoints";
 import { enhancedApiClient } from "@/src/data/api/enhancedClient";
 import { cacheStore } from "@/src/data/cache/cacheStore";
+import { clearAllCaches } from "@/src/data/query/queryClient";
 import type {
   DeviceCodeResponse,
   GetSessionResponse,
 } from "@/src/data/types/auth.types";
+import { classifySessionStatus } from "@/src/providers/authSessionPolicy";
 import { useBackdropStore } from "@/src/stores/backdropStore";
 
 type User = {
@@ -401,24 +404,33 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (DEBUG_AUTH)
           console.log(`[Auth] Status check returned error: ${response.status}`);
 
-        if (response.status === 401 || response.status === 403) {
-          console.log("[Auth] Session expired, attempting token refresh");
-          const refreshSuccessful = await refreshToken();
-          if (!refreshSuccessful) {
-            console.log("[Auth] Token refresh failed, logging out");
-            await signOut();
-          }
-          return;
-        }
-
-        if (response.status >= 500) {
-          console.warn("[Auth] Server error detected, checking server status");
-          await checkServerStatus();
+        switch (classifySessionStatus(response.status)) {
+          case "sign-out":
+            // refreshToken() owns the sign-out decision — it re-validates
+            // the session itself and only signs out on real 401/403.
+            console.log("[Auth] Session expired, attempting token refresh");
+            await refreshToken();
+            return;
+          case "server-issue":
+            console.warn(
+              "[Auth] Server error detected, checking server status",
+            );
+            await checkServerStatus();
+            break;
+          case "unknown-error":
+          case "valid":
+            break;
         }
         throw new Error(`Status check failed: ${response.status}`);
       }
 
-      const data = (await response.json()) as GetSessionResponse;
+      let data: GetSessionResponse;
+      try {
+        data = (await response.json()) as GetSessionResponse;
+      } catch {
+        // Non-JSON body — handled by the catch below as a status-check failure.
+        throw new Error("Invalid session response");
+      }
 
       // Normalise admin field from role
       const updatedUser: User = {
@@ -433,14 +445,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
     } catch (error: unknown) {
       console.warn("[Auth] Status check failed:", error);
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "message" in error &&
-        typeof error.message === "string" &&
-        (error.message.includes("fetch failed") ||
-          error.message.includes("Network Error"))
-      ) {
+      // React Native's fetch throws a TypeError (e.g. "Network request
+      // failed") on real connectivity loss. The >=500 branch above already
+      // calls checkServerStatus() directly for that case, so this only
+      // needs to catch the fetch-level-throw case, not duplicate that call.
+      if (error instanceof TypeError) {
         console.warn("[Auth] Network issue detected, checking server status");
         await checkServerStatus();
       }
@@ -495,7 +504,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (DEBUG_AUTH)
         console.log("[Auth] Browser opened, beginning polling for token");
 
-      await startDeviceTokenPolling(device_code);
+      // Mobile has no persistent error card, so surface terminal poll failures
+      // (server unreachable / denied / expired) via an Alert rather than
+      // leaving the user staring at a stuck button.
+      await startDeviceTokenPolling(device_code, (code) => {
+        const message =
+          code === "access_denied"
+            ? "The sign-in request was denied."
+            : code === "expired"
+              ? "The sign-in request timed out. Please try again."
+              : "Couldn't reach the server to finish signing in. Please try again.";
+        Alert.alert("Sign-in failed", message);
+      });
     } catch (error: unknown) {
       console.error("[Auth] Authentication error:", error);
       stopAuthPolling();
@@ -508,18 +528,39 @@ export function AuthProvider({ children }: PropsWithChildren) {
   async function requestDeviceCode(): Promise<DeviceCodeResponse> {
     const client = betterAuthClient.current;
     if (!client)
-      throw new Error("Auth client not initialised — call setServer first");
-
-    const { data, error } = await client.device.code({
-      client_id: "mobile-app",
-    });
-    if (error || !data) {
-      if (DEBUG_AUTH) console.log("[Auth] Device code error:", error);
       throw new Error(
-        `Failed to get device code: ${error?.error_description ?? error?.statusText ?? "unknown"}`,
+        "Sign-in isn't ready — go back and reconnect to the server.",
+      );
+
+    // better-auth's client returns { data, error } and normally does NOT throw,
+    // but guard against network-level throws (DNS/TLS/offline/CORS) too.
+    let result: Awaited<ReturnType<typeof client.device.code>>;
+    try {
+      result = await client.device.code({ client_id: "mobile-app" });
+    } catch (networkError: unknown) {
+      if (DEBUG_AUTH)
+        console.error("[Auth] Device code request threw:", networkError);
+      const detail =
+        networkError instanceof Error ? networkError.message : "network error";
+      throw new Error(
+        `Couldn't reach the sign-in service (${detail}). The server may be blocking the request, or the device-code endpoint may not be enabled.`,
       );
     }
-    return data as DeviceCodeResponse;
+
+    const { data, error } = result;
+    if (error || !data) {
+      if (DEBUG_AUTH) console.log("[Auth] Device code error:", error);
+      const err = error as unknown as Record<string, unknown> | null;
+      const status =
+        typeof err?.status === "number" ? ` (HTTP ${err.status})` : "";
+      const detail =
+        (typeof err?.error_description === "string" && err.error_description) ||
+        (typeof err?.message === "string" && err.message) ||
+        (typeof err?.statusText === "string" && err.statusText) ||
+        "the server rejected the request";
+      throw new Error(`Couldn't get a sign-in code${status}: ${detail}`);
+    }
+    return result.data as DeviceCodeResponse;
   }
 
   /**
@@ -535,6 +576,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
     ) => void,
   ): Promise<void> {
     let pollInterval = AUTH_POLL_INTERVAL;
+    // Bound each poll request and treat persistent network failures as a
+    // terminal server_down instead of silently retrying until AUTH_TIMEOUT.
+    let consecutiveNetworkFailures = 0;
+    const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+    const POLL_REQUEST_TIMEOUT_MS = 10000;
 
     const doPoll = async () => {
       if (!server) return;
@@ -543,15 +589,35 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (DEBUG_AUTH) console.log("[Auth] Polling device token...");
 
         // Use raw fetch for direct access to the RFC 8628 response body.
-        const response = await fetch(`${server}/api/auth/device/token`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-            device_code: deviceCode,
-            client_id: "mobile-app",
-          }),
-        });
+        // Abort a single stalled poll so it can't block the next one.
+        const controller = new AbortController();
+        const pollTimeout = setTimeout(
+          () => controller.abort(),
+          POLL_REQUEST_TIMEOUT_MS,
+        );
+        let response: Response;
+        try {
+          response = await fetch(`${server}/api/auth/device/token`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              // Same CSRF-origin workaround as the better-auth client: a stale
+              // cookie + no Origin header would 403 this POST too. See authClient.
+              Origin: serverOrigin(server),
+            },
+            body: JSON.stringify({
+              grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+              device_code: deviceCode,
+              client_id: "mobile-app",
+            }),
+            signal: controller.signal,
+            credentials: "omit",
+          });
+        } finally {
+          clearTimeout(pollTimeout);
+        }
+        // Network round-trip succeeded — reset the failure counter.
+        consecutiveNetworkFailures = 0;
 
         const rawText = await response.text();
         let body: Record<string, unknown> = {};
@@ -631,9 +697,36 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         // Success — stop polling and complete auth
         stopAuthPolling();
-        await completeAuthentication(accessToken);
+        try {
+          await completeAuthentication(accessToken);
+        } catch (completeError: unknown) {
+          // Got a token but the session fetch failed/was malformed (e.g. a
+          // proxy error page). Surface it instead of rescheduling, which would
+          // hang until AUTH_TIMEOUT.
+          if (DEBUG_AUTH)
+            console.error(
+              "[Auth] Failed to complete authentication:",
+              completeError,
+            );
+          setIsAuthenticating(false);
+          onTerminalError?.("server_down");
+        }
       } catch (error: unknown) {
         if (DEBUG_AUTH) console.error("[Auth] Error during token poll:", error);
+        // The fetch itself failed (network/abort). After a few consecutive
+        // failures, treat the server as unreachable rather than retrying
+        // silently until AUTH_TIMEOUT.
+        consecutiveNetworkFailures += 1;
+        if (consecutiveNetworkFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          if (DEBUG_AUTH)
+            console.log(
+              "[Auth] Too many consecutive poll failures — treating as server_down",
+            );
+          stopAuthPolling();
+          setIsAuthenticating(false);
+          onTerminalError?.("server_down");
+          return;
+        }
         // Transient error — keep polling
         scheduleNextPoll();
       }
@@ -664,8 +757,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     scheduleNextPoll();
   }
 
-  /** Fetch the session for the given token and persist auth state */
-  async function completeAuthentication(token: string): Promise<void> {
+  /** Fetch the session for the newly-issued token, or null if not (yet) recognized. */
+  async function fetchSession(
+    token: string,
+  ): Promise<GetSessionResponse | null> {
     const sessionResp = await fetch(
       `${server}${API_ENDPOINTS.AUTH.GET_SESSION}`,
       { headers: { Authorization: `Bearer ${token}` } },
@@ -675,7 +770,37 @@ export function AuthProvider({ children }: PropsWithChildren) {
         `Failed to fetch session after auth: ${sessionResp.status}`,
       );
     }
-    const sessionData = (await sessionResp.json()) as GetSessionResponse;
+    try {
+      // better-auth returns 200 with a bare `null` body (not a 401) when the
+      // session isn't recognized — e.g. a freshly-issued token that hasn't
+      // propagated to the get-session read path yet.
+      return (await sessionResp.json()) as GetSessionResponse | null;
+    } catch {
+      // Non-JSON body (e.g. reverse-proxy error page returned with a 200).
+      throw new Error("Invalid session response from server");
+    }
+  }
+
+  /** Fetch the session for the given token and persist auth state */
+  async function completeAuthentication(token: string): Promise<void> {
+    let sessionData: GetSessionResponse | null;
+    try {
+      sessionData = await fetchSession(token);
+    } catch {
+      // Fall through to the same retry as a bare-null response — a thrown
+      // error (bad status, non-JSON body) on a just-issued token is just as
+      // likely to be transient propagation lag as a clean null is.
+      sessionData = null;
+    }
+    if (!sessionData?.user) {
+      // Retry once after a short delay to absorb propagation lag on a
+      // just-issued token before surfacing this as a hard failure.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      sessionData = await fetchSession(token); // second failure propagates for real
+    }
+    if (!sessionData?.user) {
+      throw new Error("No session returned after authentication");
+    }
     const u: User = {
       ...sessionData.user,
       admin: sessionData.user.role === "admin",
@@ -755,18 +880,36 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const resp = await fetch(`${server}${API_ENDPOINTS.AUTH.GET_SESSION}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      if (resp.ok) {
-        if (DEBUG_AUTH) console.log("[Auth] Session still valid");
-        return true;
+      switch (classifySessionStatus(resp.status)) {
+        case "valid":
+          if (DEBUG_AUTH) console.log("[Auth] Session still valid");
+          return true;
+        case "sign-out":
+          if (DEBUG_AUTH)
+            console.log(
+              "[Auth] Session expired (status:",
+              resp.status,
+              "), signing out",
+            );
+          await signOut();
+          return false;
+        case "server-issue":
+          if (DEBUG_AUTH)
+            console.log(
+              "[Auth] Server error during session check (status:",
+              resp.status,
+              "), not signing out",
+            );
+          await checkServerStatus();
+          return false;
+        case "unknown-error":
+          if (DEBUG_AUTH)
+            console.log(
+              "[Auth] Unexpected status during session check:",
+              resp.status,
+            );
+          return false;
       }
-      if (DEBUG_AUTH)
-        console.log(
-          "[Auth] Session expired (status:",
-          resp.status,
-          "), signing out",
-        );
-      await signOut();
-      return false;
     } catch (error: unknown) {
       if (DEBUG_AUTH)
         console.error("[Auth] Error during session check:", error);
@@ -785,7 +928,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       try {
         await fetch(`${server}${API_ENDPOINTS.AUTH.SIGN_OUT}`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Origin: serverOrigin(server),
+          },
+          credentials: "omit",
         });
       } catch {
         // Ignore — we still clear local state
@@ -797,9 +944,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setIsAuthenticating(false);
     setIsServerDown(false);
     setServerStatusMessage(null);
+    // Drop the per-server auth client so a stale instance can't be reused.
+    betterAuthClient.current = null;
     await persist(server, null, null);
 
     cacheStore.clear();
+    // Clear the React Query cache (in-memory + the 24h persisted AsyncStorage
+    // cache) so the next user on a shared device can't see the previous
+    // user's content/history.
+    await clearAllCaches();
     useBackdropStore.getState().reset();
   };
 

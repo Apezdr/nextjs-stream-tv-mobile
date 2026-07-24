@@ -50,6 +50,7 @@ export default function ChooseScreen() {
         isTVPlatform={true}
         styles={styles}
         signInWithProvider={actions.signInWithProvider}
+        reloadProviders={actions.reloadProviders}
         goBackToEnter={() => router.back()}
         goToQRStage={() => router.push("/login/qr")}
         Container={TVFocusGuideView}

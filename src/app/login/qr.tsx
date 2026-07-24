@@ -43,8 +43,27 @@ const FADE_OUT_STAGGER = 150;
 export default function QRScreen() {
   const router = useRouter();
   const { state, actions, cancelQR, server, user, ready } = useLoginLogic("qr");
-  const { loading, qrCode, userCode, qrPolling, providers, isQRExpired, qrTerminalError } =
-    state;
+  const {
+    loading,
+    qrCode,
+    userCode,
+    qrPolling,
+    providers,
+    isQRExpired,
+    qrTerminalError,
+    qrError,
+  } = state;
+
+  // We only reach this screen after /api/status succeeded, so we can tell the
+  // user the server connection itself worked and point them at the real cause.
+  const displayHost = (() => {
+    if (!server) return null;
+    try {
+      return new URL(server).hostname;
+    } catch {
+      return server;
+    }
+  })();
 
   const sharedStyles = createSharedStyles(true);
   const tvFocusStyles = createTVFocusStyles();
@@ -162,20 +181,22 @@ export default function QRScreen() {
       ) : !qrCode ? (
         <TVFocusGuideView style={styles.container}>
           <Card style={styles.authCard}>
-            <Text style={styles.authTitle}>QR Code Failed</Text>
-            <Text style={styles.authSubtitle}>
-              Unable to generate QR code. Please try again.
+            <Text style={styles.authTitle}>
+              Couldn&apos;t get a sign-in code
             </Text>
+            <Text style={styles.authSubtitle}>
+              {displayHost
+                ? `Connected to ${displayHost}, but it didn't return a sign-in code.`
+                : "The server didn't return a sign-in code."}
+            </Text>
+            {qrError ? (
+              <Text style={styles.qrErrorDetail}>{qrError}</Text>
+            ) : null}
 
             <View style={styles.qrErrorActions}>
               <FocusableButton
                 title="Try Again"
-                onPress={() => {
-                  actions.setDeviceCode(null);
-                  actions.setUserCode(null);
-                  actions.setQrCode(null);
-                  actions.setQrPolling(false);
-                }}
+                onPress={actions.retryQR}
                 style={[styles.button, styles.connectButton]}
                 textStyle={styles.buttonText}
                 focusedStyle={styles.buttonFocused}

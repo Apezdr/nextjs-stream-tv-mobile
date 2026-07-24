@@ -2,12 +2,12 @@
  * Enhanced API client that integrates Axios with the existing API structure
  * Maintains backward compatibility while adding React Query support
  */
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { AxiosRequestConfig } from "axios";
 
 import {
   getAxiosInstance,
   setAxiosBaseURL,
+  setAxiosAuthToken,
   setTokenRefreshFunction,
   setServerStatusCheckFunction,
   ApiError as AxiosApiError,
@@ -75,8 +75,7 @@ export class EnhancedApiClient {
   setAuthToken(token: string | null) {
     this.logDebug(`Setting auth token: ${token ? "********" : "null"}`);
     this.authToken = token;
-    // Store in AsyncStorage for axios interceptor
-    this.updateStoredAuth();
+    setAxiosAuthToken(token);
   }
 
   setTokenRefreshCallback(callback: (() => Promise<boolean>) | null) {
@@ -94,17 +93,6 @@ export class EnhancedApiClient {
     );
     // Set it in the axios client for server error handling
     setServerStatusCheckFunction(callback);
-  }
-
-  private async updateStoredAuth() {
-    try {
-      await AsyncStorage.setItem(
-        "auth",
-        JSON.stringify({ authToken: this.authToken }),
-      );
-    } catch (error) {
-      console.error("Failed to store auth data:", error);
-    }
   }
 
   getBaseUrl(): string | null {
