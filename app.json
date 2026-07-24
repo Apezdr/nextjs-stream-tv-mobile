@@ -98,6 +98,13 @@
       "typedRoutes": true
     },
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/1b18aa08-5b67-4fc6-a352-da5c9b4ce4a1",
+      "checkAutomatically": "NEVER"
+    },
     "name": "NextJS Stream TV",
     "slug": "nextjs-stream-tv-mobile",
     "extra": {

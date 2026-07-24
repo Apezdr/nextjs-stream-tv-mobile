@@ -17,6 +17,7 @@ import GlobalBackdrop from "../components/TV/GlobalBackdrop";
 import { getDeviceType } from "../utils/deviceInfo";
 
 import { PortalProvider } from "@/src/components/common/Portal";
+import { useAutoUpdates } from "@/src/hooks/useAutoUpdates";
 import { AuthProvider, useAuth } from "@/src/providers/AuthProvider";
 import { QueryProvider } from "@/src/providers/QueryProvider";
 
@@ -81,6 +82,7 @@ function StackNavigator({ isTV = getDeviceType() === "tv" }) {
         )}
       </Stack.Protected> */}
       <Stack.Screen name="login" />
+      <Stack.Screen name="pending-approval" />
     </Stack>
   );
 }
@@ -90,6 +92,7 @@ export default function RootLayout() {
   const theme = useColorScheme() === "dark" ? DarkTheme : DefaultTheme;
   const isTV = getDeviceType() === "tv";
   console.log("theme", useColorScheme());
+  useAutoUpdates();
   return (
     <SafeAreaProvider>
       <QueryProvider>
