@@ -34,6 +34,16 @@ import {
 } from "@/src/data/types/content.types";
 import { generateUserAgent } from "@/src/utils/deviceInfo";
 
+// Media details responses carry the playback videoURL, which the server can
+// rotate at any time. The native HTTP stack (NSURLCache on iOS/tvOS) may
+// otherwise serve a stale cached copy of these GETs, so playback would start
+// from an outdated URL. The server also sends `Cache-Control: no-store` on
+// these routes; this is the client-side half of that contract.
+const NO_CACHE_HEADERS = {
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+};
+
 // Environment-controlled debug logging for horizontal list fetches
 const HORIZONTAL_LIST_DEBUG_ENABLED =
   process.env.EXPO_PUBLIC_HORIZONTAL_LIST_DEBUG === "true";
@@ -182,6 +192,7 @@ export const contentService = {
     // Use regular get method - React Query will handle caching
     return enhancedApiClient.get<MediaDetailsResponse>(
       `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
+      { headers: NO_CACHE_HEADERS },
     );
   },
 
@@ -217,6 +228,7 @@ export const contentService = {
     // Use regular get method - React Query will handle caching
     return enhancedApiClient.get<TVDeviceMediaResponse>(
       `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
+      { headers: NO_CACHE_HEADERS },
     );
   },
 
@@ -235,6 +247,7 @@ export const contentService = {
 
     return enhancedApiClient.get<TVDeviceMediaResponse>(
       `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
+      { headers: NO_CACHE_HEADERS },
     );
   },
 
