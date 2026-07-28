@@ -1,4 +1,11 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   StyleSheet,
   View,
@@ -25,6 +32,10 @@ const GRID_TOP_INSET = 24;
 // Non-thumbnail chrome height baked into every ContentItem card (title/overlay
 // area below the poster). Mirrors ContentItem's `itemHeight + 180` sizing.
 const CARD_CHROME_HEIGHT = 180;
+// Row changes closer together than this are treated as held-key repeats and
+// snap instantly instead of animating (see handleItemFocus). Chosen above
+// typical TV key-repeat intervals (~100-250ms) but below deliberate presses.
+const HOLD_REPEAT_MS = 400;
 
 interface ContentGridProps {
   items: ContentItemData[];
@@ -63,6 +74,29 @@ const ContentGrid = ({
   // Tracks the last focused row so left/right moves within a row don't
   // re-trigger a vertical scroll (mirrors the browse page's guard).
   const lastFocusedRow = useRef<number | null>(null);
+  // Timestamp of the last row change, used to detect held-key repeats.
+  const lastRowStepAt = useRef(0);
+  // Column memory: the column the user last chose via horizontal navigation.
+  // During fast vertical stepping the native focus engine can land on a
+  // different column (its same-column candidate isn't measured yet mid-snap /
+  // mid-remount, so it falls back to an edge item). When a vertical move lands
+  // off-column, focus is programmatically restored to the remembered column.
+  const lastFocusedColumn = useRef(0);
+  // Item index that should receive hasTVPreferredFocus to correct a drifted
+  // landing; cleared once that item actually gains focus.
+  const [focusOverrideIndex, setFocusOverrideIndex] = useState<number | null>(
+    null,
+  );
+  // Volatile pagination state, read through a ref so handleItemFocus (and
+  // everything downstream of it — renderItem, every visible cell) stays
+  // referentially stable across page loads. Re-rendering all visible cards
+  // the moment a page arrives is what made mid-glide navigation jank.
+  const paginationState = useRef({
+    hasNextPage,
+    isFetchingNextPage,
+    onLoadMore,
+    itemCount: 0,
+  });
   // Measured header height, used as the offset origin for stepped scrolling.
   const headerHeight = useRef(0);
   // Measured Y offset of each grid row (cell), keyed by row index. Like the
@@ -86,6 +120,15 @@ const ContentGrid = ({
     }
     return deduped;
   }, [items]);
+
+  // Snapshot the volatile pagination state on every render (see
+  // paginationState above — focus handlers read it without depending on it).
+  paginationState.current = {
+    hasNextPage,
+    isFetchingNextPage,
+    onLoadMore,
+    itemCount: gridItems.length,
+  };
 
   // Trigger load-more when the focused item is within two rows of the end. On
   // TV the grid scrolls in discrete focus steps, so velocity often never builds
@@ -156,15 +199,54 @@ const ContentGrid = ({
 
   const handleItemFocus = useCallback(
     (index: number) => {
-      // Stepped vertical scroll: snap the focused row toward the top, matching
-      // the browse page. Only scroll when the focused ROW changes so left/right
-      // navigation within a row doesn't re-trigger a vertical scroll.
+      // Stepped vertical scroll: pin the focused row to the top (under the
+      // header inset), matching the browse page. Only scroll when the focused
+      // ROW changes so left/right navigation within a row doesn't re-trigger
+      // a vertical scroll.
       //
-      // Uses scrollToOffset (never throws) with the row's MEASURED Y position
-      // — a focused row is always mounted, so its cell has laid out and
-      // reported its real offset. The estimate is only a first-frame fallback.
+      // When to animate: a smooth glide is only safe when nothing else is
+      // scrolling and no further step lands before it finishes. Two cases
+      // violate that and must SNAP instantly instead (animated: false):
+      // - Moving UP: the previous row is off-screen above, so the native
+      //   focus engine issues its own reveal-scroll; an animated scroll races
+      //   it (jank), while an instant snap reveals the row in one frame and
+      //   the engine stays idle.
+      // - Held-key repeats (either direction): focus steps faster than any
+      //   animation completes, piling up out-of-order animations (hop-up-
+      //   then-jump-down, focus visibly outside the viewport). Snapping keeps
+      //   the viewport locked to focus on every step.
+      // Single deliberate DOWN presses keep the browse-page glide.
+      //
+      // Uses scrollToOffset (never throws) with MEASURED cell positions; the
+      // arithmetic estimate is only a first-frame fallback.
       const rowIndex = Math.floor(index / numColumns);
-      if (lastFocusedRow.current !== rowIndex) {
+      const prevRowIndex = lastFocusedRow.current;
+      const column = index % numColumns;
+
+      // Clear a pending drift correction once its target actually focuses.
+      setFocusOverrideIndex((current) => (current === index ? null : current));
+
+      if (prevRowIndex === null || rowIndex === prevRowIndex) {
+        // First focus, or horizontal movement within a row: the user chose
+        // this column — remember it.
+        lastFocusedColumn.current = column;
+      } else if (column !== lastFocusedColumn.current) {
+        // Vertical move that landed off-column: focus drifted (see
+        // lastFocusedColumn above). Pull focus back to the remembered column
+        // in this row when that item exists (the last row may be partial).
+        const targetIndex = rowIndex * numColumns + lastFocusedColumn.current;
+        if (targetIndex < paginationState.current.itemCount) {
+          setFocusOverrideIndex(targetIndex);
+        } else {
+          lastFocusedColumn.current = column;
+        }
+      }
+
+      if (prevRowIndex !== rowIndex) {
+        const now = Date.now();
+        const isHeldRepeat = now - lastRowStepAt.current < HOLD_REPEAT_MS;
+        lastRowStepAt.current = now;
+        const movingUp = prevRowIndex !== null && rowIndex < prevRowIndex;
         lastFocusedRow.current = rowIndex;
         const measuredY = rowOffsets.current[rowIndex];
         const rowY =
@@ -174,30 +256,26 @@ const ContentGrid = ({
         // Row 0 -> offset 0 keeps the header pinned in view at the top.
         const offset = rowIndex === 0 ? 0 : Math.max(0, rowY - GRID_TOP_INSET);
         try {
-          listRef.current?.scrollToOffset({ offset, animated: true });
+          listRef.current?.scrollToOffset({
+            offset,
+            animated: !movingUp && !isHeldRepeat,
+          });
         } catch {
           // A scroll hiccup must never take down the screen.
         }
       }
 
+      const pagination = paginationState.current;
       if (
-        hasNextPage &&
-        !isFetchingNextPage &&
-        onLoadMore &&
-        index >= gridItems.length - loadMoreLookahead
+        pagination.hasNextPage &&
+        !pagination.isFetchingNextPage &&
+        pagination.onLoadMore &&
+        index >= pagination.itemCount - loadMoreLookahead
       ) {
-        onLoadMore();
+        pagination.onLoadMore();
       }
     },
-    [
-      numColumns,
-      rowHeight,
-      hasNextPage,
-      isFetchingNextPage,
-      onLoadMore,
-      gridItems.length,
-      loadMoreLookahead,
-    ],
+    [numColumns, rowHeight, loadMoreLookahead],
   );
 
   const renderItem = useCallback(
@@ -222,12 +300,20 @@ const ContentGrid = ({
           )
         }
         customWidth={itemWidth}
-        hasTVPreferredFocus={preferFirstItemFocus && index === 0}
+        hasTVPreferredFocus={
+          (preferFirstItemFocus && index === 0) || index === focusOverrideIndex
+        }
         index={index}
         onFocus={handleItemFocus}
       />
     ),
-    [onSelectContent, itemWidth, preferFirstItemFocus, handleItemFocus],
+    [
+      onSelectContent,
+      itemWidth,
+      preferFirstItemFocus,
+      focusOverrideIndex,
+      handleItemFocus,
+    ],
   );
 
   const keyExtractor = useCallback((item: ContentItemData) => item.id, []);
@@ -248,10 +334,21 @@ const ContentGrid = ({
       <FlatList
         ref={listRef}
         data={gridItems}
-        extraData={[gridItems.length, hasNextPage, isFetchingNextPage]}
+        // Only the focus override needs to invalidate rendered cells; the
+        // pagination flags are read through paginationState and must NOT
+        // force a re-render of every visible card mid-scroll.
+        extraData={focusOverrideIndex}
         numColumns={numColumns}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
+        // Mount new content in small chunks: with 5 columns, the defaults
+        // mount up to 10 ROWS (50 cards) per batch, which drops frames while
+        // a glide animation is running.
+        initialNumToRender={6}
+        maxToRenderPerBatch={3}
+        // Clipping detaches off-screen rows from the native tree, which blinds
+        // the TV focus engine when navigating back up (react-native-tvos #666).
+        removeClippedSubviews={false}
         showsVerticalScrollIndicator={Platform.isTV}
         columnWrapperStyle={styles.row}
         contentContainerStyle={styles.content}
