@@ -21,6 +21,7 @@ import Reanimated, {
   withTiming,
 } from "react-native-reanimated";
 
+import AudioControls from "./AudioControls";
 import CaptionControls, {
   SubtitleStyle,
   SUBTITLE_STYLES,
@@ -33,6 +34,14 @@ import SubtitlePlayer from "./SubtitlePlayer";
 
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import {
+  useAudioFormats,
+  useStickyForSource,
+} from "@/src/hooks/useAudioFormats";
+import {
+  groupAudioTracksByLanguage,
+  useAudioTracks,
+} from "@/src/hooks/useAudioTracks";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
 
@@ -67,10 +76,13 @@ interface StandaloneVideoControlsProps {
   showCaptionControls?: boolean;
   onToggleCaptions?: () => void;
   captionsEnabled?: boolean;
+  // HLS/DASH gate computed by the watch page from the source URL. The other
+  // half of the visibility rule (>= 2 languages or formats) is player-derived
+  // and lives here.
   showAudioControls?: boolean;
-  onAudioTrackSelect?: (trackId: string) => void;
-  audioTracks?: Array<{ id: string; label: string }>;
-  selectedAudioTrack?: string;
+  // The active source URL; fetched and parsed for audio format metadata
+  // (CHANNELS/codec per rendition group) that the player API doesn't expose.
+  videoURL?: string | null;
   // New props for episode carousel
   episodes?: TVDeviceEpisode[];
   currentEpisodeNumber?: number;
@@ -96,10 +108,8 @@ const StandaloneVideoControls = memo(
     showCaptionControls = false,
     // onToggleCaptions,
     // captionsEnabled = false,
-    // showAudioControls = false,
-    // onAudioTrackSelect,
-    // audioTracks,
-    // selectedAudioTrack,
+    showAudioControls = false,
+    videoURL = null,
     episodes,
     currentEpisodeNumber,
     onEpisodeSelect,
@@ -141,10 +151,18 @@ const StandaloneVideoControls = memo(
     );
 
     // Subtitle preferences (persisted)
-    const subtitlesEnabled = useSubtitlePreferencesStore((s) => s.subtitlesEnabled);
-    const preferredLanguage = useSubtitlePreferencesStore((s) => s.preferredLanguage);
-    const setSubtitlesEnabled = useSubtitlePreferencesStore((s) => s.setSubtitlesEnabled);
-    const setPreferredLanguage = useSubtitlePreferencesStore((s) => s.setPreferredLanguage);
+    const subtitlesEnabled = useSubtitlePreferencesStore(
+      (s) => s.subtitlesEnabled,
+    );
+    const preferredLanguage = useSubtitlePreferencesStore(
+      (s) => s.preferredLanguage,
+    );
+    const setSubtitlesEnabled = useSubtitlePreferencesStore(
+      (s) => s.setSubtitlesEnabled,
+    );
+    const setPreferredLanguage = useSubtitlePreferencesStore(
+      (s) => s.setPreferredLanguage,
+    );
 
     // Caption selection state - use undefined to distinguish from user selecting "Off" (null)
     const [selectedCaptionLanguage, setSelectedCaptionLanguageRaw] = useState<
@@ -178,7 +196,7 @@ const StandaloneVideoControls = memo(
     // Use expo-video's useEvent hook for efficient, stateful player data.
     // Initial values are read from the player so we don't start with stale zeros
     // when the controls mount after a watch-history seek has already happened.
-    const { isPlaying } = useEvent(player, "playingChange", {
+    const { isPlaying: isPlayingEvent } = useEvent(player, "playingChange", {
       isPlaying: player?.playing || false,
     });
     const { currentTime } = useEvent(player, "timeUpdate", {
@@ -191,10 +209,63 @@ const StandaloneVideoControls = memo(
       status: player?.status || "idle",
     });
 
+    // playingChange can be missed (useEvent attaches listeners in a passive
+    // effect, and episode switches via replaceAsync + play() can deliver a
+    // late `false`), which would pin the overlay via `!isPlaying`. Hold the
+    // value as state and reconcile against the player's actual `playing` flag
+    // on every timeUpdate/statusChange tick (timeUpdate fires ~1 Hz while
+    // playing, so a missed event heals within a second).
+    const [isPlaying, setIsPlaying] = useState(isPlayingEvent);
+    useEffect(() => {
+      setIsPlaying(isPlayingEvent);
+    }, [isPlayingEvent]);
+    useEffect(() => {
+      const actual = !!player?.playing;
+      setIsPlaying((prev) => (prev === actual ? prev : actual));
+    }, [player, currentTime, status]);
+
     // Initialize duration from the player so the very first render doesn't fall
     // into the `duration <= 0 → buffering` branch when expo-video has already
     // resolved the source.
     const [duration, setDuration] = useState(() => player?.duration || 0);
+
+    // Audio track state comes straight from the player, no prop plumbing.
+    const {
+      availableAudioTracks,
+      selectedAudioTrack,
+      selectAudioTrack,
+      isAutomaticSelection,
+      supportsAutomaticSelection,
+      selectAutomatic,
+    } = useAudioTracks(player);
+    // Sound-format axis (Android-only in practice — needs AudioTrack.id).
+    const { formatOptions, selectedFormatGroupId } = useAudioFormats(
+      videoURL,
+      availableAudioTracks,
+      selectedAudioTrack,
+    );
+    // Gate on distinct LANGUAGES, not raw tracks — a single-language master
+    // often exposes several codec/channel renditions as separate tracks.
+    const audioLanguageCount = useMemo(
+      () => groupAudioTracksByLanguage(availableAudioTracks).length,
+      [availableAudioTracks],
+    );
+    // No duration gate here: duration is an unrelated readiness proxy that
+    // only delays the button. The latch keeps it on screen across the empty
+    // windows that follow a load or an episode switch.
+    const audioButtonVisible = useStickyForSource(
+      !!showAudioControls &&
+        (audioLanguageCount >= 2 || formatOptions.length >= 2),
+      videoURL,
+    );
+
+    // Trap DOWN in the caption/audio row only when there's no episode
+    // carousel below to navigate to.
+    const trapCaptionAudioFocusDown = !(
+      videoInfo?.type === "tv" &&
+      !!episodes &&
+      episodes.length > 0
+    );
 
     // Player state detection for unified state management
     const [playerState, setPlayerState] = useState<PlayerState>("normal");
@@ -258,7 +329,9 @@ const StandaloneVideoControls = memo(
     // Debounce handle so rapid expand/contract toggles don't bounce the logo:
     // we only commit a withTiming once the carousel has held a state for the
     // settle window below.
-    const logoAnimDebounceRef = useRef<NodeJS.Timeout | null>(null);
+    const logoAnimDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
+      null,
+    );
     const handleCarouselExpandedChange = useCallback(
       (expanded: boolean) => {
         const nextTarget = expanded ? 1 : 0;
@@ -422,18 +495,6 @@ const StandaloneVideoControls = memo(
       }
     }, [player, currentTime, duration]);
 
-    // Register play/pause handler for TV remote
-    useEffect(() => {
-      registerPlayPauseHandler(handleTogglePlay);
-      return () => unregisterPlayPauseHandler();
-    }, [handleTogglePlay, registerPlayPauseHandler, unregisterPlayPauseHandler]);
-
-    // Register seek handler for TV remote rewind/fast-forward
-    useEffect(() => {
-      registerSeekHandler(handleSeekBy);
-      return () => unregisterSeekHandler();
-    }, [handleSeekBy, registerSeekHandler, unregisterSeekHandler]);
-
     const handleSeek = useCallback(
       (time: number) => {
         if (!player) return;
@@ -457,6 +518,22 @@ const StandaloneVideoControls = memo(
       },
       [player],
     );
+
+    // Register play/pause handler for TV remote
+    useEffect(() => {
+      registerPlayPauseHandler(handleTogglePlay);
+      return () => unregisterPlayPauseHandler();
+    }, [
+      handleTogglePlay,
+      registerPlayPauseHandler,
+      unregisterPlayPauseHandler,
+    ]);
+
+    // Register seek handler for TV remote rewind/fast-forward
+    useEffect(() => {
+      registerSeekHandler(handleSeekBy);
+      return () => unregisterSeekHandler();
+    }, [handleSeekBy, registerSeekHandler, unregisterSeekHandler]);
 
     // Restart the current media from the beginning and resume playback. Invoked
     // after the user confirms in the restart confirmation modal.
@@ -489,7 +566,10 @@ const StandaloneVideoControls = memo(
         const availableLanguages = Object.keys(videoInfo.captionURLs);
 
         // Try the user's preferred language first
-        if (preferredLanguage && availableLanguages.includes(preferredLanguage)) {
+        if (
+          preferredLanguage &&
+          availableLanguages.includes(preferredLanguage)
+        ) {
           setSelectedCaptionLanguageRaw(preferredLanguage);
         } else {
           // Fallback: try to find English by name
@@ -513,7 +593,12 @@ const StandaloneVideoControls = memo(
           }
         }
       }
-    }, [videoInfo?.captionURLs, selectedCaptionLanguage, subtitlesEnabled, preferredLanguage]);
+    }, [
+      videoInfo?.captionURLs,
+      selectedCaptionLanguage,
+      subtitlesEnabled,
+      preferredLanguage,
+    ]);
 
     const controlsContainerStyle = overlayMode
       ? [styles.controls, styles.overlayControls]
@@ -785,27 +870,51 @@ const StandaloneVideoControls = memo(
                 }
               />
 
-              {/* Caption Controls - only show when duration is available */}
-              {duration > 0 && showCaptionControls && (
-                <CaptionControls
-                  captionURLs={videoInfo?.captionURLs}
-                  selectedCaptionLanguage={selectedCaptionLanguage}
-                  onCaptionLanguageChange={setSelectedCaptionLanguage}
-                  selectedSubtitleStyle={selectedSubtitleStyle}
-                  onSubtitleStyleChange={setSelectedSubtitleStyle}
-                  selectedSubtitleBackground={selectedSubtitleBackground}
-                  onSubtitleBackgroundChange={setSelectedSubtitleBackground}
-                  onActivityReset={resetActivityTimer}
-                  // Trap DOWN only when there's no carousel below to navigate
-                  // to. The prop matches its semantics now: name == value.
-                  trapFocusDown={
-                    !(
-                      videoInfo?.type === "tv" &&
-                      !!episodes &&
-                      episodes.length > 0
-                    )
-                  }
-                />
+              {/* Caption + audio controls row - only show when duration is
+                  available. The outer View is a zero-height in-flow anchor
+                  (its only child is absolutely positioned), so the row keeps
+                  floating at the same spot between the seek bar and the
+                  episode carousel that the caption row occupied before. */}
+              {duration > 0 && (showCaptionControls || audioButtonVisible) && (
+                <View>
+                  <View style={styles.bottomControlsRow}>
+                    {showCaptionControls && (
+                      <CaptionControls
+                        captionURLs={videoInfo?.captionURLs}
+                        selectedCaptionLanguage={selectedCaptionLanguage}
+                        onCaptionLanguageChange={setSelectedCaptionLanguage}
+                        selectedSubtitleStyle={selectedSubtitleStyle}
+                        onSubtitleStyleChange={setSelectedSubtitleStyle}
+                        selectedSubtitleBackground={selectedSubtitleBackground}
+                        onSubtitleBackgroundChange={
+                          setSelectedSubtitleBackground
+                        }
+                        onActivityReset={resetActivityTimer}
+                        // Trap DOWN only when there's no carousel below to
+                        // navigate to.
+                        trapFocusDown={trapCaptionAudioFocusDown}
+                        // Let focus flow right into the audio button when
+                        // it's present.
+                        trapFocusRight={!audioButtonVisible}
+                      />
+                    )}
+                    {audioButtonVisible && (
+                      <AudioControls
+                        audioTracks={availableAudioTracks}
+                        selectedAudioTrack={selectedAudioTrack}
+                        onAudioTrackChange={selectAudioTrack}
+                        formatOptions={formatOptions}
+                        selectedFormatGroupId={selectedFormatGroupId}
+                        isAutoFormat={isAutomaticSelection}
+                        canSelectAuto={supportsAutomaticSelection}
+                        onSelectAuto={selectAutomatic}
+                        onActivityReset={resetActivityTimer}
+                        trapFocusDown={trapCaptionAudioFocusDown}
+                        trapFocusLeft={!showCaptionControls}
+                      />
+                    )}
+                  </View>
+                </View>
               )}
 
               {/* 5. Episode Carousel Section - only show when duration is available */}
@@ -916,6 +1025,16 @@ const StandaloneVideoControls = memo(
 );
 
 const styles = StyleSheet.create({
+  bottomControlsRow: {
+    alignItems: "center",
+    bottom: 20,
+    flexDirection: "row",
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+  },
+
   bottomSection: {
     alignItems: "center",
     flexDirection: "row",

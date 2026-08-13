@@ -34,6 +34,7 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { navigationHelper } from "@/src/utils/navigationHelper";
+import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -151,7 +152,9 @@ export default function MobileWatchPage() {
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [hasLoadedEpisodesOnce, setHasLoadedEpisodesOnce] = useState(false);
   const [isPending, startTransition] = useTransition();
-  const episodeRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const episodeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Current episode and season from params
   const currentEpisodeNumber = params.episode
@@ -191,28 +194,31 @@ export default function MobileWatchPage() {
   );
 
   // Create optimized player
-  const { player } = useOptimizedVideoPlayer(effectiveVideoURL, (p) => {
-    p.timeUpdateEventInterval = 1;
-    p.loop = false;
-    p.bufferOptions = bufferOptions;
+  const { player, notifySourceReplaced } = useOptimizedVideoPlayer(
+    effectiveVideoURL,
+    (p) => {
+      p.timeUpdateEventInterval = 1;
+      p.loop = false;
+      p.bufferOptions = bufferOptions;
 
-    // Check if we should restart from beginning or resume from watch history
-    const shouldRestart = params.restart === "true";
-    const watchHistory = effectiveVideoData?.watchHistory;
+      // Check if we should restart from beginning or resume from watch history
+      const shouldRestart = params.restart === "true";
+      const watchHistory = effectiveVideoData?.watchHistory;
 
-    if (!shouldRestart && watchHistory && watchHistory.playbackTime > 0) {
-      // Resume from saved position (with a small buffer to account for seeking precision)
-      const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
-      console.log(
-        `[MobileWatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
-      );
-      p.currentTime = resumeTime;
-    } else if (shouldRestart) {
-      p.currentTime = 0;
-    }
+      if (!shouldRestart && watchHistory && watchHistory.playbackTime > 0) {
+        // Resume from saved position (with a small buffer to account for seeking precision)
+        const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
+        console.log(
+          `[MobileWatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
+        );
+        p.currentTime = resumeTime;
+      } else if (shouldRestart) {
+        p.currentTime = 0;
+      }
 
-    p.play();
-  });
+      p.play();
+    },
+  );
 
   // Clear restart parameter after player is configured (prevent setState during render)
   useEffect(() => {
@@ -540,6 +546,11 @@ export default function MobileWatchPage() {
         if (player) {
           console.log("[MobileWatchPage] Replacing video source");
           await player.replaceAsync({ uri: newEpisodeData.videoURL });
+          // Tell the hook we swapped the source ourselves, so its drift effect
+          // does not issue a second redundant replaceAsync when
+          // effectiveVideoURL catches up — that reload would discard both the
+          // resume seek below and the selected audio track.
+          notifySourceReplaced(newEpisodeData.videoURL);
 
           // Apply resume position from watch history
           const watchHistory = newEpisodeData.watchHistory;
@@ -943,7 +954,7 @@ export default function MobileWatchPage() {
       <VideoView
         style={styles.video}
         player={player}
-        allowsFullscreen={false}
+        fullscreenOptions={{ enable: false }}
         startsPictureInPictureAutomatically={true}
         allowsPictureInPicture={true}
         nativeControls={false}
@@ -963,6 +974,8 @@ export default function MobileWatchPage() {
           isEpisodeSwitching={isEpisodeSwitching}
           episodeSwitchError={episodeSwitchError}
           showCaptionControls={!!videoInfo?.captionURLs}
+          showAudioControls={isAdaptiveStreamURL(effectiveVideoURL)}
+          videoURL={effectiveVideoURL}
         />
       </GestureHandlerRootView>
     </View>

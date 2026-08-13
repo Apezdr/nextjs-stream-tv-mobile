@@ -13,19 +13,17 @@ interface SubtitlePreferencesState {
   setPreferredLanguage: (language: string | null) => void;
 }
 
-export const useSubtitlePreferencesStore =
-  create<SubtitlePreferencesState>()(
-    persist(
-      (set) => ({
-        subtitlesEnabled: true,
-        preferredLanguage: null,
-        setSubtitlesEnabled: (enabled) => set({ subtitlesEnabled: enabled }),
-        setPreferredLanguage: (language) =>
-          set({ preferredLanguage: language }),
-      }),
-      {
-        name: "subtitle-preferences",
-        storage: createJSONStorage(() => AsyncStorage),
-      },
-    ),
-  );
+export const useSubtitlePreferencesStore = create<SubtitlePreferencesState>()(
+  persist(
+    (set) => ({
+      subtitlesEnabled: true,
+      preferredLanguage: null,
+      setSubtitlesEnabled: (enabled) => set({ subtitlesEnabled: enabled }),
+      setPreferredLanguage: (language) => set({ preferredLanguage: language }),
+    }),
+    {
+      name: "subtitle-preferences",
+      storage: createJSONStorage(() => AsyncStorage),
+    },
+  ),
+);

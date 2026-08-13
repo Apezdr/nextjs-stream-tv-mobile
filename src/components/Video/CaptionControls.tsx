@@ -71,6 +71,9 @@ interface CaptionControlsProps {
   // when there's nothing below to navigate to (focus should stay in captions);
   // set false when a focusable section (e.g. the episode carousel) sits below.
   trapFocusDown?: boolean;
+  // Forwarded to the wrapping TVFocusGuideViews' trapFocusRight prop. Set
+  // false when a focusable sibling (the audio button) renders to the right.
+  trapFocusRight?: boolean;
 }
 
 // Button data structure for FlatList
@@ -182,6 +185,7 @@ const CaptionControls = memo(
     onSubtitleBackgroundChange,
     onActivityReset,
     trapFocusDown = true,
+    trapFocusRight = true,
   }: CaptionControlsProps) => {
     const [showMoreOptions, setShowMoreOptions] = useState(false);
     const [showStyleSettings, setShowStyleSettings] = useState(false);
@@ -488,7 +492,7 @@ const CaptionControls = memo(
       <TVFocusGuideView
         autoFocus
         trapFocusLeft
-        trapFocusRight
+        trapFocusRight={trapFocusRight}
         trapFocusDown={trapFocusDown}
       >
         <View style={styles.captionControlsContainer}>
@@ -496,7 +500,7 @@ const CaptionControls = memo(
             <TVFocusGuideView
               autoFocus
               trapFocusLeft
-              trapFocusRight
+              trapFocusRight={trapFocusRight}
               trapFocusDown={trapFocusDown}
             >
               <FlatList
@@ -855,13 +859,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  // The absolute bottom-anchored positioning previously here now lives in the
+  // parent's bottomControlsRow so the caption and audio controls share one row.
   captionControlsContainer: {
     alignItems: "center",
-    bottom: 20,
     justifyContent: "center",
-    left: 0,
-    position: "absolute",
-    right: 0,
   },
 
   captionScrollView: {

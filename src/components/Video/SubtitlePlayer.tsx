@@ -1,5 +1,5 @@
 // src/components/Video/SubtitlePlayer.tsx
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { StyleSheet } from "react-native";
 import Subtitles from "react-native-subtitles";
 
@@ -28,34 +28,42 @@ const SubtitlePlayer = memo(
     selectedSubtitleStyle,
     selectedSubtitleBackground,
   }: SubtitlePlayerProps) => {
-    // Only render subtitles if we have a selected language and URL
-    if (
-      !selectedCaptionLanguage ||
-      !captionURLs?.[selectedCaptionLanguage]?.url
-    ) {
-      return null;
-    }
+    const subtitleUrl =
+      selectedCaptionLanguage && captionURLs?.[selectedCaptionLanguage]?.url
+        ? captionURLs[selectedCaptionLanguage].url
+        : null;
+
+    // These two objects MUST keep a stable identity across ticks. This
+    // component re-renders once per second (currentTime), and the vendored
+    // react-native-subtitles is not memoized: its parse effect is keyed on
+    // `selectedsubtitle`, so a fresh object literal here made it re-fetch the
+    // entire caption file over HTTP and re-parse every cue once per second for
+    // the whole of playback.
+    const selectedsubtitle = useMemo(
+      () => (subtitleUrl ? { file: subtitleUrl } : null),
+      [subtitleUrl],
+    );
 
     // Use selected style and apply the selected background to textStyle.backgroundColor
-    const textStyle = selectedSubtitleStyle
-      ? {
-          ...styles.subtitleText,
-          ...selectedSubtitleStyle.textStyle,
-          backgroundColor:
-            selectedSubtitleBackground?.backgroundColor || "transparent",
-        }
-      : {
-          ...styles.subtitleText,
-          backgroundColor:
-            selectedSubtitleBackground?.backgroundColor || "transparent",
-        };
+    const textStyle = useMemo(
+      () => ({
+        ...styles.subtitleText,
+        ...(selectedSubtitleStyle ? selectedSubtitleStyle.textStyle : null),
+        backgroundColor:
+          selectedSubtitleBackground?.backgroundColor || "transparent",
+      }),
+      [selectedSubtitleStyle, selectedSubtitleBackground],
+    );
+
+    // Only render subtitles if we have a selected language and URL
+    if (!selectedsubtitle) {
+      return null;
+    }
 
     return (
       <Subtitles
         currentTime={currentTime}
-        selectedsubtitle={{
-          file: captionURLs[selectedCaptionLanguage].url,
-        }}
+        selectedsubtitle={selectedsubtitle}
         containerStyle={styles.subtitleContainer}
         textStyle={textStyle}
       />

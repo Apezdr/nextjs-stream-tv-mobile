@@ -83,7 +83,7 @@ const VideoControls = memo(
 
     // State for continuous seeking
     const [isSeeking, setIsSeeking] = useState(false);
-    const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const seekIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const seekDirectionRef = useRef<"backward" | "forward" | null>(null);
 
     // Create animated value for opacity

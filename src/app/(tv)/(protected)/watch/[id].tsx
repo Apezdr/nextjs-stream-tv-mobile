@@ -29,6 +29,7 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
+import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -147,7 +148,9 @@ export default function WatchPage() {
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [hasLoadedEpisodesOnce, setHasLoadedEpisodesOnce] = useState(false);
   const [isPending, startTransition] = useTransition();
-  const episodeRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const episodeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Current episode and season from params
   const currentEpisodeNumber = params.episode
@@ -191,7 +194,7 @@ export default function WatchPage() {
   );
 
   // Step 1: Create optimized player with deferred setup (no automatic watch history application)
-  const { player, setupPlayer } = useOptimizedVideoPlayer(
+  const { player, setupPlayer, notifySourceReplaced } = useOptimizedVideoPlayer(
     loading ? null : effectiveVideoURL, // Only create player when content is loaded
     undefined, // No setup callback - we'll use setupPlayer manually
     true, // deferSetup = true
@@ -491,6 +494,11 @@ export default function WatchPage() {
         if (player) {
           console.log("[WatchPage] Replacing video source");
           await player.replaceAsync({ uri: newEpisodeData.videoURL });
+          // Tell the hook we swapped the source ourselves, so its drift effect
+          // does not issue a second redundant replaceAsync when
+          // effectiveVideoURL catches up — that reload would discard both the
+          // resume seek below and the selected audio track.
+          notifySourceReplaced(newEpisodeData.videoURL);
 
           // Apply resume position from watch history
           const watchHistory = newEpisodeData.watchHistory;
@@ -842,7 +850,7 @@ export default function WatchPage() {
       <VideoView
         style={styles.video}
         player={player}
-        allowsFullscreen={false}
+        fullscreenOptions={{ enable: false }}
         allowsPictureInPicture={false}
         nativeControls={false}
       />
@@ -855,6 +863,8 @@ export default function WatchPage() {
           onExitWatchMode={handleExit}
           onInfoPress={handleInfoPress}
           showCaptionControls={!!videoInfo?.captionURLs}
+          showAudioControls={isAdaptiveStreamURL(effectiveVideoURL)}
+          videoURL={effectiveVideoURL}
           episodes={params.type === "tv" ? episodes : undefined}
           currentEpisodeNumber={effectiveEpisodeNumber}
           onEpisodeSelect={handleEpisodeSelect}

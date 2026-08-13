@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import SubtitlePlayer from "../../Video/SubtitlePlayer";
 
+import MobileAudioControls from "./MobileAudioControls";
 import MobileCaptionControls, {
   DEFAULT_SUBTITLE_STYLE,
   DEFAULT_SUBTITLE_BACKGROUND,
@@ -22,6 +23,14 @@ import MobileCaptionControls, {
 } from "./MobileCaptionControls";
 
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import {
+  useAudioFormats,
+  useStickyForSource,
+} from "@/src/hooks/useAudioFormats";
+import {
+  groupAudioTracksByLanguage,
+  useAudioTracks,
+} from "@/src/hooks/useAudioTracks";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
 
@@ -53,6 +62,13 @@ interface MobileVideoControlsProps {
   isEpisodeSwitching?: boolean;
   episodeSwitchError?: string | null;
   showCaptionControls?: boolean; // New prop to control caption visibility
+  // HLS/DASH gate computed by the watch page from the source URL. The other
+  // half of the visibility rule (>= 2 languages or formats) is player-derived
+  // and lives here.
+  showAudioControls?: boolean;
+  // The active source URL; fetched and parsed for audio format metadata
+  // (CHANNELS/codec per rendition group) that the player API doesn't expose.
+  videoURL?: string | null;
 }
 
 const formatTime = (seconds: number): string => {
@@ -82,6 +98,8 @@ const MobileVideoControls = memo(
     isEpisodeSwitching = false,
     episodeSwitchError = null,
     showCaptionControls = false,
+    showAudioControls = false,
+    videoURL = null,
   }: MobileVideoControlsProps) => {
     // Get dynamic window dimensions that will update with orientation changes
     const { window } = useDimensions();
@@ -89,7 +107,7 @@ const MobileVideoControls = memo(
     const insets = useSafeAreaInsets();
 
     // Use expo-video's useEvent hook for player state
-    const { isPlaying } = useEvent(player, "playingChange", {
+    const { isPlaying: isPlayingEvent } = useEvent(player, "playingChange", {
       isPlaying: player?.playing || false,
     });
     const { currentTime } = useEvent(player, "timeUpdate", {
@@ -98,14 +116,30 @@ const MobileVideoControls = memo(
       currentOffsetFromLive: 0,
       bufferedPosition: 0,
     });
-    // Status tracking (unused but kept for potential future use)
-    useEvent(player, "statusChange", {
+    const { status } = useEvent(player, "statusChange", {
       status: player?.status || "idle",
     });
+
+    // playingChange can be missed (useEvent attaches listeners in a passive
+    // effect while play() is called during render), leaving the event value
+    // false while the video plays — which stops the auto-hide timer from ever
+    // being scheduled. Hold the value as state and reconcile against the
+    // player's actual `playing` flag on every timeUpdate/statusChange tick.
+    const [isPlaying, setIsPlaying] = useState(isPlayingEvent);
+    useEffect(() => {
+      setIsPlaying(isPlayingEvent);
+    }, [isPlayingEvent]);
+    useEffect(() => {
+      const actual = !!player?.playing;
+      setIsPlaying((prev) => (prev === actual ? prev : actual));
+    }, [player, currentTime, status]);
 
     // Local state
     const [duration, setDuration] = useState(0);
     const [isControlsVisible, setIsControlsVisible] = useState(true);
+    // Bumped on every user interaction so the auto-hide effect restarts its
+    // 5s window even when the controls are already visible.
+    const [interactionTick, setInteractionTick] = useState(0);
     const [isSeeking, setIsSeeking] = useState(false);
     const [seekTime, setSeekTime] = useState(currentTime);
     const [isDoubleTapSeeking, setIsDoubleTapSeeking] = useState(false);
@@ -115,11 +149,49 @@ const MobileVideoControls = memo(
     }>({ seconds: 0, visible: false });
     const [totalSkipAmount, setTotalSkipAmount] = useState(0);
 
+    // Audio track state comes straight from the player, no prop plumbing.
+    const {
+      availableAudioTracks,
+      selectedAudioTrack,
+      selectAudioTrack,
+      isAutomaticSelection,
+      supportsAutomaticSelection,
+      selectAutomatic,
+    } = useAudioTracks(player);
+    // Sound-format axis (Android-only in practice — needs AudioTrack.id).
+    const { formatOptions, selectedFormatGroupId } = useAudioFormats(
+      videoURL,
+      availableAudioTracks,
+      selectedAudioTrack,
+    );
+    // Gate on distinct LANGUAGES, not raw tracks — a single-language master
+    // often exposes several codec/channel renditions as separate tracks.
+    const audioLanguageCount = useMemo(
+      () => groupAudioTracksByLanguage(availableAudioTracks).length,
+      [availableAudioTracks],
+    );
+    // No duration gate here: duration is an unrelated readiness proxy that
+    // only delays the button. The latch keeps it on screen across the empty
+    // windows that follow a load or an episode switch.
+    const audioButtonVisible = useStickyForSource(
+      !!showAudioControls &&
+        (audioLanguageCount >= 2 || formatOptions.length >= 2),
+      videoURL,
+    );
+
     // Subtitle preferences (persisted)
-    const subtitlesEnabled = useSubtitlePreferencesStore((s) => s.subtitlesEnabled);
-    const preferredLanguage = useSubtitlePreferencesStore((s) => s.preferredLanguage);
-    const setSubtitlesEnabled = useSubtitlePreferencesStore((s) => s.setSubtitlesEnabled);
-    const setPreferredLanguage = useSubtitlePreferencesStore((s) => s.setPreferredLanguage);
+    const subtitlesEnabled = useSubtitlePreferencesStore(
+      (s) => s.subtitlesEnabled,
+    );
+    const preferredLanguage = useSubtitlePreferencesStore(
+      (s) => s.preferredLanguage,
+    );
+    const setSubtitlesEnabled = useSubtitlePreferencesStore(
+      (s) => s.setSubtitlesEnabled,
+    );
+    const setPreferredLanguage = useSubtitlePreferencesStore(
+      (s) => s.setPreferredLanguage,
+    );
 
     // Caption selection state - use undefined to distinguish from user selecting "Off" (null)
     const [selectedCaptionLanguage, setSelectedCaptionLanguageRaw] = useState<
@@ -156,9 +228,12 @@ const MobileVideoControls = memo(
     const centerControlsOpacity = useRef(new Animated.Value(1)).current;
     const titleOpacity = useRef(new Animated.Value(1)).current;
     const skipFeedbackOpacity = useRef(new Animated.Value(0)).current;
-    const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const hideSeekOverlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const skipFeedbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const hideSeekOverlayTimeoutRef = useRef<ReturnType<
+      typeof setTimeout
+    > | null>(null);
+    const skipFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+      null,
+    );
 
     // Seek bar layout measurement - including Y position for tap protection
     const seekBarLayoutRef = useRef<{
@@ -206,8 +281,12 @@ const MobileVideoControls = memo(
         }
       }
 
-      // Duration is available directly from player, not from status event
-    }, [player, currentTime]);
+      // Duration is available directly from player, not from status event.
+      // `status` is a dependency because timeUpdate doesn't tick while
+      // paused: without it a paused resume, a blocked autoplay or a PiP
+      // restore leaves duration at 0, which also gates captions, the audio
+      // button and the seek bar.
+    }, [player, currentTime, status]);
 
     // Update seek time when currentTime changes (but not when actively seeking)
     useEffect(() => {
@@ -216,23 +295,10 @@ const MobileVideoControls = memo(
       }
     }, [currentTime, isSeeking]);
 
-    // Auto-hide controls after 5 seconds of inactivity (when playing)
-    const resetHideTimer = useCallback(() => {
-      if (hideControlsTimeoutRef.current) {
-        clearTimeout(hideControlsTimeoutRef.current);
-      }
-
-      if (isPlaying && isControlsVisible) {
-        hideControlsTimeoutRef.current = setTimeout(() => {
-          setIsControlsVisible(false);
-        }, 5000);
-      }
-    }, [isPlaying, isControlsVisible]);
-
-    // Show controls and reset hide timer
+    // Show controls and reset the auto-hide window
     const showControls = useCallback(() => {
       setIsControlsVisible(true);
-      resetHideTimer();
+      setInteractionTick((t) => t + 1);
 
       // Hide double-tap seek when showing full controls
       if (isDoubleTapSeeking) {
@@ -246,7 +312,17 @@ const MobileVideoControls = memo(
         setSkipFeedback({ seconds: 0, visible: false });
         setTotalSkipAmount(0);
       }
-    }, [resetHideTimer, isDoubleTapSeeking]);
+    }, [isDoubleTapSeeking]);
+
+    // Watchdog: while the controls are visible, the video is playing, and the
+    // user isn't dragging the seek bar, a hide is always pending. Replaces an
+    // imperatively-scheduled timer that could read a stale isControlsVisible
+    // in the same tick and never get scheduled at all.
+    useEffect(() => {
+      if (!isControlsVisible || !isPlaying || isSeeking) return;
+      const id = setTimeout(() => setIsControlsVisible(false), 5000);
+      return () => clearTimeout(id);
+    }, [isControlsVisible, isPlaying, isSeeking, interactionTick]);
 
     // Controls visibility animation
     useEffect(() => {
@@ -286,18 +362,6 @@ const MobileVideoControls = memo(
       titleOpacity,
     ]);
 
-    // Reset hide timer when playing state changes
-    useEffect(() => {
-      if (isPlaying) {
-        resetHideTimer();
-      } else {
-        // When paused, just clear the auto-hide timer but don't force show controls
-        if (hideControlsTimeoutRef.current) {
-          clearTimeout(hideControlsTimeoutRef.current);
-        }
-      }
-    }, [isPlaying, resetHideTimer]);
-
     // Show controls when initially paused (only on first load)
     useEffect(() => {
       if (!isPlaying && duration === 0) {
@@ -308,9 +372,6 @@ const MobileVideoControls = memo(
     // Cleanup timeouts on unmount
     useEffect(() => {
       return () => {
-        if (hideControlsTimeoutRef.current) {
-          clearTimeout(hideControlsTimeoutRef.current);
-        }
         if (hideSeekOverlayTimeoutRef.current) {
           clearTimeout(hideSeekOverlayTimeoutRef.current);
         }
@@ -332,7 +393,10 @@ const MobileVideoControls = memo(
         const availableLanguages = Object.keys(videoInfo.captionURLs);
 
         // Try the user's preferred language first
-        if (preferredLanguage && availableLanguages.includes(preferredLanguage)) {
+        if (
+          preferredLanguage &&
+          availableLanguages.includes(preferredLanguage)
+        ) {
           setSelectedCaptionLanguageRaw(preferredLanguage);
         } else {
           // Fallback: try to find English by name
@@ -356,7 +420,12 @@ const MobileVideoControls = memo(
           }
         }
       }
-    }, [videoInfo?.captionURLs, selectedCaptionLanguage, subtitlesEnabled, preferredLanguage]);
+    }, [
+      videoInfo?.captionURLs,
+      selectedCaptionLanguage,
+      subtitlesEnabled,
+      preferredLanguage,
+    ]);
 
     // Player control functions
     const handleTogglePlay = useCallback(() => {
@@ -733,7 +802,7 @@ const MobileVideoControls = memo(
                 </View>
               </GestureDetector>
             </View>
-            <View>
+            <View style={styles.bottomButtonRow}>
               {/* Caption Controls - positioned below seek bar */}
               {showCaptionControls && (
                 <MobileCaptionControls
@@ -744,6 +813,21 @@ const MobileVideoControls = memo(
                   onSubtitleStyleChange={setSelectedSubtitleStyle}
                   selectedSubtitleBackground={selectedSubtitleBackground}
                   onSubtitleBackgroundChange={setSelectedSubtitleBackground}
+                  onShowControls={showControls}
+                />
+              )}
+              {/* Audio selector - HLS/DASH sources with a language or format
+                  choice */}
+              {audioButtonVisible && (
+                <MobileAudioControls
+                  audioTracks={availableAudioTracks}
+                  selectedAudioTrack={selectedAudioTrack}
+                  onAudioTrackChange={selectAudioTrack}
+                  formatOptions={formatOptions}
+                  selectedFormatGroupId={selectedFormatGroupId}
+                  isAutoFormat={isAutomaticSelection}
+                  canSelectAuto={supportsAutomaticSelection}
+                  onSelectAuto={selectAutomatic}
                   onShowControls={showControls}
                 />
               )}
@@ -884,6 +968,13 @@ const styles = StyleSheet.create({
   },
 
   // Bottom controls
+  bottomButtonRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    // Keeps the audio button at the right edge even when captions are absent
+    // (with captions present, their flex: 1 container fills the row anyway).
+    justifyContent: "flex-end",
+  },
   bottomControls: {
     paddingBottom: 40,
     paddingHorizontal: 20,

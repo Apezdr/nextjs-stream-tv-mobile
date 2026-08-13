@@ -623,13 +623,17 @@ const MobileCaptionControls = memo(
 );
 
 const styles = StyleSheet.create({
+  // flex: 1 so the caption row shares the bottom button row with the audio
+  // button, which sizes to content at the right edge.
   container: {
+    flex: 1,
     marginTop: 16,
   },
 
   // Main Controls
   scrollContainer: {
     flexGrow: 0,
+    flexShrink: 1,
     width: "100%",
   },
   scrollContent: {
