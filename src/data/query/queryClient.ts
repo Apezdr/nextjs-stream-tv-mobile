@@ -9,8 +9,32 @@ import {
   QueryCache,
   MutationCache,
   DehydratedState,
+  focusManager,
 } from "@tanstack/react-query";
-import { Platform } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
+
+// Teach React Query what "focused" means on React Native.
+//
+// Without this, `refetchOnWindowFocus` below is DEAD CONFIG on both platforms.
+// The default focusManager binds `window.addEventListener("visibilitychange")`,
+// which never fires under RN, and its `isFocused()` falls back to
+// `globalThis.document?.visibilityState !== "hidden"` — `document` is undefined
+// here, so it reports focused forever. Mobile therefore never got the
+// foreground refetch its `true` asks for, and the TV `false` was defending
+// against an event that could not fire.
+//
+// Safe for the polling screens: every refetchInterval in the app (my-list,
+// MyListPageContent) also sets `refetchIntervalInBackground: true`, so they opt
+// out of focus gating and keep polling regardless of what this reports.
+focusManager.setEventListener((handleFocus) => {
+  const subscription = AppState.addEventListener(
+    "change",
+    (status: AppStateStatus) => {
+      handleFocus(status === "active");
+    },
+  );
+  return () => subscription.remove();
+});
 
 // Custom error handler
 const handleError = (error: unknown) => {
