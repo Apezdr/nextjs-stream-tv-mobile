@@ -29,7 +29,7 @@ export function setAxiosAuthToken(token: string | null) {
 }
 
 // Debouncing for server status checks to prevent excessive requests
-let serverStatusCheckTimeout: NodeJS.Timeout | null = null;
+let serverStatusCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 let lastServerStatusCheck = 0;
 const SERVER_STATUS_CHECK_DEBOUNCE = 5000; // 5 seconds minimum between checks
 
@@ -112,6 +112,18 @@ const RETRY_CONFIG = {
   retries: 3,
   retryDelay: (retryCount: number) => Math.pow(2, retryCount) * 1000, // Exponential backoff
   retryCondition: (error: AxiosError) => {
+    // A cancelled request has no `error.response`, so without this it would
+    // fall into the network-error branch below and be retried 3x with backoff —
+    // the exact opposite of what cancelling means. This matters now that
+    // React Query forwards its AbortSignal into these requests.
+    if (axios.isCancel(error)) return false;
+
+    // A malformed baseURL is not transient. Since axios 1.18 `buildFullPath`
+    // rejects urls like `https:/host` with ERR_INVALID_URL from inside the
+    // adapter, so there is no `error.response` and this would otherwise retry
+    // an un-fixable URL at 1s/2s/4s on every single call.
+    if (error.code === "ERR_INVALID_URL") return false;
+
     // Retry on network errors or 5xx errors
     return (
       !error.response ||
@@ -189,6 +201,20 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
     headers: {
       "Content-Type": "application/json",
     },
+    // axios >= 1.17: AxiosError.toJSON() replaces these keys (case-insensitive,
+    // at any depth, including AxiosHeaders) with "[REDACTED ****]". Anything
+    // that serialises an error — the dev warn in errorReportingService, or any
+    // future crash report — then cannot carry a live bearer token off-device.
+    // Complements the manual masking in the debug logger below, which logs the
+    // config object directly rather than going through toJSON().
+    redact: ["authorization", "cookie"],
+    transitional: {
+      // A per-request `validateStatus: undefined` would otherwise make settle()
+      // resolve EVERY status, silently bypassing the 401 refresh interceptor
+      // and the circuit breaker. With this, `undefined` falls back to the
+      // instance default and only an explicit `null` accepts all statuses.
+      validateStatusUndefinedResolves: false,
+    },
   });
 
   // Request interceptor
@@ -241,6 +267,17 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       return response;
     },
     async (error: AxiosError) => {
+      // Cancellation is not a failure — bail out before ANY of the handling
+      // below. A CanceledError carries no `error.response`, so it would
+      // otherwise trip the network-error branch, fire a server-status check,
+      // and (via retryCondition) get retried with backoff. React Query cancels
+      // in-flight queries on navigation, so on TV this would turn every screen
+      // change into a burst of pointless requests and false server-down
+      // signals.
+      if (axios.isCancel(error)) {
+        return Promise.reject(error);
+      }
+
       const originalRequest = error.config;
       const endpoint = originalRequest?.url || "";
 

@@ -24,7 +24,7 @@ import type {
   DeviceCodeResponse,
   GetSessionResponse,
 } from "@/src/data/types/auth.types";
-import { classifySessionStatus } from "@/src/providers/authSessionPolicy";
+import { classifySessionResult } from "@/src/providers/authSessionPolicy";
 import { useBackdropStore } from "@/src/stores/backdropStore";
 
 type User = {
@@ -88,6 +88,12 @@ const STATUS_CHECK_INTERVAL = 30000; // 30 seconds
 /** Server requires minimum 5s polling interval per deviceAuthorization config */
 const AUTH_POLL_INTERVAL = 5000;
 const AUTH_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+/**
+ * RN's fetch can hang indefinitely on flaky mobile networks (backgrounding,
+ * network handoff) with no built-in timeout. Session checks and sign-out
+ * both depend on this call actually settling, so it's bounded explicitly.
+ */
+const SESSION_FETCH_TIMEOUT_MS = 10000;
 
 // Enable for detailed auth flow logging
 const DEBUG_AUTH = __DEV__;
@@ -96,6 +102,21 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
+
+/** fetch() with a hard timeout — see SESSION_FETCH_TIMEOUT_MS. */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number = SESSION_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const normalizeStoredAuth = (raw: string): PersistedAuthInfo | null => {
   try {
@@ -393,44 +414,49 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     setIsRefreshing(true);
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${server}${API_ENDPOINTS.AUTH.GET_SESSION}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
         },
       );
 
-      if (!response.ok) {
-        if (DEBUG_AUTH)
-          console.log(`[Auth] Status check returned error: ${response.status}`);
-
-        switch (classifySessionStatus(response.status)) {
-          case "sign-out":
-            // refreshToken() owns the sign-out decision — it re-validates
-            // the session itself and only signs out on real 401/403.
-            console.log("[Auth] Session expired, attempting token refresh");
-            await refreshToken();
-            return;
-          case "server-issue":
-            console.warn(
-              "[Auth] Server error detected, checking server status",
-            );
-            await checkServerStatus();
-            break;
-          case "unknown-error":
-          case "valid":
-            break;
-        }
-        throw new Error(`Status check failed: ${response.status}`);
-      }
-
-      let data: GetSessionResponse;
+      let data: GetSessionResponse | null = null;
       try {
-        data = (await response.json()) as GetSessionResponse;
+        data = (await response.json()) as GetSessionResponse | null;
       } catch {
-        // Non-JSON body — handled by the catch below as a status-check failure.
-        throw new Error("Invalid session response");
+        // Non-JSON body — classifySessionResult() below treats a missing
+        // user the same way whether it's from a parse failure or a bare null.
       }
+
+      switch (classifySessionResult(response.status, data)) {
+        case "sign-out":
+          // refreshToken() owns the sign-out decision — it re-validates the
+          // session itself and only signs out once it confirms there's no
+          // live session (real 401/403, or a 200 with no user/session).
+          if (DEBUG_AUTH)
+            console.log(
+              "[Auth] Session no longer valid, attempting token refresh",
+            );
+          await refreshToken();
+          return;
+        case "server-issue":
+          console.warn("[Auth] Server error detected, checking server status");
+          await checkServerStatus();
+          return;
+        case "unknown-error":
+          if (DEBUG_AUTH)
+            console.log(
+              `[Auth] Unexpected status check result: ${response.status}`,
+            );
+          return;
+        case "valid":
+          break;
+      }
+
+      // classifySessionResult() only returns "valid" when body.user is
+      // present, but that isn't visible to TS as a type guard on `data`.
+      if (!data?.user) return;
 
       // Normalise admin field from role
       const updatedUser: User = {
@@ -444,15 +470,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
         await persist(server, updatedUser, accessToken);
       }
     } catch (error: unknown) {
+      // Covers a genuine network failure (TypeError) as well as this fetch's
+      // own timeout abort — either way we couldn't complete the check, so
+      // treat it as a possible server/connectivity issue, not a sign-out.
       console.warn("[Auth] Status check failed:", error);
-      // React Native's fetch throws a TypeError (e.g. "Network request
-      // failed") on real connectivity loss. The >=500 branch above already
-      // calls checkServerStatus() directly for that case, so this only
-      // needs to catch the fetch-level-throw case, not duplicate that call.
-      if (error instanceof TypeError) {
-        console.warn("[Auth] Network issue detected, checking server status");
-        await checkServerStatus();
-      }
+      await checkServerStatus();
     } finally {
       setIsRefreshing(false);
     }
@@ -581,6 +603,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
     let consecutiveNetworkFailures = 0;
     const MAX_CONSECUTIVE_POLL_FAILURES = 3;
     const POLL_REQUEST_TIMEOUT_MS = 10000;
+    // Rate limiting is transient, so back off rather than failing instantly —
+    // but do NOT let it run silently to AUTH_TIMEOUT. better-auth 1.6.21 stops
+    // guessing the client IP from a multi-hop X-Forwarded-For unless
+    // `advanced.ipAddress.trustedProxies` is configured, and falls back to ONE
+    // shared rate-limit bucket for every client. Behind a proxy that turns
+    // normal poll traffic into 429s, which used to look like a five-minute
+    // hang ending in a misleading "expired".
+    let consecutiveRateLimits = 0;
+    const MAX_CONSECUTIVE_RATE_LIMITS = 3;
 
     const doPoll = async () => {
       if (!server) return;
@@ -662,6 +693,48 @@ export function AuthProvider({ children }: PropsWithChildren) {
             scheduleNextPoll();
             return;
           }
+
+          // Rate limited: back off like slow_down, but give up after a few in
+          // a row rather than spinning to AUTH_TIMEOUT. See the
+          // trustedProxies note where consecutiveRateLimits is declared.
+          if (response.status === 429) {
+            consecutiveRateLimits++;
+            console.warn(
+              `[Auth] Device token poll rate limited (429), ${consecutiveRateLimits}/${MAX_CONSECUTIVE_RATE_LIMITS}`,
+            );
+            if (consecutiveRateLimits >= MAX_CONSECUTIVE_RATE_LIMITS) {
+              stopAuthPolling();
+              setIsAuthenticating(false);
+              onTerminalError?.("server_down");
+              return;
+            }
+            pollInterval = Math.min(pollInterval * 2, 30000);
+            scheduleNextPoll();
+            return;
+          }
+          consecutiveRateLimits = 0;
+
+          // `invalid_request` is a protocol/server-configuration failure, not a
+          // pending authorization, so polling can never resolve it.
+          //
+          // better-auth 1.6.11 (CVE-2026-45337) made POST /device/approve
+          // reject with 400 invalid_request unless the device-code row was
+          // first CLAIMED by GET /device?user_code=... from an already
+          // signed-in session. A verification page that renders the code
+          // before the user logs in never claims it, so approval fails and the
+          // code stays pending forever. Falling through to "keep polling" here
+          // meant five minutes of spinning followed by "expired" — which points
+          // debugging at code expiry instead of at approval.
+          if (errorCode === "invalid_request") {
+            console.warn(
+              "[Auth] Device token poll returned invalid_request — the device code was likely never claimed by the verification page (better-auth >= 1.6.11 requires GET /device?user_code=... from a signed-in session before approve). Not recoverable by polling.",
+            );
+            stopAuthPolling();
+            setIsAuthenticating(false);
+            onTerminalError?.("server_down");
+            return;
+          }
+
           if (
             errorCode === "access_denied" ||
             errorCode === "expired_token" ||
@@ -877,17 +950,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
       console.log("[Auth] Verifying session validity via get-session");
 
     try {
-      const resp = await fetch(`${server}${API_ENDPOINTS.AUTH.GET_SESSION}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      switch (classifySessionStatus(resp.status)) {
+      const resp = await fetchWithTimeout(
+        `${server}${API_ENDPOINTS.AUTH.GET_SESSION}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+
+      let data: GetSessionResponse | null = null;
+      try {
+        data = (await resp.json()) as GetSessionResponse | null;
+      } catch {
+        // Non-JSON body — classifySessionResult() treats a missing user the
+        // same way whether it's from a parse failure or a bare null.
+      }
+
+      switch (classifySessionResult(resp.status, data)) {
         case "valid":
           if (DEBUG_AUTH) console.log("[Auth] Session still valid");
           return true;
         case "sign-out":
           if (DEBUG_AUTH)
             console.log(
-              "[Auth] Session expired (status:",
+              "[Auth] Session no longer valid (status:",
               resp.status,
               "), signing out",
             );
@@ -923,10 +1006,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
     stopAuthPolling();
     stopServerRecoveryChecking();
 
-    // Best-effort server-side session invalidation
+    // Best-effort server-side session invalidation — bounded by a timeout
+    // so an unreachable/hanging server can't delay clearing local state below.
     if (server && accessToken) {
       try {
-        await fetch(`${server}${API_ENDPOINTS.AUTH.SIGN_OUT}`, {
+        await fetchWithTimeout(`${server}${API_ENDPOINTS.AUTH.SIGN_OUT}`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,

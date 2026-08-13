@@ -61,7 +61,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       limit,
       isTVdevice: true,
     }),
-    queryFn: async ({ pageParam = 0 }) => {
+    queryFn: async ({ pageParam = 0, signal }) => {
       const requestParams = {
         type,
         sort,
@@ -82,6 +82,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
 
       return enhancedApiClient.get<ContentListResponse>(
         `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
+        { signal },
       );
     },
     getNextPageParam: (lastPage, allPages) => {
@@ -214,7 +215,7 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
       sort,
       sortOrder,
     }),
-    queryFn: async ({ pageParam = 0 }) => {
+    queryFn: async ({ pageParam = 0, signal }) => {
       const queryParams = buildQueryParams({
         action: "content",
         genre,
@@ -228,6 +229,7 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
       });
       return enhancedApiClient.get<GenresContentResponse>(
         `${API_ENDPOINTS.CONTENT.GENRES}${queryParams}`,
+        { signal },
       );
     },
     getNextPageParam: (lastPage, allPages) => {
@@ -289,7 +291,7 @@ export function useInfiniteWatchlistContent(
       includeUnavailable,
       hideUnavailable,
     }),
-    queryFn: async ({ pageParam = 0 }) => {
+    queryFn: async ({ pageParam = 0, signal }) => {
       const queryParams = buildQueryParams({
         action: "content",
         playlistId,
@@ -304,6 +306,7 @@ export function useInfiniteWatchlistContent(
 
       const response = await enhancedApiClient.get<WatchlistContentResponse>(
         `${API_ENDPOINTS.CONTENT.WATCHLIST_CONTENT}${queryParams}`,
+        { signal },
       );
 
       return response;
@@ -405,7 +408,7 @@ export const infiniteContentPrefetch = {
         limit,
         isTVdevice,
       }),
-      queryFn: async ({ pageParam = 0 }) => {
+      queryFn: async ({ pageParam = 0, signal }) => {
         const requestParams = {
           type,
           sort,
@@ -426,6 +429,7 @@ export const infiniteContentPrefetch = {
 
         return enhancedApiClient.get<ContentListResponse>(
           `${API_ENDPOINTS.CONTENT.HORIZONTAL_LIST}${queryParams}`,
+          { signal },
         );
       },
       initialPageParam: 0,
