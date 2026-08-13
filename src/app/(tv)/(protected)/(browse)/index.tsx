@@ -1,4 +1,4 @@
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "expo-router/react-navigation";
 import { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
   View,
@@ -22,51 +22,26 @@ import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
+// Stepped row scrolling is handled by the react-native-tvos focus engine, not
+// by JS: the ScrollView opts in with snapToAlignment="item" and each row
+// wrapper carries a scrollSnapOffset marker. Native computes
+// `target = focusedOrigin - scrollSnapOffset`, clamped to the content size —
+// the same arithmetic a previous JS implementation did with measured offsets,
+// but off live frames and with no JS round-trip per keypress.
+//
+// Every direct child of this ScrollView that can hold focus needs a marker.
+// On Android, snapToAlignment="item" also replaces d-pad focus RESOLUTION
+// (arrowScroll runs FocusFinder instead of ScrollView's "scroll then focus"
+// fallback), so an unmarked child becomes unreachable once it scrolls out of
+// view — which is exactly how the banner behaved before it got one.
+const ROW_SNAP_INSET = 24; // px of breathing room above the pinned row title
+
 export default function TVHomePage() {
   const { currentMode, setMode } = useTVAppState();
   const isFocused = useIsFocused();
 
   // Use the new Zustand-based backdrop manager
   const { hide: hideBackdrop } = useBackdropManager();
-
-  // Stepped scrolling: pin a focused row's title near the top of the viewport.
-  // We record each section's Y offset (relative to the ScrollView content) and
-  // programmatically scroll to it when any item in that row gains focus.
-  const TOP_INSET = 24; // px of breathing room above the pinned title
-  const scrollRef = useRef<ScrollView>(null);
-  const rowOffsets = useRef<Record<string, number>>({});
-  const lastFocusedRow = useRef<string | null>(null);
-  const handleRowFocus = useCallback((key: string) => {
-    // Only scroll when the focused row actually changes; left/right navigation
-    // within a row re-fires focus events and must not re-trigger a vertical scroll.
-    if (lastFocusedRow.current === key) return;
-    lastFocusedRow.current = key;
-    const y = rowOffsets.current[key];
-    if (y == null) return;
-    scrollRef.current?.scrollTo({
-      y: Math.max(0, y - TOP_INSET),
-      animated: true,
-    });
-  }, []);
-
-  // Stable per-row focus callbacks so ContentRow's renderItem stays memoized
-  // (inline arrows would re-render every ContentItem on each parent render).
-  const onRecentlyWatchedFocus = useCallback(
-    () => handleRowFocus("recentlyWatched"),
-    [handleRowFocus],
-  );
-  const onRecentlyAddedFocus = useCallback(
-    () => handleRowFocus("recentlyAdded"),
-    [handleRowFocus],
-  );
-  const onTVShowsFocus = useCallback(
-    () => handleRowFocus("tvShows"),
-    [handleRowFocus],
-  );
-  const onMoviesFocus = useCallback(
-    () => handleRowFocus("movies"),
-    [handleRowFocus],
-  );
 
   // Conditional logging for performance optimization
   const DEBUG_HOME_PAGE = __DEV__ && false; // Enable only when needed for debugging
@@ -76,12 +51,22 @@ export default function TVHomePage() {
     }
   }, []);
 
-  // Ensure we're in browse mode when this page loads
+  // Ensure we're in browse mode when this page loads OR regains focus.
+  //
+  // `isFocused` is load-bearing here, not decorative. With only `currentMode`
+  // in the deps this effect can never fire in the one case that matters: if
+  // something else leaves the app stuck in a non-browse mode, the only value
+  // that could re-trigger it is the very value that is stuck. Focus, by
+  // contrast, demonstrably comes back when a screen is dismissed — so keying on
+  // it as well makes this a real safety net rather than a no-op.
   useEffect(() => {
-    if (currentMode !== "browse") {
+    if (isFocused && currentMode !== "browse") {
+      console.log(
+        `[TVHomePage] Focused but mode is "${currentMode}" - restoring browse mode`,
+      );
       setMode("browse");
     }
-  }, [currentMode, setMode]);
+  }, [isFocused, currentMode, setMode]);
 
   // API hooks with optimized settings
   const recentlyWatched = useInfiniteContentList({
@@ -252,7 +237,7 @@ export default function TVHomePage() {
   // Periodic refresh every 10 seconds when screen is focused
   useEffect(() => {
     const PERIODIC_REFRESH_INTERVAL = 10000; // 10 seconds
-    let intervalId: NodeJS.Timeout;
+    let intervalId: ReturnType<typeof setTimeout>;
 
     const startPeriodicRefresh = () => {
       intervalId = setInterval(() => {
@@ -417,8 +402,7 @@ export default function TVHomePage() {
         availableSeasons: number[];
       };
       const navCurrent = (rootShowData as any)?.navigation?.seasons?.current as
-        | number
-        | undefined;
+        number | undefined;
 
       // Prefer server-provided current season when valid, else the minimum available season
       const preferredSeason =
@@ -527,7 +511,6 @@ export default function TVHomePage() {
     <View style={styles.container}>
       {/* Content browser with stepped scrolling */}
       <ScrollView
-        ref={scrollRef}
         style={styles.contentBrowser}
         contentContainerStyle={styles.contentContainer}
         pagingEnabled={false}
@@ -537,9 +520,21 @@ export default function TVHomePage() {
         // stops the view from drifting past the last row into empty space.
         bounces={false}
         overScrollMode="never"
+        // Opts the focus engine into per-item snapping; the offset itself
+        // comes from each child's scrollSnapOffset. Must not be combined with
+        // pagingEnabled (kept false above).
+        snapToAlignment="item"
       >
-        {/* Video preview banner */}
-        <TVBanner />
+        {/* Video preview banner.
+            Under native snapping the banner needs its own marker: Android's
+            arrowScroll override resolves d-pad moves with FocusFinder instead
+            of ScrollView's usual "nothing focusable in view -> scroll, then
+            focus" fallback, so an unmarked banner becomes unreachable once it
+            has scrolled out of view. Offset 0 pins it to the very top, which
+            is also where the JS path used to land it. */}
+        <View scrollSnapOffset={0}>
+          <TVBanner />
+        </View>
 
         {/* Recently Watched Section */}
         {recentlyWatched.isLoading ? (
@@ -558,9 +553,7 @@ export default function TVHomePage() {
               styles.sectionContainer,
               lastRowKey === "recentlyWatched" && styles.sectionContainerLast,
             ]}
-            onLayout={(e) => {
-              rowOffsets.current.recentlyWatched = e.nativeEvent.layout.y;
-            }}
+            scrollSnapOffset={ROW_SNAP_INSET}
           >
             <ContentRow
               title="Continue Watching"
@@ -571,7 +564,6 @@ export default function TVHomePage() {
               isFetchingNextPage={recentlyWatched.isFetchingNextPage}
               onLoadMore={recentlyWatched.fetchNextPage}
               loadMoreThreshold={0.4}
-              onRowFocus={onRecentlyWatchedFocus}
               trapFocusDown={lastRowKey === "recentlyWatched"}
               isLastRow={lastRowKey === "recentlyWatched"}
             />
@@ -595,9 +587,7 @@ export default function TVHomePage() {
               styles.sectionContainer,
               lastRowKey === "recentlyAdded" && styles.sectionContainerLast,
             ]}
-            onLayout={(e) => {
-              rowOffsets.current.recentlyAdded = e.nativeEvent.layout.y;
-            }}
+            scrollSnapOffset={ROW_SNAP_INSET}
           >
             <ContentRow
               title="Recently Added"
@@ -608,7 +598,6 @@ export default function TVHomePage() {
               isFetchingNextPage={recentlyAdded.isFetchingNextPage}
               onLoadMore={recentlyAdded.fetchNextPage}
               loadMoreThreshold={0.4}
-              onRowFocus={onRecentlyAddedFocus}
               trapFocusDown={lastRowKey === "recentlyAdded"}
               isLastRow={lastRowKey === "recentlyAdded"}
             />
@@ -632,9 +621,7 @@ export default function TVHomePage() {
               styles.sectionContainer,
               lastRowKey === "tvShows" && styles.sectionContainerLast,
             ]}
-            onLayout={(e) => {
-              rowOffsets.current.tvShows = e.nativeEvent.layout.y;
-            }}
+            scrollSnapOffset={ROW_SNAP_INSET}
           >
             <ContentRow
               title="TV Shows"
@@ -645,7 +632,6 @@ export default function TVHomePage() {
               isFetchingNextPage={tvShows.isFetchingNextPage}
               onLoadMore={tvShows.fetchNextPage}
               loadMoreThreshold={0.4}
-              onRowFocus={onTVShowsFocus}
               trapFocusDown={lastRowKey === "tvShows"}
               isLastRow={lastRowKey === "tvShows"}
             />
@@ -669,9 +655,7 @@ export default function TVHomePage() {
               styles.sectionContainer,
               lastRowKey === "movies" && styles.sectionContainerLast,
             ]}
-            onLayout={(e) => {
-              rowOffsets.current.movies = e.nativeEvent.layout.y;
-            }}
+            scrollSnapOffset={ROW_SNAP_INSET}
           >
             <ContentRow
               title="Movies"
@@ -682,7 +666,6 @@ export default function TVHomePage() {
               isFetchingNextPage={movies.isFetchingNextPage}
               onLoadMore={movies.fetchNextPage}
               loadMoreThreshold={0.4}
-              onRowFocus={onMoviesFocus}
               trapFocusDown={lastRowKey === "movies"}
               isLastRow={lastRowKey === "movies"}
             />

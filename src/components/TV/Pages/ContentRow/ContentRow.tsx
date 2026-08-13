@@ -53,8 +53,6 @@ interface ContentRowProps {
   trapFocusRight?: boolean;
   showHeader?: boolean;
   preferFirstItemFocus?: boolean;
-  /** Fired when any item in this row gains focus (used to snap-scroll the row into view) */
-  onRowFocus?: () => void;
   /** Drops the row's trailing margin so the last row has no dead scroll space below it */
   isLastRow?: boolean;
 }
@@ -78,7 +76,6 @@ const ContentRow = ({
   trapFocusRight = true,
   showHeader = true,
   preferFirstItemFocus = false,
-  onRowFocus,
   isLastRow = false,
 }: ContentRowProps) => {
   const { window } = useDimensions();
@@ -113,7 +110,6 @@ const ContentRow = ({
   // within LOAD_MORE_LOOKAHEAD of the end is reliable regardless of velocity.
   const handleItemFocus = useCallback(
     (index: number) => {
-      onRowFocus?.();
       if (
         hasNextPage &&
         !isFetchingNextPage &&
@@ -123,7 +119,7 @@ const ContentRow = ({
         onLoadMore();
       }
     },
-    [onRowFocus, hasNextPage, isFetchingNextPage, onLoadMore, items.length],
+    [hasNextPage, isFetchingNextPage, onLoadMore, items.length],
   );
 
   const renderItem = useCallback(
@@ -157,6 +153,14 @@ const ContentRow = ({
   );
 
   const keyExtractor = useCallback((item: ContentItemData) => item.id, []);
+
+  // Stable identity: FlatList is a PureComponent, so a fresh array literal
+  // here would fail its shallow prop compare on every parent render and defeat
+  // the bailout entirely.
+  const listExtraData = useMemo(
+    () => [items.length, hasNextPage, isFetchingNextPage],
+    [items.length, hasNextPage, isFetchingNextPage],
+  );
 
   const renderFooter = useMemo(() => {
     if (!isFetchingNextPage) return null;
@@ -194,7 +198,7 @@ const ContentRow = ({
       >
         <FlatList
           data={items}
-          extraData={[items.length, hasNextPage, isFetchingNextPage]}
+          extraData={listExtraData}
           horizontal
           showsHorizontalScrollIndicator={Platform.isTV}
           renderItem={renderItem}
