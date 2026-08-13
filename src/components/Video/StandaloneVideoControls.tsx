@@ -395,7 +395,15 @@ const StandaloneVideoControls = memo(
     const dotAnim2 = useRef(new Animated.Value(0.4)).current;
     const dotAnim3 = useRef(new Animated.Value(0.4)).current;
 
-    // Update animation based on remote activity
+    // Update animation based on remote activity, and keep TV focus parked on
+    // the SeekBar whenever the overlay is not visible.
+    //
+    // The overlay fades to opacity 0 but stays MOUNTED and FOCUSABLE — there is
+    // no pointerEvents gating — so without this, focus is left wherever the
+    // user last moved it (captions, the episode carousel, Back) sitting on an
+    // invisible control. The next keypress then acts on that hidden target
+    // instead of revealing a predictable overlay.
+    const prevShouldShowRef = useRef(true);
     useEffect(() => {
       const shouldShow = isRemoteActive || !isPlaying;
       Animated.timing(fadeAnim, {
@@ -403,7 +411,32 @@ const StandaloneVideoControls = memo(
         duration: 300,
         useNativeDriver: true,
       }).start();
+
+      // Falling edge only: reset focus as the overlay hides, so the controls
+      // always come back with the SeekBar focused.
+      if (prevShouldShowRef.current && !shouldShow) {
+        seekBarRef.current?.focus();
+      }
+      prevShouldShowRef.current = shouldShow;
     }, [isRemoteActive, isPlaying, fadeAnim]);
+
+    // Deterministic INITIAL focus.
+    //
+    // The outer TVFocusGuideView has `autoFocus` + `destinations`, but that
+    // only redirects focus that ENTERS the guide view — it never grants focus
+    // on mount. Nothing else claims it either, so the watch page loaded with
+    // no focused element at all and the first d-pad press went nowhere useful.
+    // Fire once, as soon as the SeekBar's node exists, deferred a frame so the
+    // native focus engine has it registered.
+    const hasSetInitialFocusRef = useRef(false);
+    useEffect(() => {
+      if (hasSetInitialFocusRef.current || !seekBarNode) return;
+      hasSetInitialFocusRef.current = true;
+      const raf = requestAnimationFrame(() => {
+        seekBarRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(raf);
+    }, [seekBarNode]);
 
     // Animate loading dots when episode switching
     useEffect(() => {
