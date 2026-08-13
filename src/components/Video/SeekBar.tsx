@@ -104,9 +104,18 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
       ref,
       () => ({
         focus: () => {
-          if (pressableRef.current) {
-            pressableRef.current.focus();
-          }
+          const node = pressableRef.current;
+          if (!node) return;
+          // react-native-tvos moves TV focus with the `requestTVFocus` native
+          // view command (ReactViewManager maps it to requestFocusFromJS()),
+          // which View attaches to its instance in setLocalRef.
+          //
+          // There is NO focus() on a host View — that method exists only on
+          // TextInput and DrawerLayoutAndroid — so the previous
+          // `pressableRef.current.focus()` threw "focus is not a function".
+          // Every imperative focus call in the player silently did nothing,
+          // including the post-restart and post-episode-select restores.
+          node.requestTVFocus();
         },
         getNode: () => pressableRef.current,
       }),

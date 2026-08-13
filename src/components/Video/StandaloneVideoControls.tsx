@@ -412,10 +412,25 @@ const StandaloneVideoControls = memo(
         useNativeDriver: true,
       }).start();
 
-      // Falling edge only: reset focus as the overlay hides, so the controls
-      // always come back with the SeekBar focused.
+      // Falling edge only: reset focus as the overlay hides.
+      //
+      // This is what makes "SELECT always pauses while the video is playing
+      // with no UI" an invariant rather than luck. Focus can only move on a
+      // remote press, and every remote press runs resetActivityTimer, which
+      // re-shows the overlay — so you can never navigate off the SeekBar
+      // without the UI becoming visible first. Hidden therefore implies the
+      // SeekBar is focused, and its onPress is wired to handleTogglePlay.
+      //
+      // Deferred a frame, like the other imperative focus calls here: the
+      // SeekBar's ref can be momentarily null while it re-renders (playerState
+      // changes during episode switching remount its subtree), and a
+      // synchronous call would silently no-op and break the invariant.
       if (prevShouldShowRef.current && !shouldShow) {
-        seekBarRef.current?.focus();
+        const raf = requestAnimationFrame(() => {
+          seekBarRef.current?.focus();
+        });
+        prevShouldShowRef.current = shouldShow;
+        return () => cancelAnimationFrame(raf);
       }
       prevShouldShowRef.current = shouldShow;
     }, [isRemoteActive, isPlaying, fadeAnim]);
@@ -892,6 +907,13 @@ const StandaloneVideoControls = memo(
                 onSeek={handleSeek}
                 onSeekBy={handleSeekBy}
                 onTogglePlay={handleTogglePlay}
+                // Native initial focus, so it does not depend on the timing of
+                // the imperative requestTVFocus() effect below. Safe as a
+                // STATIC true: the SeekBar is rendered unconditionally and
+                // never remounts, so this applies once at mount. The
+                // anti-pattern the comment near seekBarRef warns about was a
+                // DYNAMIC toggle that flipped on a timer and re-stole focus.
+                hasTVPreferredFocus={true}
                 isPlaying={isPlaying}
                 onStartSeeking={startContinuousActivity}
                 onStopSeeking={stopContinuousActivity}
