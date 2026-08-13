@@ -1,5 +1,5 @@
-import { useIsFocused } from "@react-navigation/native";
 import { ImageBackground } from "expo-image";
+import { useIsFocused } from "expo-router/react-navigation";
 import { VideoView } from "expo-video";
 import { useCallback, useMemo, useEffect, useState, useRef } from "react";
 import {
@@ -28,13 +28,51 @@ interface TVBannerProps {
   style?: ViewStyle;
 }
 
+// expo-video forwards ExoPlayer's duration unconditionally, and ExoPlayer uses
+// C.TIME_UNSET (Long.MIN_VALUE) for "not known yet" — which arrives here as a
+// huge negative number. Anything non-finite, non-positive or implausibly long
+// means "no usable duration".
+function isUsableDuration(duration: number): boolean {
+  return Number.isFinite(duration) && duration > 0 && duration < 24 * 60 * 60;
+}
+
+// How long the image phase will wait for a selected clip to become playable
+// before giving up and rotating on. The image -> fadeToVideo edge is driven by
+// player readiness, and readiness can legitimately never arrive: the source can
+// fail to load, or the status event can be missed entirely because the player
+// was already ready for that URL (expo-video's statusChange is edge-triggered
+// and never replayed). This bound is what makes the machine structurally unable
+// to park; it should never be reached on a healthy clip.
+const VIDEO_READY_TIMEOUT_MS = 10000;
+
+// ---- DIAGNOSTICS ---------------------------------------------------------
+// Flip to `__DEV__` to trace the banner state machine. Off by default: these
+// fire on every phase change, status change and heartbeat, and in a
+// Metro-attached build each console call is serialised over the websocket on
+// the JS thread.
+//
+// The heartbeat below is the reason this tooling exists. A stalled banner
+// emits no events, so the event log goes silent exactly when it is needed;
+// polling every gate that can stall the machine is what made the freeze
+// diagnosable. Filter with:
+//   adb logcat -s ReactNativeJS | grep -E "BannerDbg|PlayerDbg"
+const DEBUG_BANNER = __DEV__ && false;
+
+// URLs are long and near-identical; only the tail distinguishes them.
+function shortURL(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const noQuery = url.split("?")[0];
+  return `…${noQuery.slice(-28)}`;
+}
+
+function dbg(event: string, data?: Record<string, unknown>) {
+  if (!DEBUG_BANNER) return;
+  console.log(`[BannerDbg] ${event}${data ? " " + JSON.stringify(data) : ""}`);
+}
+
 // Banner state machine phases
 type BannerPhase =
-  | "image"
-  | "fadeToVideo"
-  | "video"
-  | "fadeToImage"
-  | "nextSlide";
+  "image" | "fadeToVideo" | "video" | "fadeToImage" | "nextSlide";
 
 export default function TVBanner({ style }: TVBannerProps) {
   const { currentMode } = useTVAppState();
@@ -56,7 +94,35 @@ export default function TVBanner({ style }: TVBannerProps) {
 
   // Banner phase state machine
   const [currentPhase, setCurrentPhase] = useState<BannerPhase>("image");
-  const phaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const phaseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // All phase timers MUST go through these two helpers.
+  //
+  // Two independent schedulers drive this machine — advancePhase() and the
+  // state-machine effect — and both used to assign phaseTimeoutRef directly.
+  // Whichever wrote second orphaned the other's handle: the orphan was never
+  // cleared, still fired, and advanced the phase a second time, so clips could
+  // start while the previous one was still running (audio layering) and the
+  // orphans multiplied every cycle. The callbacks also never reset the ref, so
+  // after the first fire it stayed non-null forever, which defeats any
+  // "is a timer already pending?" check.
+  const clearPhaseTimeout = useCallback(() => {
+    if (phaseTimeoutRef.current) {
+      clearTimeout(phaseTimeoutRef.current);
+      phaseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const schedulePhase = useCallback(
+    (fn: () => void, ms: number) => {
+      clearPhaseTimeout();
+      phaseTimeoutRef.current = setTimeout(() => {
+        phaseTimeoutRef.current = null;
+        fn();
+      }, ms);
+    },
+    [clearPhaseTimeout],
+  );
 
   // Single opacity value for smooth transitions
   const bannerOpacity = useSharedValue(1);
@@ -69,7 +135,9 @@ export default function TVBanner({ style }: TVBannerProps) {
 
   // Navigation state tracking
   const [isNavigating, setIsNavigating] = useState(false);
-  const navigationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const navigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Video player state
   const [currentVideoURL, setCurrentVideoURL] = useState<string | null>(null);
@@ -78,8 +146,24 @@ export default function TVBanner({ style }: TVBannerProps) {
   const videoPositionRef = useRef<number>(0);
   const fadeBackTriggeredRef = useRef<boolean>(false);
 
+  // Live mirrors for the player event callbacks.
+  //
+  // The listener effect closes over currentPhase/currentVideoURL, and those
+  // closures are STALE in exactly the window that matters: when the hook strips
+  // the source with replaceAsync(null), the resulting `idle` event is delivered
+  // to a listener registered before cleanupBanner reset the phase. Guarding
+  // that event with the closure's own values is no guard at all — it saw
+  // phase "fadeToVideo" and a live URL, and knocked the freshly-reset phase to
+  // "fadeToImage", where the paused machine then parked with no timer.
+  const currentPhaseRef = useRef(currentPhase);
+  currentPhaseRef.current = currentPhase;
+  const currentVideoURLRef = useRef(currentVideoURL);
+  currentVideoURLRef.current = currentVideoURL;
+
   // Volume fade animation state
-  const volumeFadeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const volumeFadeIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Banner focus state for TV remote navigation
   const bannerRef = useRef<View>(null);
@@ -90,19 +174,21 @@ export default function TVBanner({ style }: TVBannerProps) {
   const [isMutedDueToFocusLoss, setIsMutedDueToFocusLoss] = useState(false);
 
   // Create optimized video player instance with focus-aware resource management
-  const { player } = useOptimizedVideoPlayer(currentVideoURL, (p) => {
-    p.timeUpdateEventInterval = 0.5; // Update every 500ms for position tracking
-    p.loop = false;
-    p.muted = false; // Not muted, we'll control volume programmatically
-    p.volume = 0; // Start with volume at 0
-    p.allowsExternalPlayback = false;
-  });
+  const { player, loadedSource } = useOptimizedVideoPlayer(
+    currentVideoURL,
+    (p) => {
+      p.timeUpdateEventInterval = 0.5; // Update every 500ms for position tracking
+      p.loop = false;
+      p.muted = false; // Not muted, we'll control volume programmatically
+      p.volume = 0; // Start with volume at 0
+      p.allowsExternalPlayback = false;
+    },
+  );
 
   // Debug video URL changes
   useEffect(() => {
-    console.log(`[TVBanner] Video URL changed to: ${currentVideoURL}`);
+    dbg("URL-CHANGED", { url: shortURL(currentVideoURL), hasPlayer: !!player });
     if (currentVideoURL) {
-      console.log(`[TVBanner] Player instance:`, !!player);
       setIsVideoReady(false); // Reset ready state when URL changes
       fadeBackTriggeredRef.current = false; // Reset fade back trigger
     }
@@ -112,22 +198,6 @@ export default function TVBanner({ style }: TVBannerProps) {
   const currentBanner = useMemo(() => {
     if (!bannerData || bannerData.length === 0) return null;
     return bannerData[currentBannerIndex] as BannerItem;
-  }, [bannerData, currentBannerIndex]);
-
-  // Pre-fetch next video clip during image phase
-  const prefetchNextVideo = useCallback(() => {
-    if (!bannerData || bannerData.length <= 1) return;
-
-    const nextIndex = (currentBannerIndex + 1) % bannerData.length;
-    const nextBanner = bannerData[nextIndex] as BannerItem;
-
-    if (nextBanner?.clipVideoURL) {
-      // Pre-fetch the next video by creating a temporary video element
-      // This helps with smooth transitions
-      console.log(
-        `[TVBanner] Pre-fetching next video: ${nextBanner.clipVideoURL}`,
-      );
-    }
   }, [bannerData, currentBannerIndex]);
 
   // Fade volume in or out over duration
@@ -142,12 +212,16 @@ export default function TVBanner({ style }: TVBannerProps) {
 
       const startVolume = player.volume;
       const volumeChange = targetVolume - startVolume;
-      const stepDuration = 50; // Update every 50ms
+      // 100ms, not 50ms. Every write is a JSI call that posts a main-queue
+      // message, and the fewer we have in flight at once the less pressure we
+      // put on the looper during MediaCodec init — which is exactly when these
+      // fades run. Still imperceptible as a fade.
+      const stepDuration = 100;
       const steps = duration / stepDuration;
       let currentStep = 0;
 
-      console.log(
-        `[TVBanner] Starting volume fade from ${startVolume} to ${targetVolume} over ${duration}ms`,
+      dbg(
+        `Starting volume fade from ${startVolume} to ${targetVolume} over ${duration}ms`,
       );
 
       // Easing function: ease-in-out cubic
@@ -172,11 +246,9 @@ export default function TVBanner({ style }: TVBannerProps) {
 
         try {
           player.volume = Math.max(0, Math.min(1, newVolume)); // Clamp between 0 and 1
-        } catch (error) {
+        } catch {
           // Player was released, stop the fade
-          console.log(
-            "[TVBanner] Player released during volume fade, stopping",
-          );
+          dbg("Player released during volume fade, stopping");
           if (volumeFadeIntervalRef.current) {
             clearInterval(volumeFadeIntervalRef.current);
             volumeFadeIntervalRef.current = null;
@@ -191,11 +263,9 @@ export default function TVBanner({ style }: TVBannerProps) {
           }
           try {
             player.volume = targetVolume; // Ensure we end at exact target
-            console.log(
-              `[TVBanner] Volume fade complete, final volume: ${targetVolume}`,
-            );
-          } catch (error) {
-            console.log("[TVBanner] Player released at end of volume fade");
+            dbg(`Volume fade complete, final volume: ${targetVolume}`);
+          } catch {
+            dbg("Player released at end of volume fade");
           }
         }
       }, stepDuration);
@@ -208,19 +278,14 @@ export default function TVBanner({ style }: TVBannerProps) {
     (force: boolean = false) => {
       // Only cleanup if we're actually navigating away from browse mode or forced
       if (!force && currentMode === "browse" && isFocused) {
-        console.log(
-          "[TVBanner] Skipping cleanup - still in browse mode and focused",
-        );
+        dbg("Skipping cleanup - still in browse mode and focused");
         return;
       }
 
-      console.log("[TVBanner] Performing comprehensive cleanup");
+      dbg("Performing comprehensive cleanup");
 
       // Clear all timeouts
-      if (phaseTimeoutRef.current) {
-        clearTimeout(phaseTimeoutRef.current);
-        phaseTimeoutRef.current = null;
-      }
+      clearPhaseTimeout();
       if (navigationTimeoutRef.current) {
         clearTimeout(navigationTimeoutRef.current);
         navigationTimeoutRef.current = null;
@@ -240,9 +305,9 @@ export default function TVBanner({ style }: TVBannerProps) {
           if (player.volume > 0) {
             player.volume = 0;
           }
-        } catch (error) {
+        } catch {
           // Silently handle player cleanup errors - this is expected during unmount
-          console.log("[TVBanner] Player already released during cleanup");
+          dbg("Player already released during cleanup");
         }
       }
 
@@ -260,9 +325,10 @@ export default function TVBanner({ style }: TVBannerProps) {
       contentOpacity.value = 1;
       imageOpacity.value = 1;
 
-      console.log("[TVBanner] Cleanup completed");
+      dbg("Cleanup completed");
     },
     [
+      clearPhaseTimeout,
       player,
       bannerOpacity,
       contentOpacity,
@@ -276,30 +342,43 @@ export default function TVBanner({ style }: TVBannerProps) {
   const advancePhase = useCallback(() => {
     if (!currentBanner) return;
 
-    console.log(
-      `[TVBanner] Advancing phase from ${currentPhase} for banner:`,
-      currentBanner.title,
-    );
+    dbg("ADVANCE", { phase: currentPhase, banner: currentBanner.title });
 
     // Clear any existing phase timeout
-    if (phaseTimeoutRef.current) {
-      clearTimeout(phaseTimeoutRef.current);
-    }
+    clearPhaseTimeout();
 
     switch (currentPhase) {
       case "image":
         if (currentBanner.clipVideoURL) {
           // Has video clip - pre-load video and wait for it to be ready
-          console.log(`[TVBanner] Banner has video clip, pre-loading video`);
+          dbg(`Banner has video clip, pre-loading video`);
+          dbg("IMAGE-SELECT-CLIP", {
+            url: shortURL(currentBanner.clipVideoURL),
+            watchdogMs: VIDEO_READY_TIMEOUT_MS,
+          });
           setCurrentVideoURL(currentBanner.clipVideoURL);
-          // Don't advance phase yet - wait for video to be ready
+
+          // WATCHDOG. This phase must NEVER wait with zero pending timers.
+          // Two ways that used to happen and freeze the banner permanently:
+          //  - readiness arrives as an edge-triggered statusChange, and a
+          //    player that is ALREADY ready for this URL emits nothing;
+          //  - the setCurrentVideoURL above is a React bailout when the URL is
+          //    unchanged, so nothing re-renders and no effect re-arms anything.
+          // In both cases this timer is the only thing left alive. When
+          // readiness does arrive the phase changes, the state-machine effect
+          // re-runs, and its clearPhaseTimeout() cancels this.
+          schedulePhase(() => {
+            console.warn(
+              `[BannerDbg] WATCHDOG-FIRED after ${VIDEO_READY_TIMEOUT_MS}ms — clip never became playable`,
+              JSON.stringify(diagRef.current),
+            );
+            setCurrentPhase("nextSlide");
+          }, VIDEO_READY_TIMEOUT_MS);
         } else {
           // No video clip - go directly to next slide
-          console.log(
-            `[TVBanner] Banner has no video clip, going to next slide`,
-          );
+          dbg(`Banner has no video clip, going to next slide`);
           setCurrentPhase("nextSlide");
-          phaseTimeoutRef.current = setTimeout(() => {
+          schedulePhase(() => {
             navigateToNextBanner();
           }, 100);
         }
@@ -307,39 +386,51 @@ export default function TVBanner({ style }: TVBannerProps) {
 
       case "fadeToVideo":
         // Start the 2-second fade transition and begin video playback
-        console.log(`[TVBanner] Starting 2-second fade transition to video`);
+        dbg(`Starting 2-second fade transition to video`);
         imageOpacity.value = withTiming(0, { duration: 2000 });
 
         // Start video playback immediately when fade begins
         if (player && isVideoReady) {
-          console.log(`[TVBanner] Starting video playback during fade`);
+          dbg(`Starting video playback during fade`);
           try {
+            // Always start from the top. The player may already hold this exact
+            // source from an earlier pass (a re-selected item, or a pass the
+            // screensaver interrupted), in which case the playhead is wherever
+            // it was left — often at the very end, which fires playToEnd
+            // immediately and silently skips the clip. No-op for a freshly
+            // loaded source.
+            player.currentTime = 0;
+            // Reset here too: the URL-change effect does not re-run when
+            // setCurrentVideoURL bails out on an identical URL, so this flag
+            // could still be true from the clip's previous play and would
+            // swallow the real playToEnd.
+            fadeBackTriggeredRef.current = false;
             player.volume = 0; // Ensure volume starts at 0
             player.play();
             // Only fade volume in if banner is focused
             if (isBannerFocused && !isMutedDueToFocusLoss) {
               fadeVolume(1, 2000);
             }
-          } catch (error) {
-            console.log("[TVBanner] Player released during fadeToVideo phase");
+          } catch {
+            dbg("Player released during fadeToVideo phase");
           }
         }
 
         // Transition to video phase after fade completes
-        phaseTimeoutRef.current = setTimeout(() => {
-          console.log(`[TVBanner] Fade complete, transitioning to video phase`);
+        schedulePhase(() => {
+          dbg(`Fade complete, transitioning to video phase`);
           setCurrentPhase("video");
         }, 2000);
         break;
 
       case "video":
         // Video phase - video is already playing, position monitoring will handle fade back
-        console.log(`[TVBanner] In video phase, monitoring video position`);
+        dbg(`In video phase, monitoring video position`);
         break;
 
       case "fadeToImage":
         // Fade back to image
-        console.log(`[TVBanner] Starting fade back to image`);
+        dbg(`Starting fade back to image`);
         imageOpacity.value = withTiming(1, { duration: 2000 });
 
         // Fade volume out over 2 seconds (only if not already muted due to focus loss)
@@ -348,18 +439,16 @@ export default function TVBanner({ style }: TVBannerProps) {
         }
 
         // After fade completes, stop video and move to next slide
-        phaseTimeoutRef.current = setTimeout(() => {
-          console.log(
-            `[TVBanner] Fade to image complete, stopping video and moving to next slide`,
+        schedulePhase(() => {
+          dbg(
+            `Fade to image complete, stopping video and moving to next slide`,
           );
           if (player) {
             try {
               player.pause();
               player.volume = 0; // Ensure volume is at 0
-            } catch (error) {
-              console.log(
-                "[TVBanner] Player released during fadeToImage phase",
-              );
+            } catch {
+              dbg("Player released during fadeToImage phase");
             }
           }
           // Set phase to nextSlide which will trigger navigation
@@ -372,6 +461,8 @@ export default function TVBanner({ style }: TVBannerProps) {
         break;
     }
   }, [
+    clearPhaseTimeout,
+    schedulePhase,
     currentBanner,
     currentPhase,
     imageOpacity,
@@ -382,19 +473,33 @@ export default function TVBanner({ style }: TVBannerProps) {
 
   // Navigate to next banner and reset state machine
   const navigateToNextBanner = useCallback(() => {
-    if (!bannerData || bannerData.length <= 1) return;
+    if (!bannerData || bannerData.length === 0) return;
 
-    console.log(
-      `[TVBanner] Navigating to next banner, resetting state machine`,
-    );
+    // Single item: there is nowhere to rotate to, but returning here would
+    // leave the machine parked in "nextSlide" with no timer and no state
+    // change — permanent, restart-only. Restart the cycle in place instead so
+    // "nextSlide" always has an exit. (The clip reloads as a no-op, the level
+    // check catches the already-ready player, and currentTime = 0 in
+    // fadeToVideo stops it ending instantly.)
+    if (bannerData.length === 1) {
+      dbg(`Single banner item, restarting cycle in place`);
+      clearPhaseTimeout();
+      fadeBackTriggeredRef.current = false;
+      videoPositionRef.current = 0;
+      setIsVideoReady(false);
+      setVideoDuration(0);
+      setCurrentVideoURL(null);
+      imageOpacity.value = 1;
+      setCurrentPhase("image");
+      return;
+    }
+
+    dbg(`Navigating to next banner, resetting state machine`);
 
     const nextIndex = (currentBannerIndex + 1) % bannerData.length;
 
     // Clear any existing timeouts
-    if (phaseTimeoutRef.current) {
-      clearTimeout(phaseTimeoutRef.current);
-      phaseTimeoutRef.current = null;
-    }
+    clearPhaseTimeout();
 
     // Clear volume fade if in progress
     if (volumeFadeIntervalRef.current) {
@@ -415,21 +520,18 @@ export default function TVBanner({ style }: TVBannerProps) {
     if (player) {
       try {
         player.volume = 0;
-      } catch (error) {
-        console.log("[TVBanner] Player released during banner navigation");
+      } catch {
+        dbg("Player released during banner navigation");
       }
     }
 
     // Update banner index
     setCurrentBannerIndex(nextIndex);
 
-    console.log(
-      `[TVBanner] State reset complete, new banner index: ${nextIndex}, imageOpacity reset to 1`,
+    dbg(
+      `State reset complete, new banner index: ${nextIndex}, imageOpacity reset to 1`,
     );
-
-    // Pre-fetch next video
-    setTimeout(prefetchNextVideo, 1000);
-  }, [bannerData, currentBannerIndex, imageOpacity, prefetchNextVideo, player]);
+  }, [clearPhaseTimeout, bannerData, currentBannerIndex, imageOpacity, player]);
 
   // Manual navigation function - instant content switching with fade effect
   const navigateBanner = useCallback(
@@ -448,9 +550,7 @@ export default function TVBanner({ style }: TVBannerProps) {
       if (navigationTimeoutRef.current) {
         clearTimeout(navigationTimeoutRef.current);
       }
-      if (phaseTimeoutRef.current) {
-        clearTimeout(phaseTimeoutRef.current);
-      }
+      clearPhaseTimeout();
 
       // Clear volume fade if in progress
       if (volumeFadeIntervalRef.current) {
@@ -475,8 +575,8 @@ export default function TVBanner({ style }: TVBannerProps) {
       if (player) {
         try {
           player.volume = 0;
-        } catch (error) {
-          console.log("[TVBanner] Player released during manual navigation");
+        } catch {
+          dbg("Player released during manual navigation");
         }
       }
 
@@ -491,7 +591,14 @@ export default function TVBanner({ style }: TVBannerProps) {
         contentOpacity.value = withTiming(1, { duration: 400 });
       }, 800); // Wait 800ms after last navigation
     },
-    [bannerData, currentBannerIndex, contentOpacity, imageOpacity, player],
+    [
+      clearPhaseTimeout,
+      bannerData,
+      currentBannerIndex,
+      contentOpacity,
+      imageOpacity,
+      player,
+    ],
   );
 
   // Video player event handlers
@@ -499,52 +606,85 @@ export default function TVBanner({ style }: TVBannerProps) {
     if (!player) return;
 
     const statusListener = player.addListener("statusChange", ({ status }) => {
-      console.log(
-        `[TVBanner] Video status changed to: ${status}, currentVideoURL: ${currentVideoURL}, currentPhase: ${currentPhase}`,
+      dbg(
+        `Video status changed to: ${status}, currentVideoURL: ${currentVideoURL}, currentPhase: ${currentPhase}`,
       );
       if (status === "readyToPlay" && currentVideoURL) {
-        console.log(
-          `[TVBanner] Video ready to play, setting isVideoReady to true`,
-        );
+        dbg(`Video ready to play, setting isVideoReady to true`);
         setIsVideoReady(true);
 
         // Ensure volume is at 0 when video becomes ready
         try {
           player.volume = 0;
-        } catch (error) {
-          console.log("[TVBanner] Player released when video became ready");
+        } catch {
+          dbg("Player released when video became ready");
         }
 
         // If we're in image phase and video is now ready, start the fade transition
         if (currentPhase === "image") {
-          console.log(`[TVBanner] Video is ready, starting fade transition`);
+          dbg(`Video is ready, starting fade transition`);
           setCurrentPhase("fadeToVideo");
         }
       }
-      if (status === "idle") {
-        console.log(
-          `[TVBanner] Video is idle, transitioning to fadeToImage phase`,
-        );
+      // Only treat `idle` as end-of-clip when a clip was actually on screen.
+      // useOptimizedVideoPlayer's cleanup() strips the source with
+      // replaceAsync(null), which makes ExoPlayer clearMediaItems + prepare
+      // into STATE_IDLE — the unguarded branch turned that teardown into a
+      // phase change to fadeToImage behind the screensaver, where it does not
+      // belong. A genuine end-of-clip arrives as playToEnd, not idle.
+      // Reads the REFS, not the closure. See currentPhaseRef above: this event
+      // is delivered from a subscription created before the teardown, so the
+      // closure still describes the clip that was playing.
+      const livePhase = currentPhaseRef.current;
+      const liveURL = currentVideoURLRef.current;
+      if (
+        status === "idle" &&
+        liveURL &&
+        (livePhase === "fadeToVideo" || livePhase === "video")
+      ) {
+        dbg(`Video is idle mid-clip, transitioning to fadeToImage phase`);
         setCurrentPhase("fadeToImage");
+      } else if (status === "idle") {
+        dbg("IDLE-IGNORED", {
+          livePhase,
+          liveURL: shortURL(liveURL),
+          closurePhase: currentPhase,
+        });
       }
     });
 
-    // Source load listener for getting proper duration
+    // Source load listener for getting proper duration.
+    // ExoPlayer returns C.TIME_UNSET (Long.MIN_VALUE) until the duration is
+    // actually known, and expo-video forwards that verbatim as
+    // `player.duration / 1000f` — i.e. about -9.2e15. Storing that made the
+    // `videoDuration > 0` guard below permanently false, so the clip never
+    // advanced on its own and every rotation waited out the 60s fallback.
     const sourceLoadListener = player.addListener(
       "sourceLoad",
       ({ duration }) => {
-        console.log(
-          `[TVBanner] Video source loaded with duration: ${duration}s`,
-        );
-        setVideoDuration(duration);
+        dbg(`Video source loaded with duration: ${duration}s`);
+        setVideoDuration(isUsableDuration(duration) ? duration : 0);
       },
     );
+
+    // Authoritative end-of-clip signal. Independent of duration entirely, so
+    // it works even when the duration is never reported.
+    //
+    // Gated on the video phase: the player also reports playToEnd for the
+    // PREVIOUS clip (and for a source being torn down) while we are still on
+    // the still image, and acting on that skipped the next clip entirely.
+    const endedListener = player.addListener("playToEnd", () => {
+      if (currentPhase !== "video" || fadeBackTriggeredRef.current) return;
+      dbg("Clip reported playToEnd, fading back to image");
+      fadeBackTriggeredRef.current = true;
+      setCurrentPhase("fadeToImage");
+    });
 
     const playingListener = player.addListener(
       "playingChange",
       ({ isPlaying }) => {
-        console.log(
-          `[TVBanner] Video playing state changed: ${isPlaying}, currentPhase: ${currentPhase}, isVideoReady: ${isVideoReady}`,
+        dbg(
+          `Video playing state changed: ${isPlaying}, currentPhase: ${currentPhase}, isVideoReady: ${isVideoReady}`,
         );
       },
     );
@@ -553,6 +693,20 @@ export default function TVBanner({ style }: TVBannerProps) {
     const timeListener = player.addListener("timeUpdate", ({ currentTime }) => {
       videoPositionRef.current = currentTime;
 
+      // Duration is usually still unknown at sourceLoad; pick it up as soon as
+      // the player resolves it. Guarded so this only ever fires once per clip.
+      if (!isUsableDuration(videoDuration)) {
+        try {
+          const resolved = player.duration;
+          if (isUsableDuration(resolved)) {
+            dbg(`Duration resolved late: ${resolved}s`);
+            setVideoDuration(resolved);
+          }
+        } catch {
+          // Player released; nothing to recover.
+        }
+      }
+
       // Check if we should fade back to image (2 seconds before end)
       if (
         currentPhase === "video" &&
@@ -560,9 +714,7 @@ export default function TVBanner({ style }: TVBannerProps) {
         currentTime >= videoDuration - 2 &&
         !fadeBackTriggeredRef.current
       ) {
-        console.log(
-          `[TVBanner] Video is 2 seconds from end, triggering fade back to image`,
-        );
+        dbg(`Video is 2 seconds from end, triggering fade back to image`);
         fadeBackTriggeredRef.current = true;
         setCurrentPhase("fadeToImage");
       }
@@ -571,6 +723,7 @@ export default function TVBanner({ style }: TVBannerProps) {
     return () => {
       statusListener.remove();
       sourceLoadListener.remove();
+      endedListener.remove();
       playingListener.remove();
       timeListener.remove();
     };
@@ -583,6 +736,132 @@ export default function TVBanner({ style }: TVBannerProps) {
     advancePhase,
   ]);
 
+  // LEVEL-triggered readiness, alongside the edge-triggered listener above.
+  //
+  // expo-video's statusChange only fires when the status CHANGES and is never
+  // replayed for a listener that attaches late (VideoPlayer.setStatus emits
+  // only when status != oldStatus). A player that is already `readyToPlay` for
+  // the URL we just selected therefore emits nothing at all — and that listener
+  // is the only image -> fadeToVideo edge, so the machine would wait for an
+  // event that can never arrive.
+  //
+  // `loadedSource` is the source the player actually holds, published by
+  // useOptimizedVideoPlayer only once replaceAsync RESOLVES. Gating on it is
+  // what stops a stale, still-ready PREVIOUS clip from reading as ready for the
+  // URL we only just requested.
+  useEffect(() => {
+    // Respect the same pause conditions as the state machine itself, or this
+    // would drive phases forward while the machine is deliberately halted
+    // (e.g. with the screensaver modal on top).
+    if (currentMode !== "browse" || !isFocused || isNavigating) {
+      dbg("LEVEL-SKIP", { reason: "machine-paused" });
+      return;
+    }
+    if (!player || !currentVideoURL) {
+      dbg("LEVEL-SKIP", { reason: !player ? "no-player" : "no-url" });
+      return;
+    }
+    if (loadedSource !== currentVideoURL) {
+      // The single most important line for diagnosing the freeze: the player
+      // is not holding the clip we asked for.
+      dbg("LEVEL-SKIP", {
+        reason: "source-mismatch",
+        want: shortURL(currentVideoURL),
+        have: shortURL(loadedSource),
+      });
+      return;
+    }
+
+    let status: string;
+    try {
+      status = player.status;
+    } catch {
+      // Player released; the watchdog rotates us on.
+      dbg("LEVEL-SKIP", { reason: "player-released" });
+      return;
+    }
+    if (status !== "readyToPlay") {
+      dbg("LEVEL-SKIP", { reason: "not-ready", status });
+      return;
+    }
+
+    if (!isVideoReady) {
+      dbg(
+        `Player already readyToPlay for current URL (level check), phase: ${currentPhase}`,
+      );
+      setIsVideoReady(true);
+      try {
+        player.volume = 0;
+      } catch {
+        // Ignore; volume is re-asserted when playback starts.
+      }
+    }
+    if (currentPhase === "image") {
+      setCurrentPhase("fadeToVideo");
+    }
+    // No loop: once this flips to fadeToVideo it re-runs with
+    // currentPhase !== "image" and isVideoReady === true, so both branches are
+    // inert.
+  }, [
+    player,
+    currentVideoURL,
+    loadedSource,
+    currentPhase,
+    isVideoReady,
+    currentMode,
+    isFocused,
+    isNavigating,
+  ]);
+
+  // ---- DIAGNOSTIC HEARTBEAT ---------------------------------------------
+  // A frozen banner emits no events, so the only way to see WHY it is stuck is
+  // to poll every gate that can stall it. `timer` is the decisive field: if the
+  // machine is parked in a phase with timer:false and nothing is arriving, the
+  // phase has no exit. Compare `url` against `loaded` to see whether the player
+  // is actually holding the clip we asked for.
+  const diagRef = useRef<Record<string, unknown>>({});
+  useEffect(() => {
+    // Runs on every render, so it must cost nothing when diagnostics are off.
+    if (!DEBUG_BANNER) return;
+    diagRef.current = {
+      phase: currentPhase,
+      url: shortURL(currentVideoURL),
+      loaded: shortURL(loadedSource),
+      ready: isVideoReady,
+      focused: isFocused,
+      mode: currentMode,
+      nav: isNavigating,
+      bannerFocused: isBannerFocused,
+      idx: currentBannerIndex,
+      n: bannerData?.length ?? 0,
+      dur: videoDuration,
+    };
+  });
+
+  useEffect(() => {
+    if (!DEBUG_BANNER) return;
+    const id = setInterval(() => {
+      let status = "no-player";
+      let playing: boolean | string = "?";
+      try {
+        if (player) {
+          status = player.status;
+          playing = player.playing;
+        }
+      } catch {
+        status = "released";
+      }
+      dbg("HEARTBEAT", {
+        ...diagRef.current,
+        status,
+        playing,
+        // Read live, not at render time: this is the whole question.
+        timer: phaseTimeoutRef.current !== null,
+      });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [player]);
+
   // State machine timing effects
   useEffect(() => {
     // Only run state machine in browse mode and when screen is focused
@@ -592,49 +871,56 @@ export default function TVBanner({ style }: TVBannerProps) {
       isNavigating ||
       !isFocused
     ) {
-      console.log(
-        `[TVBanner] State machine paused - mode: ${currentMode}, focused: ${isFocused}, navigating: ${isNavigating}`,
-      );
+      dbg("SM-PAUSED", {
+        reason:
+          currentMode !== "browse"
+            ? "mode"
+            : !currentBanner
+              ? "no-banner"
+              : isNavigating
+                ? "navigating"
+                : "not-focused",
+        mode: currentMode,
+        focused: isFocused,
+        nav: isNavigating,
+        hasBanner: !!currentBanner,
+        phase: currentPhase,
+      });
       return;
     }
 
-    console.log(
-      `[TVBanner] State machine timing effect for phase: ${currentPhase}`,
-    );
+    // Reads diagRef (a ref) rather than the state directly: naming
+    // currentVideoURL/loadedSource here would drag them into this effect's dep
+    // array and change when the state machine re-runs. Diagnostics must not
+    // alter behaviour. diagRef is refreshed by an effect declared above, so it
+    // is current by the time this runs.
+    dbg("SM-RUN", { ...diagRef.current });
 
     // Clear any existing timeout
-    if (phaseTimeoutRef.current) {
-      clearTimeout(phaseTimeoutRef.current);
-    }
+    clearPhaseTimeout();
 
     switch (currentPhase) {
       case "image":
         // Show image for 3 seconds, then advance
-        console.log(`[TVBanner] Setting 3 second timeout for image phase`);
-        phaseTimeoutRef.current = setTimeout(() => {
+        dbg(`Setting 3 second timeout for image phase`);
+        schedulePhase(() => {
           advancePhase();
         }, 3000);
         break;
 
       case "fadeToVideo":
         // Call advancePhase to start the fade animation and video playback
-        console.log(
-          `[TVBanner] In fadeToVideo phase - calling advancePhase to start transition`,
-        );
+        dbg(`In fadeToVideo phase - calling advancePhase to start transition`);
         advancePhase();
         break;
 
       case "video":
-        console.log(
-          `[TVBanner] Entered video phase, isVideoReady: ${isVideoReady}`,
-        );
+        dbg(`Entered video phase, isVideoReady: ${isVideoReady}`);
         // If video is ready, ensure it's playing
         if (isVideoReady && player) {
           try {
             if (player.playing === false) {
-              console.log(
-                `[TVBanner] Video is ready but not playing, starting playback`,
-              );
+              dbg(`Video is ready but not playing, starting playback`);
               player.play();
             }
             // Ensure volume is at full if fade didn't complete (only if banner is focused)
@@ -645,15 +931,13 @@ export default function TVBanner({ style }: TVBannerProps) {
             ) {
               player.volume = 1;
             }
-          } catch (error) {
-            console.log("[TVBanner] Player released during video phase");
+          } catch {
+            dbg("Player released during video phase");
           }
         }
         // Extended fallback timeout in case video doesn't end naturally (max 60 seconds)
-        phaseTimeoutRef.current = setTimeout(() => {
-          console.log(
-            `[TVBanner] Video fallback timeout reached (60s), moving to next slide`,
-          );
+        schedulePhase(() => {
+          dbg(`Video fallback timeout reached (60s), moving to next slide`);
           setCurrentPhase("fadeToImage");
           advancePhase();
         }, 60000);
@@ -671,11 +955,11 @@ export default function TVBanner({ style }: TVBannerProps) {
     }
 
     return () => {
-      if (phaseTimeoutRef.current) {
-        clearTimeout(phaseTimeoutRef.current);
-      }
+      clearPhaseTimeout();
     };
   }, [
+    clearPhaseTimeout,
+    schedulePhase,
     currentMode,
     currentBanner,
     currentPhase,
@@ -687,39 +971,28 @@ export default function TVBanner({ style }: TVBannerProps) {
     isFocused,
   ]);
 
-  // Auto-cycling effect - disabled when using state machine
-  // The state machine handles timing automatically
-  useEffect(() => {
-    // Pre-fetch first video when banner data loads and screen is focused
-    if (
-      bannerData &&
-      bannerData.length > 0 &&
-      currentBannerIndex === 0 &&
-      isFocused
-    ) {
-      setTimeout(prefetchNextVideo, 1000);
-    }
-  }, [bannerData, currentBannerIndex, prefetchNextVideo, isFocused]);
-
   // Monitor app mode transitions for TV navigation stack behavior
   useEffect(() => {
     const prevMode = prevModeRef.current;
     prevModeRef.current = currentMode;
 
-    console.log(`[TVBanner] Mode transition: ${prevMode} -> ${currentMode}`);
+    // Deliberately does NOT read isFocused: naming it here would add it to this
+    // effect's deps and change when the mode-transition cleanup runs. The FOCUS
+    // and HEARTBEAT lines already report focus.
+    dbg("MODE", { from: prevMode, to: currentMode });
 
     // Cleanup when leaving browse mode to any other mode
     if (prevMode === "browse" && currentMode !== "browse") {
-      console.log(
-        `[TVBanner] Leaving browse mode (${prevMode} -> ${currentMode}), triggering cleanup`,
+      dbg(
+        `Leaving browse mode (${prevMode} -> ${currentMode}), triggering cleanup`,
       );
       cleanupBanner();
     }
 
     // Restart state machine when entering browse mode from any other mode
     if (prevMode !== "browse" && currentMode === "browse") {
-      console.log(
-        `[TVBanner] Entering browse mode (${prevMode} -> ${currentMode}), preparing to restart state machine`,
+      dbg(
+        `Entering browse mode (${prevMode} -> ${currentMode}), preparing to restart state machine`,
       );
 
       // Reset to initial state - the state machine timing effect will handle starting
@@ -740,14 +1013,12 @@ export default function TVBanner({ style }: TVBannerProps) {
       if (player) {
         try {
           player.volume = 0;
-        } catch (error) {
-          console.log("[TVBanner] Player released during mode transition");
+        } catch {
+          dbg("Player released during mode transition");
         }
       }
 
-      console.log(
-        "[TVBanner] State machine reset complete for browse mode entry",
-      );
+      dbg("State machine reset complete for browse mode entry");
     }
   }, [
     currentMode,
@@ -766,21 +1037,38 @@ export default function TVBanner({ style }: TVBannerProps) {
   // Focus-aware state management
   useEffect(() => {
     const prevFocused = prevFocusedRef.current;
-    prevFocusedRef.current = isFocused;
+    const isRisingEdge = !prevFocused && isFocused;
 
-    console.log(`[TVBanner] Focus transition: ${prevFocused} -> ${isFocused}`);
+    // Do NOT consume a rising edge we cannot act on yet.
+    //
+    // The restart below is gated on currentMode === "browse", but focus comes
+    // back BEFORE the mode settles: dismissing the screensaver ping-pongs the
+    // mode (screensaver -> browse -> screensaver) as ScreensaverScreen unmounts
+    // and BrowseLayout/TVHomePage re-assert it. Writing this unconditionally
+    // burned the edge during that window, so the restart written for exactly
+    // this round-trip never ran. currentMode is a dep, so holding the edge means
+    // we re-evaluate the moment the mode settles.
+    if (!isRisingEdge || currentMode === "browse") {
+      prevFocusedRef.current = isFocused;
+    }
+
+    dbg("FOCUS", {
+      from: prevFocused,
+      to: isFocused,
+      mode: currentMode,
+      phase: currentPhase,
+      willRestart: isRisingEdge && currentMode === "browse",
+      // true = focus is back but the mode has not settled yet; the edge is HELD
+      // and this effect will re-run when currentMode changes.
+      edgeHeld: isRisingEdge && currentMode !== "browse",
+    });
 
     // Handle focus loss - pause state machine and video
     if (prevFocused && !isFocused) {
-      console.log(
-        "[TVBanner] Screen unfocused - pausing state machine and video",
-      );
+      dbg("Screen unfocused - pausing state machine and video");
 
       // Clear all timeouts to pause state machine
-      if (phaseTimeoutRef.current) {
-        clearTimeout(phaseTimeoutRef.current);
-        phaseTimeoutRef.current = null;
-      }
+      clearPhaseTimeout();
       if (navigationTimeoutRef.current) {
         clearTimeout(navigationTimeoutRef.current);
         navigationTimeoutRef.current = null;
@@ -794,45 +1082,69 @@ export default function TVBanner({ style }: TVBannerProps) {
       if (player) {
         try {
           if (player.playing) {
-            console.log("[TVBanner] Pausing video due to focus loss");
+            dbg("Pausing video due to focus loss");
             player.pause();
           }
           player.volume = 0;
-        } catch (error) {
-          console.log("[TVBanner] Player released during focus loss");
+        } catch {
+          dbg("Player released during focus loss");
         }
       }
     }
 
-    // Handle focus gain - resume state machine and video if appropriate
-    if (!prevFocused && isFocused && currentMode === "browse") {
-      console.log("[TVBanner] Screen focused - resuming state machine");
+    // Handle focus gain - restart the cycle from a known-good state.
+    //
+    // Deliberately a full restart rather than a mid-clip resume. Resuming
+    // depended on the player still holding a live, ready source, which is not
+    // true after a screensaver round-trip: we came back in the `video` phase
+    // with isVideoReady false, so nothing played AND the state machine armed
+    // the 60s fallback — a minute of frozen banner. Since `video` occupies
+    // most of the cycle, that was the usual outcome. Restarting from `image`
+    // costs the remainder of a clip nobody was watching (the screen was off)
+    // and always produces a fresh clip within the normal 3s image dwell.
+    if (isRisingEdge && currentMode === "browse") {
+      dbg("Screen focused - restarting banner cycle from image phase");
 
-      // Resume video if it was playing and we're in video phase
-      if (
-        player &&
-        isVideoReady &&
-        (currentPhase === "video" || currentPhase === "fadeToVideo")
-      ) {
-        console.log("[TVBanner] Resuming video playback due to focus gain");
+      clearPhaseTimeout();
+      if (player) {
         try {
-          player.play();
-          // Restore volume based on current phase (only if banner is focused)
-          if (
-            currentPhase === "video" &&
-            isBannerFocused &&
-            !isMutedDueToFocusLoss
-          ) {
-            player.volume = 1;
-          }
-        } catch (error) {
-          console.log("[TVBanner] Player released during focus gain");
+          player.pause();
+          player.volume = 0;
+        } catch {
+          dbg("Player released during focus gain");
         }
       }
 
-      // The state machine timing effect will automatically restart due to dependency changes
+      fadeBackTriggeredRef.current = false;
+      videoPositionRef.current = 0;
+      setIsVideoReady(false);
+      setVideoDuration(0);
+      setCurrentVideoURL(null);
+      imageOpacity.value = 1;
+      setCurrentPhase("image");
+
+      // Re-arm the image dwell here rather than relying on the state change
+      // above to re-trigger the state-machine effect. If focus was lost DURING
+      // the image dwell we are already in exactly this state, so every setter
+      // above hits React's bailout, nothing re-renders, that effect never
+      // re-runs — and the clearPhaseTimeout() above would have left the banner
+      // frozen for good. When the phase does change, the effect re-runs and
+      // schedulePhase() replaces this timer rather than racing it.
+      schedulePhase(() => {
+        advancePhase();
+      }, 3000);
     }
-  }, [isFocused, currentMode, player, isVideoReady, currentPhase]);
+  }, [
+    advancePhase,
+    clearPhaseTimeout,
+    imageOpacity,
+    isFocused,
+    currentMode,
+    player,
+    isVideoReady,
+    currentPhase,
+    schedulePhase,
+  ]);
 
   // Ensure state machine starts when we have banner data and are in browse mode and focused
   useEffect(() => {
@@ -845,8 +1157,8 @@ export default function TVBanner({ style }: TVBannerProps) {
       isFocused &&
       !phaseTimeoutRef.current // Don't restart if already running
     ) {
-      console.log(
-        "[TVBanner] Starting state machine: browse mode + banner data available + screen focused",
+      dbg(
+        "Starting state machine: browse mode + banner data available + screen focused",
       );
 
       // The state machine timing effect will handle the actual start
@@ -857,7 +1169,7 @@ export default function TVBanner({ style }: TVBannerProps) {
   // Cleanup timeouts on unmount
   // useEffect(() => {
   //   return () => {
-  //     console.log("[TVBanner] Component unmounting, performing cleanup");
+  //     dbg("Component unmounting, performing cleanup");
   //     cleanupBanner();
   //   };
   // }, [cleanupBanner]);
@@ -886,23 +1198,41 @@ export default function TVBanner({ style }: TVBannerProps) {
     };
   });
 
+  // Whether the (always-mounted) video layer should be visible. Replaces the
+  // old conditional mount — see the note on the VideoView below.
+  const isVideoLayerVisible =
+    !!currentVideoURL &&
+    (currentPhase === "fadeToVideo" ||
+      currentPhase === "video" ||
+      currentPhase === "fadeToImage");
+
   // Helper function to render banner content with layered video architecture
   const renderBannerContent = useCallback(
     (banner: BannerItem) => (
       <View style={styles.bannerBackground}>
-        {/* Video layer (background) - positioned absolutely behind content */}
-        {currentVideoURL &&
-          (currentPhase === "fadeToVideo" ||
-            currentPhase === "video" ||
-            currentPhase === "fadeToImage") && (
-            <VideoView
-              style={styles.videoLayer}
-              player={player}
-              allowsFullscreen={false}
-              allowsPictureInPicture={false}
-              nativeControls={false}
-            />
-          )}
+        {/* Video layer (background) - positioned absolutely behind content.
+            Mounted once for the component's lifetime and hidden with opacity,
+            NEVER unmounted per phase. expo-video's native VideoView does not
+            detach itself from its player when destroyed: OnViewDestroys only
+            calls VideoManager.unregisterVideoView, while removeListener and
+            onVideoPlayerDetachedFromView live in the `player` prop setter and
+            so never run. VideoManager keeps a strong map of player -> views,
+            so every unmounted view stayed alive, still registered as a
+            listener, and still received onTracksChanged / onVideoSourceLoaded
+            on each replaceAsync — one leaked view and PlayerView tree per
+            banner cycle, forever. */}
+        {player ? (
+          <VideoView
+            style={[
+              styles.videoLayer,
+              { opacity: isVideoLayerVisible ? 1 : 0 },
+            ]}
+            player={player}
+            fullscreenOptions={{ enable: false }}
+            allowsPictureInPicture={false}
+            nativeControls={false}
+          />
+        ) : null}
 
         {/* Image overlay with animation (for fade transitions) */}
         <Animated.View style={[styles.imageOverlay, animatedImageStyle]}>
@@ -992,8 +1322,7 @@ export default function TVBanner({ style }: TVBannerProps) {
     [
       bannerData,
       currentBannerIndex,
-      currentVideoURL,
-      currentPhase,
+      isVideoLayerVisible,
       player,
       animatedImageStyle,
       animatedContentStyle,
@@ -1036,7 +1365,7 @@ export default function TVBanner({ style }: TVBannerProps) {
     if (isBannerFocused) {
       // Banner gained focus - restore volume if it was muted due to focus loss
       if (isMutedDueToFocusLoss) {
-        console.log("[TVBanner] Banner gained focus - restoring volume");
+        dbg("Banner gained focus - restoring volume");
         setIsMutedDueToFocusLoss(false);
 
         // Determine appropriate volume based on current phase
@@ -1061,15 +1390,15 @@ export default function TVBanner({ style }: TVBannerProps) {
       if (!isMutedDueToFocusLoss) {
         try {
           if (player.volume > 0) {
-            console.log("[TVBanner] Banner lost focus - fading out volume");
+            dbg("Banner lost focus - fading out volume");
             setVolumeBeforeFocusLoss(player.volume);
             setIsMutedDueToFocusLoss(true);
 
             // Fade volume out over 500ms
             fadeVolume(0, 500);
           }
-        } catch (error) {
-          console.log("[TVBanner] Player released during banner focus loss");
+        } catch {
+          dbg("Player released during banner focus loss");
         }
       }
     }

@@ -5,16 +5,23 @@ import { StyleSheet, useTVEventHandler, Animated } from "react-native";
 import { Screensaver } from "@/src/components/TV/Screensaver";
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { useScreensaver } from "@/src/context/ScreensaverContext";
-import { useTVAppState } from "@/src/context/TVAppStateContext";
+import { useTVAppState, TVAppMode } from "@/src/context/TVAppStateContext";
 
 export default function ScreensaverScreen() {
   const router = useRouter();
   const { hideScreensaver } = useScreensaver();
-  const { setMode } = useTVAppState();
+  const { currentMode, setMode } = useTVAppState();
   const { resetActivityTimer } = useRemoteActivity();
 
   // Screen fade-in animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // The mode this screen interrupted, captured on the first render before we
+  // overwrite it, so exiting can put it back.
+  const previousModeRef = useRef<TVAppMode | null>(null);
+  if (previousModeRef.current === null && currentMode !== "screensaver") {
+    previousModeRef.current = currentMode;
+  }
 
   // Set mode to screensaver when this screen is active
   useEffect(() => {
@@ -106,8 +113,23 @@ export default function ScreensaverScreen() {
       );
       // Always hide screensaver when component unmounts
       hideScreensaver();
+
+      // Restore the mode we interrupted. NOTHING else will.
+      //
+      // `hideScreensaver()` only clears the context's visibility flag; the TV
+      // app mode is separate and this screen is the only thing that ever set it
+      // to "screensaver". The browse screens' "ensure browse mode" effects
+      // cannot recover it either: they are gated on `currentMode` in their
+      // deps, and once this screen stops re-asserting "screensaver" that value
+      // never changes again, so those effects never re-run. The app stayed in
+      // screensaver mode permanently and every mode-gated feature stayed
+      // paused — most visibly the banner state machine, which is gated on
+      // `currentMode === "browse"` and froze until the app was restarted.
+      const restoreTo = previousModeRef.current ?? "browse";
+      console.log(`[ScreensaverScreen] Restoring TV app mode to ${restoreTo}`);
+      setMode(restoreTo);
     };
-  }, [hideScreensaver]);
+  }, [hideScreensaver, setMode]);
 
   return (
     <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
