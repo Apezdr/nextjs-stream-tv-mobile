@@ -57,10 +57,10 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
 
   // Consolidated timer management
   const timersRef = useRef<{
-    screensaver: NodeJS.Timeout | null;
-    refresh: NodeJS.Timeout | null;
-    delayedRefresh: NodeJS.Timeout | null;
-    errorReset: NodeJS.Timeout | null;
+    screensaver: ReturnType<typeof setTimeout> | null;
+    refresh: ReturnType<typeof setTimeout> | null;
+    delayedRefresh: ReturnType<typeof setTimeout> | null;
+    errorReset: ReturnType<typeof setTimeout> | null;
   }>({
     screensaver: null,
     refresh: null,

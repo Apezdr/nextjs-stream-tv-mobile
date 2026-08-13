@@ -1,3 +1,4 @@
+import { type CellRendererProps } from "@react-native-tvos/virtualized-lists";
 import React, {
   memo,
   useCallback,
@@ -14,6 +15,7 @@ import {
   TVFocusGuideView,
   FlatList,
   type LayoutChangeEvent,
+  type ViewProps,
 } from "react-native";
 
 import ContentItem, {
@@ -163,10 +165,18 @@ const ContentGrid = ({
       index,
       children,
       onLayout,
-      ...props
-    }: React.ComponentProps<typeof View> & { index: number }) => (
+      onFocusCapture,
+      style,
+    }: CellRendererProps<ContentItemData>) => (
       <View
-        {...props}
+        style={style}
+        // Forwarded explicitly (rather than spreading the rest) because
+        // CellRendererProps also carries cellKey/item, which aren't View
+        // props. The cast works around the tvos types declaring this with the
+        // DOM FocusEvent instead of React Native's.
+        onFocusCapture={
+          onFocusCapture as ViewProps["onFocusCapture"] | undefined
+        }
         onLayout={(e: LayoutChangeEvent) => {
           rowOffsets.current[index] = e.nativeEvent.layout.y;
           onLayout?.(e);

@@ -39,8 +39,10 @@ export function usePlaybackPresenceTracking(
   params: WatchParams,
 ) {
   const lastUpdateTimeRef = useRef<number>(0);
-  const updateIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const pausedHeartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const updateIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pausedHeartbeatIntervalRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   const listenersRef = useRef<{ remove: () => void }[]>([]);
   const isMountedRef = useRef(true);
   const pendingUpdateRef = useRef<Promise<void> | null>(null);
@@ -60,8 +62,7 @@ export function usePlaybackPresenceTracking(
   }, []);
 
   const buildMediaMetadata = useCallback(():
-    | PlaybackUpdateRequest["mediaMetadata"]
-    | null => {
+    PlaybackUpdateRequest["mediaMetadata"] | null => {
     if (!videoData) return null;
 
     return {
@@ -246,7 +247,7 @@ export function usePlaybackPresenceTracking(
     cleanupListeners();
     cleanupInterval();
 
-    let initTimeoutId: NodeJS.Timeout;
+    let initTimeoutId: ReturnType<typeof setTimeout>;
 
     const setupTracking = () => {
       if (!isMountedRef.current || !player || !isPlayerValid(player)) return;

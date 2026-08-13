@@ -31,3 +31,5 @@ CLAUDE.md
 
 .playwright*
 .claude
+# Playwright/browser auth state — contains live session cookies, never commit
+auth.json

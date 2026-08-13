@@ -657,7 +657,11 @@ export const contentService = {
   /**
    * Search for media content
    */
-  search: async (query: string = "", limit?: number, isTVdevice: boolean = false): Promise<MediaItem[]> => {
+  search: async (
+    query: string = "",
+    limit?: number,
+    isTVdevice: boolean = false,
+  ): Promise<MediaItem[]> => {
     const endpoint = API_ENDPOINTS.CONTENT.SEARCH;
     const baseURL = enhancedApiClient.getBaseUrl();
 
@@ -682,8 +686,8 @@ export const contentService = {
 
     // The search API returns `_id` (MongoDB ObjectId) instead of `id`.
     // Normalize so downstream consumers always have `id`.
-    return raw.map((item: Record<string, unknown>) => {
-      const { _id, ...rest } = item as Record<string, unknown> & { _id?: string };
+    return raw.map((item) => {
+      const { _id, ...rest } = item as MediaItem & { _id?: string };
       return {
         ...rest,
         id: (rest.id as string | undefined) ?? _id ?? "",

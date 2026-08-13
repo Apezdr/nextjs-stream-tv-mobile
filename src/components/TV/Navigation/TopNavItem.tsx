@@ -15,8 +15,9 @@ import {
 } from "@/src/constants/TopNavConstants";
 
 // Create a TV-compatible TouchableOpacity
-interface TVTouchableProps
-  extends React.ComponentProps<typeof RNTouchableOpacity> {
+interface TVTouchableProps extends React.ComponentProps<
+  typeof RNTouchableOpacity
+> {
   isTVSelectable?: boolean;
   hasTVPreferredFocus?: boolean;
 }
@@ -31,7 +32,6 @@ interface TopNavItemProps {
   onFocus?: () => void;
   onBlur?: () => void;
 }
-
 
 function isRouteActive(route: NavigationRoute, pathname: string) {
   const routePageName = route.path.split("/").pop();
@@ -78,7 +78,7 @@ const TopNavItem: React.FC<TopNavItemProps> = ({
   const router = useRouter();
   const pathname = usePathname();
   const pathnameRef = useRef(pathname);
-  const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Animated values
   const scaleAnim = useRef(new Animated.Value(1)).current;

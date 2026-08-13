@@ -20,8 +20,9 @@ import {
 import { useAuth } from "@/src/providers/AuthProvider";
 
 // Create a TV-compatible TouchableOpacity component
-interface TVTouchableProps
-  extends React.ComponentProps<typeof RNTouchableOpacity> {
+interface TVTouchableProps extends React.ComponentProps<
+  typeof RNTouchableOpacity
+> {
   isTVSelectable?: boolean;
   hasTVPreferredFocus?: boolean;
 }
@@ -47,7 +48,9 @@ const ProfileButton: React.FC<ProfileButtonProps> = ({
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const dropdownOpacity = useRef(new Animated.Value(0)).current;
   const dropdownTranslateY = useRef(new Animated.Value(-10)).current;
-  const hideDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hideDropdownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const handlePress = useCallback(() => {
     setIsDropdownVisible(!isDropdownVisible);

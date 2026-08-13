@@ -1,5 +1,5 @@
-import { useIsFocused } from "@react-navigation/native";
 import { useQuery } from "@tanstack/react-query";
+import { useIsFocused } from "expo-router/react-navigation";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,

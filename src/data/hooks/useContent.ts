@@ -2,8 +2,8 @@
  * React hooks for content-related data fetching and state management
  * Enhanced with focus-based refresh and background refresh capability
  */
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
 import { contentService } from "@/src/data/services/contentService";
@@ -29,7 +29,9 @@ function useDebounce<T extends (...args: AppStateStatus[]) => void>(
   callback: T,
   delay: number,
 ): T {
-  const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
 
   return useCallback(
     (...args: Parameters<T>) => {
@@ -676,9 +678,8 @@ export function useTVMediaDetails(
     isLoadingEpisodes: seasonQuery.isLoading,
     // True during a background re-fetch (data already present)
     isRefreshing: showQuery.isRefetching || seasonQuery.isRefetching,
-    error: (showQuery.error?.message ||
-      seasonQuery.error?.message ||
-      null) as string | null,
+    error: (showQuery.error?.message || seasonQuery.error?.message || null) as
+      string | null,
     refetch,
     // The season the hook is currently fetching/displaying — useful for
     // components that need to highlight the correct season button without

@@ -7,11 +7,11 @@ import MobileContentCard, {
   MobileContentCardData,
 } from "@/src/components/Mobile/Cards/MobileContentCard";
 import { Colors } from "@/src/constants/Colors";
-import { useDimensions } from "@/src/hooks/useDimensions";
 import {
   useActionSheetConfig,
   ActionSheetContentData,
 } from "@/src/hooks/useActionSheetConfig";
+import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSmartInfiniteScroll } from "@/src/hooks/useSmartInfiniteScroll";
 
 interface MobileContentRowProps {
@@ -62,7 +62,8 @@ const MobileContentRow = ({
 }: MobileContentRowProps) => {
   // Single action sheet instance for the entire row
   const { generateConfig, invalidateItemStatus } = useActionSheetConfig();
-  const [selectedItem, setSelectedItem] = useState<MobileContentCardData | null>(null);
+  const [selectedItem, setSelectedItem] =
+    useState<MobileContentCardData | null>(null);
 
   const handleClose = useCallback(() => setSelectedItem(null), []);
 
@@ -76,17 +77,32 @@ const MobileContentRow = ({
       seasonNumber: selectedItem.seasonNumber,
       episodeNumber: selectedItem.episodeNumber,
       backdrop: selectedItem.backdropUrl,
-      backdropBlurhash: selectedItem.backdropBlurhash || selectedItem.thumbnailBlurhash,
+      backdropBlurhash:
+        selectedItem.backdropBlurhash || selectedItem.thumbnailBlurhash,
     };
     return generateConfig(contentData, "card", {
       onClose: handleClose,
       onPlay: (data) => {
         handleClose();
-        onPlayContent(data.id, data.mediaType, data.seasonNumber, data.episodeNumber, data.backdrop, data.backdropBlurhash);
+        onPlayContent(
+          data.id,
+          data.mediaType,
+          data.seasonNumber,
+          data.episodeNumber,
+          data.backdrop,
+          data.backdropBlurhash,
+        );
       },
       onInfo: (data) => {
         handleClose();
-        onInfoContent(data.id, data.mediaType, data.seasonNumber, data.episodeNumber, data.backdrop, data.backdropBlurhash);
+        onInfoContent(
+          data.id,
+          data.mediaType,
+          data.seasonNumber,
+          data.episodeNumber,
+          data.backdrop,
+          data.backdropBlurhash,
+        );
       },
     });
   }, [selectedItem, generateConfig, handleClose, onPlayContent, onInfoContent]);
@@ -121,10 +137,20 @@ const MobileContentRow = ({
   // explicit height for the horizontal list (required by FlashList 2.x)
   const itemHeight = useMemo(() => {
     const columns = isLandscape
-      ? cardSize === "small" ? 5 : cardSize === "large" ? 3.5 : 4
-      : cardSize === "small" ? 3 : cardSize === "large" ? 2 : 2.5;
+      ? cardSize === "small"
+        ? 5
+        : cardSize === "large"
+          ? 3.5
+          : 4
+      : cardSize === "small"
+        ? 3
+        : cardSize === "large"
+          ? 2
+          : 2.5;
     const padding = 16;
-    const cardWidth = Math.floor((screenWidth - padding * (columns + 1)) / columns);
+    const cardWidth = Math.floor(
+      (screenWidth - padding * (columns + 1)) / columns,
+    );
     return Math.floor(cardWidth * 1.5);
   }, [screenWidth, isLandscape, cardSize]);
 
@@ -162,7 +188,8 @@ const MobileContentRow = ({
   }, [isFetchingNextPage]);
 
   const keyExtractor = useCallback(
-    (item: MobileContentCardData, index: number) => `${title}-${item.id}-${index}`,
+    (item: MobileContentCardData, index: number) =>
+      `${title}-${item.id}-${index}`,
     [title],
   );
 

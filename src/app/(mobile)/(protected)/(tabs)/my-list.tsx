@@ -1,12 +1,7 @@
-import { useIsFocused } from "@react-navigation/native";
 import { useQuery } from "@tanstack/react-query";
+import { useIsFocused } from "expo-router/react-navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
@@ -25,7 +20,9 @@ import { navigationHelper } from "@/src/utils/navigationHelper";
 
 const WATCHLIST_POLL_INTERVAL_MS = 5000;
 
-const transformMediaItems = (items: MediaItem[] = []): MobileContentCardData[] =>
+const transformMediaItems = (
+  items: MediaItem[] = [],
+): MobileContentCardData[] =>
   items.map((item) => ({
     id: item.id,
     title: item.title,

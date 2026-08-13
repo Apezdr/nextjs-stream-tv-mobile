@@ -204,7 +204,7 @@ const GlobalBackdrop = forwardRef<BackdropComponentRef, GlobalBackdropProps>(
     // Animated styles using useAnimatedStyle
     const backdropAnimatedStyle = useAnimatedStyle(() => {
       return {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         opacity: fadeAnim.value,
       };
     });
@@ -271,15 +271,15 @@ GlobalBackdrop.displayName = "GlobalBackdrop";
 
 const styles = StyleSheet.create({
   backdropImage: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   centerContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
   },
   container: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 0, // behind page content
     backgroundColor: "rgba(0, 0, 0, 0.4)",
   },
@@ -293,7 +293,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 2,
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0, 0, 0, 0.4)",
   },
   spinner: {

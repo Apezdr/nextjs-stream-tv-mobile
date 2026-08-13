@@ -1,12 +1,12 @@
 // app/_layout.tsx
 import "expo-dev-client";
 import "react-native-gesture-handler";
+import { Stack } from "expo-router";
 import {
   ThemeProvider,
   DefaultTheme,
   DarkTheme,
-} from "@react-navigation/native";
-import { Stack } from "expo-router";
+} from "expo-router/react-navigation";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";

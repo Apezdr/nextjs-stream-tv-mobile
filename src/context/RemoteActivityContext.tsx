@@ -6,8 +6,9 @@ import React, {
   useRef,
   ReactNode,
   useCallback,
+  useMemo,
 } from "react";
-import { useTVEventHandler } from "react-native";
+import { Platform, useTVEventHandler, type HWEvent } from "react-native";
 
 interface RemoteActivityContextType {
   isRemoteActive: boolean;
@@ -27,8 +28,10 @@ const RemoteActivityContext = createContext<RemoteActivityContextType | null>(
 
 // Timeout for hiding controls after no activity
 const REMOTE_ACTIVITY_TIMEOUT = 5000; // 5 seconds
-// Shorter timeout when user is actively interacting (holding/seeking)
-const CONTINUOUS_ACTIVITY_TIMEOUT = 500; // 500ms
+
+// Per-key logging is off by default: the handler runs on key-down, key-up and
+// every auto-repeat, and console calls are expensive in a Metro-attached build.
+const DEBUG_REMOTE_ACTIVITY = false;
 
 interface RemoteActivityProviderProps {
   children: ReactNode;
@@ -41,67 +44,76 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
 }) => {
   const [isRemoteActive, setIsRemoteActive] = useState(true);
   const [isUserInteracting, setIsUserInteracting] = useState(false);
-  const activityTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const continuousTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref mirror of isUserInteracting. This is the fix for the original
+  // stuck-overlay bug: every guard that decides whether to (re)schedule the
+  // hide MUST read the ref, because useTVEventHandler's callback can hold a
+  // closure from before the interaction state changed.
+  const isUserInteractingRef = useRef(false);
   const playPauseHandlerRef = useRef<(() => void) | null>(null);
   const seekHandlerRef = useRef<((seconds: number) => void) | null>(null);
   const timeout = customTimeout || REMOTE_ACTIVITY_TIMEOUT;
+  const timeoutRef = useRef(timeout);
+  timeoutRef.current = timeout;
 
-  // Clear all timers
-  const clearTimers = useCallback(() => {
+  // The pending hide lives in a ref, NOT in state. This provider wraps the
+  // whole TV app and its callbacks run on every remote key event including
+  // auto-repeat, so any state write here would re-render the app root (and,
+  // because useTVEventHandler keys its effect on the handler identity, tear
+  // down and re-add the native key listener) many times a second while
+  // navigating. Writing `setIsRemoteActive(true)` when it is already true hits
+  // React's eager bailout and costs nothing.
+  const activityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleHide = useCallback(() => {
     if (activityTimerRef.current) {
       clearTimeout(activityTimerRef.current);
       activityTimerRef.current = null;
     }
-    if (continuousTimerRef.current) {
-      clearInterval(continuousTimerRef.current);
-      continuousTimerRef.current = null;
-    }
+    // Read the REF, never the state — a stale `false` here is what previously
+    // left the overlay pinned for the rest of the session.
+    if (isUserInteractingRef.current) return;
+    activityTimerRef.current = setTimeout(() => {
+      activityTimerRef.current = null;
+      setIsRemoteActive(false);
+    }, timeoutRef.current);
   }, []);
 
   // Reset the activity timer (for single presses)
   const resetActivityTimer = useCallback(() => {
-    clearTimers();
-
     setIsRemoteActive(true);
-
-    // Don't set timeout if user is continuously interacting
-    if (!isUserInteracting) {
-      activityTimerRef.current = setTimeout(() => {
-        setIsRemoteActive(false);
-        console.log("[RemoteActivity] Remote inactive due to timeout");
-      }, timeout);
-    }
-  }, [clearTimers, timeout, isUserInteracting]);
+    scheduleHide();
+  }, [scheduleHide]);
 
   // Start continuous activity (for holds/seeks)
   const startContinuousActivity = useCallback(() => {
-    console.log("[RemoteActivity] Starting continuous activity");
-    clearTimers();
-
-    setIsRemoteActive(true);
+    isUserInteractingRef.current = true;
     setIsUserInteracting(true);
-
-    // Keep activity alive with shorter checks while interacting
-    continuousTimerRef.current = setInterval(() => {
-      console.log("[RemoteActivity] Continuous activity pulse");
-      setIsRemoteActive(true);
-    }, CONTINUOUS_ACTIVITY_TIMEOUT);
-  }, [clearTimers]);
+    setIsRemoteActive(true);
+    if (activityTimerRef.current) {
+      clearTimeout(activityTimerRef.current);
+      activityTimerRef.current = null;
+    }
+  }, []);
 
   // Stop continuous activity
   const stopContinuousActivity = useCallback(() => {
-    console.log("[RemoteActivity] Stopping continuous activity");
+    isUserInteractingRef.current = false;
     setIsUserInteracting(false);
+    setIsRemoteActive(true);
+    scheduleHide();
+  }, [scheduleHide]);
 
-    if (continuousTimerRef.current) {
-      clearInterval(continuousTimerRef.current);
-      continuousTimerRef.current = null;
-    }
-
-    // Start normal timeout after continuous activity ends
-    resetActivityTimer();
-  }, [resetActivityTimer]);
+  // Arm the initial hide, and guarantee the pending timer dies with the
+  // provider.
+  useEffect(() => {
+    scheduleHide();
+    return () => {
+      if (activityTimerRef.current) {
+        clearTimeout(activityTimerRef.current);
+        activityTimerRef.current = null;
+      }
+    };
+  }, [scheduleHide]);
 
   // Play/pause handler registration
   const registerPlayPauseHandler = useCallback((handler: () => void) => {
@@ -124,80 +136,106 @@ export const RemoteActivityProvider: React.FC<RemoteActivityProviderProps> = ({
     seekHandlerRef.current = null;
   }, []);
 
-  // Listen for TV remote control events using React Native's useTVEventHandler
-  useTVEventHandler((event) => {
-    if (!event) return;
+  // Listen for TV remote control events using React Native's useTVEventHandler.
+  // The callback is memoized with stable deps on purpose: useTVEventHandler
+  // keys its effect on the handler identity, so an inline arrow would remove
+  // and re-add the native key subscription on every provider render.
+  const handleTVEvent = useCallback(
+    (event: HWEvent) => {
+      if (!event) return;
 
-    const { eventType, eventKeyAction } = event;
+      const { eventType, eventKeyAction } = event;
 
-    console.log(
-      "[RemoteActivity] ✅ PROCESSING event:",
-      eventType,
-      eventKeyAction,
-    );
-    // Reset activity timer for most events
-    resetActivityTimer();
-
-    // Handle play/pause event (fires on key up = 1)
-    if (eventType === "playPause" && eventKeyAction === 1) {
-      if (playPauseHandlerRef.current) {
-        playPauseHandlerRef.current();
+      // Gated: this fires on key-down, key-up AND every OS auto-repeat while a
+      // direction is held. In a dev build each console call is formatted and
+      // pushed over the Metro websocket synchronously on the JS thread.
+      if (DEBUG_REMOTE_ACTIVITY) {
+        console.log(
+          "[RemoteActivity] PROCESSING event:",
+          eventType,
+          eventKeyAction,
+        );
       }
-    }
+      // Reset activity timer for most events
+      resetActivityTimer();
 
-    // Handle rewind/fast-forward events (skip 10s on key up)
-    if (eventType === "rewind" && eventKeyAction === 1) {
-      if (seekHandlerRef.current) {
-        seekHandlerRef.current(-10);
-      }
-    }
-    if (eventType === "fastForward" && eventKeyAction === 1) {
-      if (seekHandlerRef.current) {
-        seekHandlerRef.current(10);
-      }
-    }
-
-    // Handle long press events (seeking)
-    if (eventType === "longLeft" || eventType === "longRight") {
-      if (eventKeyAction === 0) {
-        // Long press started
-        if (!isUserInteracting) {
-          startContinuousActivity();
-        }
-      } else {
-        // Long press ended
-        if (isUserInteracting) {
-          stopContinuousActivity();
+      // Handle play/pause event (fires on key up = 1).
+      //
+      // Android only: expo-video 57 builds a media3 MediaSession for every
+      // player unconditionally (VideoPlayer.kt — expo-video 3.x, on SDK 54,
+      // created none), and that session already claims
+      // KEYCODE_MEDIA_PLAY_PAUSE and toggles ExoPlayer natively. Handling it
+      // here as well toggled twice, so the remote's play/pause button paused
+      // and instantly resumed. Apple has no equivalent session for the Siri
+      // Remote's button, so tvOS still needs the JS path.
+      if (
+        eventType === "playPause" &&
+        eventKeyAction === 1 &&
+        Platform.OS !== "android"
+      ) {
+        if (playPauseHandlerRef.current) {
+          playPauseHandlerRef.current();
         }
       }
-    }
-  });
 
-  // Initial activity setup
-  useEffect(() => {
-    resetActivityTimer();
+      // Handle rewind/fast-forward events (skip 10s on key up)
+      if (eventType === "rewind" && eventKeyAction === 1) {
+        if (seekHandlerRef.current) {
+          seekHandlerRef.current(-10);
+        }
+      }
+      if (eventType === "fastForward" && eventKeyAction === 1) {
+        if (seekHandlerRef.current) {
+          seekHandlerRef.current(10);
+        }
+      }
 
-    return () => {
-      clearTimers();
-    };
-  }, [resetActivityTimer, clearTimers]);
+      // Handle long press events (seeking)
+      if (eventType === "longLeft" || eventType === "longRight") {
+        if (eventKeyAction === 0) {
+          // Long press started
+          if (!isUserInteractingRef.current) {
+            startContinuousActivity();
+          }
+        } else {
+          // Long press ended
+          if (isUserInteractingRef.current) {
+            stopContinuousActivity();
+          }
+        }
+      }
+    },
+    [resetActivityTimer, startContinuousActivity, stopContinuousActivity],
+  );
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => clearTimers();
-  }, [clearTimers]);
+  useTVEventHandler(handleTVEvent);
 
-  const value = {
-    isRemoteActive,
-    isUserInteracting,
-    resetActivityTimer,
-    startContinuousActivity,
-    stopContinuousActivity,
-    registerPlayPauseHandler,
-    unregisterPlayPauseHandler,
-    registerSeekHandler,
-    unregisterSeekHandler,
-  };
+  // Memoized so a provider re-render (only when the flags actually change now)
+  // doesn't cascade into every useRemoteActivity consumer.
+  const value = useMemo(
+    () => ({
+      isRemoteActive,
+      isUserInteracting,
+      resetActivityTimer,
+      startContinuousActivity,
+      stopContinuousActivity,
+      registerPlayPauseHandler,
+      unregisterPlayPauseHandler,
+      registerSeekHandler,
+      unregisterSeekHandler,
+    }),
+    [
+      isRemoteActive,
+      isUserInteracting,
+      resetActivityTimer,
+      startContinuousActivity,
+      stopContinuousActivity,
+      registerPlayPauseHandler,
+      unregisterPlayPauseHandler,
+      registerSeekHandler,
+      unregisterSeekHandler,
+    ],
+  );
 
   return (
     <RemoteActivityContext.Provider value={value}>

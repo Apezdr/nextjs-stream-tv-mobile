@@ -2,7 +2,7 @@
  * Extracted movies page logic for code-splitting
  * Handles TV navigation and data management
  */
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "expo-router/react-navigation";
 import {
   useCallback,
   useEffect,

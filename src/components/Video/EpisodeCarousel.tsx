@@ -55,8 +55,12 @@ const EpisodeCarousel = React.memo(
     onExpandedChange,
   }: EpisodeCarouselProps) {
     const scrollViewRef = useRef<ScrollView>(null);
-    const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const collapseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+      null,
+    );
+    const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+      null,
+    );
     const isScrollingRef = useRef(false);
     const currentEpisodeRef = useRef<View>(null);
 

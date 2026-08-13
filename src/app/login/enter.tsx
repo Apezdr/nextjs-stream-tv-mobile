@@ -36,6 +36,7 @@ export default function EnterScreen() {
       const targetRoute = Platform.isTV ? "/login/qr" : "/login/choose";
       router.push(targetRoute);
     }
+    return success;
   }, [actions, router]);
 
   return (

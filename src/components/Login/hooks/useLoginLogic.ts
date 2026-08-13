@@ -135,8 +135,7 @@ export function useLoginLogic(
       }
 
       const data = (await response.json()) as
-        | { providers?: Provider[] }
-        | Provider[];
+        { providers?: Provider[] } | Provider[];
 
       const providerList = Array.isArray(data)
         ? data

@@ -177,7 +177,9 @@ export const TVAppStateProvider: React.FC<TVAppStateProviderProps> = ({
   }, []);
 
   // Player state update with throttling to reduce frequency
-  const updatePlayerStateRef = useRef<NodeJS.Timeout | null>(null);
+  const updatePlayerStateRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const updatePlayerState = useCallback((state: Partial<VideoPlayerState>) => {
     // Clear any pending update
     if (updatePlayerStateRef.current) {

@@ -207,7 +207,7 @@ const GridToggleButton = ({
 export default function SearchPage() {
   // Search query state
   const [searchQuery, setSearchQuery] = useState("");
-  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
   // Grid layout state (persisted)
@@ -266,7 +266,11 @@ export default function SearchPage() {
   } = useQuery({
     queryKey: ["search", debouncedQuery],
     queryFn: () =>
-      contentService.search(debouncedQuery, debouncedQuery ? undefined : 30, true),
+      contentService.search(
+        debouncedQuery,
+        debouncedQuery ? undefined : 30,
+        true,
+      ),
     enabled: true,
   });
 

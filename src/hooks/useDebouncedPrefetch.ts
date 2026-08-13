@@ -13,7 +13,7 @@ export function useDebouncedPrefetch(
   options: UseDebouncedPrefetchOptions = {},
 ) {
   const { delay = 150, immediate = false } = options;
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const immediateRef = useRef(immediate);
 
   const debouncedCallback = useCallback(() => {

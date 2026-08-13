@@ -73,9 +73,7 @@ export function useSmartInfiniteScroll({
         event.nativeEvent;
 
       const offset = horizontal ? contentOffset.x : contentOffset.y;
-      const contentLength = horizontal
-        ? contentSize.width
-        : contentSize.height;
+      const contentLength = horizontal ? contentSize.width : contentSize.height;
       const viewLength = horizontal
         ? layoutMeasurement.width
         : layoutMeasurement.height;

@@ -42,7 +42,7 @@ interface BackdropState {
   renderCount: number;
 
   // Internal state for managing async operations
-  _hideTimeoutId: NodeJS.Timeout | null;
+  _hideTimeoutId: ReturnType<typeof setTimeout> | null;
 }
 
 // Backdrop actions interface

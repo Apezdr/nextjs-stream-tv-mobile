@@ -113,9 +113,13 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
       [],
     );
     const [isSeeking, setIsSeeking] = useState(false);
+    // Ref mirror of isSeeking: stopScrub can run from a useTVEventHandler
+    // closure that captured a stale isSeeking, which would skip the cleanup
+    // below and leave the parent's interaction state stuck.
+    const isSeekingRef = useRef(false);
     const [seekTime, setSeekTime] = useState(currentTime);
-    const holdTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const scrubIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const holdTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const scrubIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [isHolding, setIsHolding] = useState(false);
     const seekTimeRef = useRef(currentTime);
 
@@ -128,7 +132,7 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
     );
     // track when scrub began
     const scrubStartTimeRef = useRef<number | null>(null);
-    const skipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // acceleration settings:
     const INTERVAL_MS = 100; // tick every 100ms
@@ -190,6 +194,7 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
       if (isPlaying) onTogglePlay?.();
       scrubStartTimeRef.current = Date.now();
       setIsHolding(true);
+      isSeekingRef.current = true;
       setIsSeeking(true);
       setScrubDirection(direction);
       onSeekStart?.();
@@ -233,14 +238,19 @@ const SeekBar = React.forwardRef<SeekBarRef, SeekBarProps>(
         holdTimeoutRef.current = null;
       }
 
-      if (isSeeking) {
+      if (isSeekingRef.current) {
+        isSeekingRef.current = false;
         // Apply the final seek position
         onSeek(seekTimeRef.current);
         setIsSeeking(false);
         onSeekEnd?.();
-        onStopSeeking?.();
-        stopContinuousActivity();
       }
+
+      // Always run these, even when the guard above was already consumed:
+      // both are idempotent, and a start/stop pairing dropped here is what
+      // pinned the overlay visible for the rest of the session.
+      onStopSeeking?.();
+      stopContinuousActivity();
     };
 
     // Handle quick skip using dedicated seekBy function

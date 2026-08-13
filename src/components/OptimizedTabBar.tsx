@@ -1,6 +1,9 @@
 // src/components/OptimizedTabBar.tsx
-import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
+// expo-router vendors its own copy of the bottom-tabs types; importing from
+// @react-navigation/bottom-tabs yields a structurally different (and
+// incompatible) BottomTabBarProps than the one <Tabs> actually passes.
 import { BlurView } from "expo-blur";
+import type { BottomTabBarProps } from "expo-router/js-tabs";
 import { useEffect } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {

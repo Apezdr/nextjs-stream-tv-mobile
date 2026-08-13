@@ -98,8 +98,12 @@ export const Screensaver: React.FC = () => {
   const [selectedButtonIndex, setSelectedButtonIndex] = useState(0);
   const [showButtons, setShowButtons] = useState(false);
   const [isUserInteracting, setIsUserInteracting] = useState(false);
-  const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const buttonHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const interactionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const buttonHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Instruction text positioning for burn-in prevention
   const [instructionPosition, setInstructionPosition] =
@@ -109,8 +113,8 @@ export const Screensaver: React.FC = () => {
   const [displayedContent, setDisplayedContent] =
     useState<ScreensaverResponse | null>(null);
   const lastSwap = useRef(Date.now());
-  const fadeInTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const fadeOutTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const fadeInTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstLoadRef = useRef<boolean>(true);
 
   // Transition pause state for user interaction
@@ -121,7 +125,7 @@ export const Screensaver: React.FC = () => {
   const contentOpacity = useSharedValue(0);
   const backdropScale = useSharedValue(1);
   const dimOpacity = useSharedValue(0);
-  const dimTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const dimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const buttonsOpacity = useSharedValue(0);
 
   // Debug logging to track state changes
@@ -520,11 +524,7 @@ export const Screensaver: React.FC = () => {
   const getPositionStyles = useMemo(() => {
     // Define exact string literals for flex properties to satisfy TypeScript
     type FlexAlign =
-      | "flex-start"
-      | "flex-end"
-      | "center"
-      | "stretch"
-      | "baseline";
+      "flex-start" | "flex-end" | "center" | "stretch" | "baseline";
     type FlexJustify =
       | "flex-start"
       | "flex-end"
@@ -1143,7 +1143,7 @@ export const Screensaver: React.FC = () => {
               placeholderContentFit="cover"
               contentFit="cover"
               transition={500}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
           </Reanimated.View>
 
@@ -1328,7 +1328,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.1)",
   },
 
-  backdrop: { ...StyleSheet.absoluteFillObject },
+  backdrop: { ...StyleSheet.absoluteFill },
 
   buttonIcon: {
     fontSize: 16,
@@ -1372,7 +1372,7 @@ const styles = StyleSheet.create({
   contentContainer: { alignItems: "center", flex: 1, padding: 20, zIndex: 2 },
 
   dimOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "black",
     zIndex: 9999,
   },

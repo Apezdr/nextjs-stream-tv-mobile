@@ -60,7 +60,7 @@ export default function MobileBanner({
   } = useBanner();
 
   const [currentBannerIndex, setCurrentBannerIndex] = useState(0);
-  const autoScrollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Animation values for enhanced transitions
   const bannerOpacity = useSharedValue(1);

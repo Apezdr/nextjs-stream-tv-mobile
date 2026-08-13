@@ -2,7 +2,7 @@
  * Extracted TV shows page logic for code-splitting
  * Handles TV navigation and data management
  */
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "expo-router/react-navigation";
 import {
   useCallback,
   useEffect,
@@ -76,8 +76,7 @@ export function useShowsPageLogic(initialViewMode: ShowsViewMode = "all") {
 
   // Flatten paginated all-shows data
   const allShowsItems = useMemo(
-    () =>
-      allShowsData?.pages.flatMap((page) => page?.currentItems || []) ?? [],
+    () => allShowsData?.pages.flatMap((page) => page?.currentItems || []) ?? [],
     [allShowsData],
   );
 

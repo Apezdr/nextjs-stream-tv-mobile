@@ -32,10 +32,7 @@ export function extractYouTubeVideoId(url: string): string | null {
 export function getYouTubeThumbnailUrl(
   videoId: string,
   quality:
-    | "maxresdefault"
-    | "hqdefault"
-    | "mqdefault"
-    | "sddefault" = "maxresdefault",
+    "maxresdefault" | "hqdefault" | "mqdefault" | "sddefault" = "maxresdefault",
 ): string {
   return `https://img.youtube.com/vi/${videoId}/${quality}.jpg`;
 }

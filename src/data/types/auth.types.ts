@@ -32,10 +32,7 @@ export interface DeviceTokenSuccess {
 
 export interface DeviceTokenError {
   error:
-    | "authorization_pending"
-    | "slow_down"
-    | "access_denied"
-    | "expired_token";
+    "authorization_pending" | "slow_down" | "access_denied" | "expired_token";
 }
 
 export interface GetSessionResponse {

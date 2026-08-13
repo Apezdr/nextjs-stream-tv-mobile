@@ -5,11 +5,7 @@
  */
 
 export type ClientErrorCategory =
-  | "playback"
-  | "network"
-  | "auth"
-  | "crash"
-  | "other";
+  "playback" | "network" | "auth" | "crash" | "other";
 
 export type ClientErrorSeverity = "fatal" | "error" | "warning";
 

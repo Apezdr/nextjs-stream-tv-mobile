@@ -1,0 +1,239 @@
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
+index 65f16a5..cd5db7b 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
+@@ -153,6 +153,11 @@ class VideoModule : Module() {
+           ref.audioTracks.availableAudioTracks
+         }
+ 
++      Property("isAudioSelectionAutomatic")
++        .get { ref: VideoPlayer ->
++          ref.audioTracks.isAutomaticSelection
++        }
++
+       Property("audioTrack")
+         .get { ref: VideoPlayer ->
+           ref.audioTracks.currentAudioTrack
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
+index 8bae522..0d3c930 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
+@@ -128,9 +128,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+   var duration = 0f
+   var isLive = false
+ 
++  // Number of volume writes posted to the main queue but not yet applied to
++  // ExoPlayer. Used to suppress the onVolumeChanged echo below while our own
++  // writes are still in flight.
++  private var pendingVolumeWrites = 0
++
+   var volume: Float by IgnoreSameSet(1f) { new: Float, old: Float ->
++    pendingVolumeWrites++
+     appContext.mainQueue.launch {
+       player.volume = if (muted) 0f else new
++      pendingVolumeWrites--
+     }
+     userVolume = volume
+     sendEvent(PlayerEvent.VolumeChanged(new, old))
+@@ -319,7 +326,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+     }
+ 
+     override fun onVolumeChanged(volume: Float) {
+-      if (!muted) {
++      // Only accept a volume reported BY the player when we have no write of
++      // our own still queued. Without this guard, two different JS-set volumes
++      // in flight (trivially produced by any timer-driven fade) make this echo
++      // and the setter above chase each other: each callback finds the backing
++      // field holding the other value, writes it, and posts another main-queue
++      // message. One message is dequeued and one enqueued every iteration, so
++      // it never converges — the main looper (which is also ExoPlayer's
++      // application looper) never idles, the audio sink starves, and playback
++      // audibly distorts.
++      if (!muted && pendingVolumeWrites == 0) {
+         this@VideoPlayer.volume = volume
+       }
+     }
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt
+index fbccab6..98d3215 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt
+@@ -61,7 +61,7 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+ 
+         if (MimeTypes.isAudio(format.sampleMimeType)) {
+           formatsToGroups[format] = group.mediaTrackGroup to i
+-          val track = AudioTrack.fromFormat(format) ?: continue
++          val track = AudioTrack.fromFormat(format, group.isTrackSupported(i)) ?: continue
+           availableAudioTracks.add(track)
+         }
+       }
+@@ -78,8 +78,11 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+       newParameters = newParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
+     }
+     if (audioTrack == null) {
++      // Assigning null returns the player to AUTOMATIC audio selection rather
++      // than muting it: the overrides were already cleared above, so enabling
++      // the track type leaves the capability-aware default selector in charge.
+       player.trackSelectionParameters = newParameters
+-      setAudioTracksEnabled(false)
++      setAudioTracksEnabled(true)
+       currentOverride = null
+       return
+     }
+@@ -121,6 +124,27 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+       return@let null
+     }
+ 
+-    return overriddenFormat ?: preferredFormat
++    // Fall back to the format the selector actually chose. Without this the
++    // player reports a null audioTrack for the whole time it is on automatic
++    // selection, even though audio is playing.
++    return overriddenFormat ?: preferredFormat ?: findActivelySelectedAudioFormat()
+   }
++
++  private fun findActivelySelectedAudioFormat(): Format? {
++    val tracks = videoPlayer?.player?.currentTracks ?: return null
++    for (group in tracks.groups) {
++      if (group.type != C.TRACK_TYPE_AUDIO) continue
++      for (i in 0..<group.length) {
++        if (group.isTrackSelected(i)) {
++          return group.getTrackFormat(i)
++        }
++      }
++    }
++    return null
++  }
++
++  // True while no explicit override is in force, i.e. the player is choosing
++  // the audio track itself.
++  val isAutomaticSelection: Boolean
++    get() = currentOverride == null
+ }
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt
+index 28afe31..3e49ca2 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt
+@@ -48,10 +48,13 @@ class AudioTrack(
+   @Field val label: String?,
+   @Field val name: String?,
+   @Field val isDefault: Boolean,
+-  @Field val autoSelect: Boolean
++  @Field val autoSelect: Boolean,
++  @Field val isSupported: Boolean = true,
++  @Field val channelCount: Int? = null,
++  @Field val sampleMimeType: String? = null
+ ) : Record, Serializable {
+   companion object {
+-    fun fromFormat(format: Format?): AudioTrack? {
++    fun fromFormat(format: Format?, isSupported: Boolean = true): AudioTrack? {
+       format ?: return null
+       val id = format.id ?: return null
+       val language = format.language
+@@ -66,7 +69,10 @@ class AudioTrack(
+         label = label,
+         name = name,
+         isDefault = isDefault,
+-        autoSelect = autoSelect
++        autoSelect = autoSelect,
++        isSupported = isSupported,
++        channelCount = format.channelCount.takeIf { it != Format.NO_VALUE },
++        sampleMimeType = format.sampleMimeType
+       )
+     }
+   }
+diff --git a/node_modules/expo-video/build/VideoPlayer.types.d.ts b/node_modules/expo-video/build/VideoPlayer.types.d.ts
+index 8acf5e5..60e3c86 100644
+--- a/node_modules/expo-video/build/VideoPlayer.types.d.ts
++++ b/node_modules/expo-video/build/VideoPlayer.types.d.ts
+@@ -159,11 +159,22 @@ export declare class VideoPlayer extends SharedObject<VideoPlayerEvents> {
+     /**
+      * Specifies the audio track currently played by the player. `null` when no audio is played.
+      *
++     * Assigning `null` returns the player to automatic (capability-aware)
++     * audio selection.
++     *
+      * @default null
+      * @platform android
+      * @platform ios
+      */
+     audioTrack: AudioTrack | null;
++    /**
++     * Whether the player is choosing the audio track itself, as opposed to
++     * honouring an explicit selection.
++     *
++     * @platform android
++     * @platform ios
++     */
++    readonly isAudioSelectionAutomatic: boolean;
+     /**
+      * An array of audio tracks available for the current video.
+      *
+@@ -624,6 +635,21 @@ export type AudioTrack = {
+      * @platform ios
+      */
+     autoSelect?: boolean;
++    /**
++     * Whether the device has a decoder for this track.
++     * @platform android
++     */
++    isSupported?: boolean;
++    /**
++     * Number of audio channels, for example 2 for stereo or 6 for 5.1.
++     * @platform android
++     */
++    channelCount?: number | null;
++    /**
++     * Sample MIME type, for example `audio/mp4a-latm`, `audio/ac3`, `audio/eac3`.
++     * @platform android
++     */
++    sampleMimeType?: string | null;
+ };
+ /**
+  * Determines the time that the actual position seeked to may precede or exceed the requested seek position.
+diff --git a/node_modules/expo-video/ios/VideoModule.swift b/node_modules/expo-video/ios/VideoModule.swift
+index 2bf2f75..25e8dcf 100644
+--- a/node_modules/expo-video/ios/VideoModule.swift
++++ b/node_modules/expo-video/ios/VideoModule.swift
+@@ -301,6 +301,10 @@ public final class VideoModule: Module {
+         return player.audioTracks.availableAudioTracks
+       }
+ 
++      Property("isAudioSelectionAutomatic") { player -> Bool in
++        return player.audioTracks.isAutomaticSelection
++      }
++
+       Property("audioTrack") { player -> AudioTrack? in
+         return player.audioTracks.currentAudioTrack
+       }
+diff --git a/node_modules/expo-video/ios/VideoPlayerAudioTracks.swift b/node_modules/expo-video/ios/VideoPlayerAudioTracks.swift
+index 9f2c63c..2bde036 100644
+--- a/node_modules/expo-video/ios/VideoPlayerAudioTracks.swift
++++ b/node_modules/expo-video/ios/VideoPlayerAudioTracks.swift
+@@ -5,6 +5,9 @@ class VideoPlayerAudioTracks {
+   weak var owner: VideoPlayer?
+   private(set) var availableAudioTracks: [AudioTrack] = []
+   private(set) var currentAudioTrack: AudioTrack?
++  // True while no explicit selection is in force, i.e. AVFoundation is
++  // choosing the audio option itself.
++  private(set) var isAutomaticSelection = true
+ 
+   init (owner: VideoPlayer) {
+     self.owner = owner
+@@ -43,9 +46,17 @@ class VideoPlayerAudioTracks {
+     }
+ 
+     if let group = currentItem.asset.mediaSelectionGroup(forMediaCharacteristic: .audible) {
++      // Passing nil returns the item to AUTOMATIC selection rather than
++      // deselecting audio, so the app can offer a working "Auto" option.
++      guard let audioTrack else {
++        isAutomaticSelection = true
++        currentItem.selectMediaOptionAutomatically(in: group)
++        return
++      }
+       let option = group.options.first {
+-        $0.displayName == audioTrack?.label && $0.locale?.identifier == audioTrack?.language
++        $0.displayName == audioTrack.label && $0.locale?.identifier == audioTrack.language
+       }
++      isAutomaticSelection = false
+       currentItem.select(option, in: group)
+     }
+   }

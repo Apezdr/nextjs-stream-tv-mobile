@@ -11,7 +11,11 @@ export function useAutoUpdates() {
   const isCheckingRef = useRef(false);
 
   useEffect(() => {
-    if (!Updates.isEnabled) return;
+    // `isEnabled` only reports that updates are CONFIGURED (the updates URL is
+    // present in app.json), which is still true in a development build — where
+    // checkForUpdateAsync() always rejects. __DEV__ is what actually
+    // distinguishes the runtimes that can serve an update.
+    if (__DEV__ || !Updates.isEnabled) return;
 
     const checkAndApplyUpdate = async () => {
       if (isCheckingRef.current) return;

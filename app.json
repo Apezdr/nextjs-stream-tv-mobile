@@ -47,7 +47,6 @@
         }
       ],
       "./enableLargeHeap",
-      "./fixHermesCommand",
       "./withRemovePortraitOrientation",
       [
         "react-native-edge-to-edge",
@@ -57,18 +56,15 @@
             "enforceNavigationBarContrast": false
           }
         }
-      ]
+      ],
+      "expo-image",
+      "expo-status-bar"
     ],
     "android": {
-      "edgeToEdgeEnabled": true,
       "icon": "./src/assets/icons/app-icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/icons/adaptive-foreground.png",
         "backgroundImage": "./src/assets/icons/adaptive-background.png"
-      },
-      "splash": {
-        "image": "./src/assets/icons/splash.png",
-        "backgroundColor": "#000000"
       },
       "package": "com.anonymous.nextjsstreamtvmobile",
       "intentFilters": [
@@ -89,15 +85,11 @@
     },
     "ios": {
       "icon": "./src/assets/icons/app-icon.png",
-      "splash": {
-        "image": "./src/assets/icons/splash.png"
-      },
       "bundleIdentifier": "com.anonymous.nextjsstreamtvmobile"
     },
     "experiments": {
       "typedRoutes": true
     },
-    "newArchEnabled": true,
     "runtimeVersion": {
       "policy": "fingerprint"
     },

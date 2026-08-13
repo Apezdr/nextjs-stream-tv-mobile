@@ -1,32 +1,29 @@
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
+
 import { useAuth } from "@/src/providers/AuthProvider";
 
 export default function ProfilePage() {
   const { signOut, user } = useAuth();
 
   const handleLogout = () => {
-    Alert.alert(
-      "Logout",
-      "Are you sure you want to logout?",
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "Logout",
-          style: "destructive",
-          onPress: () => signOut(),
-        },
-      ]
-    );
+    Alert.alert("Logout", "Are you sure you want to logout?", [
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: () => signOut(),
+      },
+    ]);
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Profile</Text>
       <Text style={styles.subtitle}>Manage your account and settings</Text>
-      
+
       {user && (
         <View style={styles.userInfo}>
           <Text style={styles.userName}>{user.name}</Text>
