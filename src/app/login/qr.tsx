@@ -12,6 +12,7 @@ import QRCode from "react-native-qrcode-svg";
 
 import FocusableButton from "@/src/components/basic/TV/Parts/Button";
 import Card from "@/src/components/common/Card";
+import SessionExpiredNotice from "@/src/components/Login/components/SessionExpiredNotice";
 import { useLoginLogic } from "@/src/components/Login/hooks/useLoginLogic";
 import {
   createSharedStyles,
@@ -42,7 +43,8 @@ const FADE_OUT_STAGGER = 150;
 
 export default function QRScreen() {
   const router = useRouter();
-  const { state, actions, cancelQR, server, user, ready } = useLoginLogic("qr");
+  const { state, actions, cancelQR, server, user, ready, sessionExpired } =
+    useLoginLogic("qr");
   const {
     loading,
     qrCode,
@@ -269,6 +271,7 @@ export default function QRScreen() {
             style={[styles.qrLeftPanel, { opacity: leftPanelAnim }]}
           >
             <Text style={styles.qrPageTitle}>Sign in with QR Code</Text>
+            <SessionExpiredNotice visible={sessionExpired} isTVPlatform />
             <Text style={styles.qrPageDescription}>
               Scan the QR code with your phone or visit the link to the right to
               sign in to your account on this device.

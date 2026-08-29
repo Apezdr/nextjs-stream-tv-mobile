@@ -304,9 +304,22 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
         debouncedServerStatusCheck();
       }
 
-      // Handle 401 Unauthorized
+      // Handle an authentication failure on a content request.
+      //
+      // 401 and 403 are both treated as "the session might be gone", but
+      // NEITHER is treated as proof of it. The verification callback re-asks
+      // better-auth's get-session, and only that authoritative answer can
+      // trigger a sign-out. This distinction matters: better-auth returns 403
+      // for a live-but-stale session (SESSION_NOT_FRESH), for permission
+      // denials, and for its CSRF origin check — signing out on any of those
+      // would evict a perfectly valid user.
+      //
+      // Only a 401 is worth replaying afterwards; a 403 that survives
+      // verification is a genuine authorization decision, and retrying it
+      // would just fail again.
+      const authStatus = error.response?.status;
       if (
-        error.response?.status === 401 &&
+        (authStatus === 401 || authStatus === 403) &&
         !originalRequest?._retry &&
         originalRequest
       ) {
@@ -316,12 +329,14 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
         if (globalTokenRefreshFunction) {
           try {
             if (AXIOS_DEBUG_ENABLED) {
-              console.log("[Axios] Attempting token refresh for 401 error");
+              console.log(
+                `[Axios] Verifying session after ${authStatus} on ${endpoint}`,
+              );
             }
 
             const refreshSuccessful = await globalTokenRefreshFunction();
 
-            if (refreshSuccessful) {
+            if (refreshSuccessful && authStatus === 401) {
               if (AXIOS_DEBUG_ENABLED) {
                 console.log(
                   "[Axios] Token refresh successful, retrying original request",
@@ -346,11 +361,14 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
             } else {
               if (AXIOS_DEBUG_ENABLED) {
                 console.log(
-                  "[Axios] Token refresh failed - AuthProvider should handle logout",
+                  refreshSuccessful
+                    ? `[Axios] Session is live — ${authStatus} on ${endpoint} is an authorization decision, not a dead session`
+                    : "[Axios] Session verification failed — AuthProvider owns the sign-out",
                 );
               }
-              // Don't clear AsyncStorage here - let AuthProvider handle the logout
-              // The refreshToken function in AuthProvider will call signOut() if refresh fails
+              // Nothing to do here either way. When the session really is
+              // gone, the verification callback has already signed out; when
+              // it is alive, the error belongs to the caller.
             }
           } catch (refreshError) {
             if (AXIOS_DEBUG_ENABLED) {

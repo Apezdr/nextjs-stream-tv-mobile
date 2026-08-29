@@ -3,6 +3,7 @@ import { SplashScreen } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -24,7 +25,7 @@ import type {
   DeviceCodeResponse,
   GetSessionResponse,
 } from "@/src/data/types/auth.types";
-import { classifySessionResult } from "@/src/providers/authSessionPolicy";
+import { classifySessionBody } from "@/src/providers/authSessionPolicy";
 import { useBackdropStore } from "@/src/stores/backdropStore";
 
 type User = {
@@ -81,6 +82,14 @@ interface AuthContextType {
   isServerDown: boolean;
   /** last known server status message */
   serverStatusMessage: string | null;
+  /**
+   * true when the last sign-out was forced by the server invalidating the
+   * session, rather than requested by the user. Login screens use it to
+   * explain why re-authentication is being asked for.
+   */
+  sessionExpired: boolean;
+  /** dismiss the "your session ended" notice */
+  clearSessionExpiredNotice: () => void;
 }
 
 const STORAGE_KEY = "auth-info";
@@ -171,6 +180,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [serverStatusMessage, setServerStatusMessage] = useState<string | null>(
     null,
   );
+  /**
+   * Set when the session was ended by the server rather than by the user, so
+   * the login screens can explain why they're being asked to sign in again.
+   * Cleared once a new sign-in completes or the notice is dismissed.
+   */
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const statusCheckInterval = useRef<ReturnType<typeof setInterval> | null>(
     null,
@@ -182,6 +197,34 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const authTimeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const betterAuthClient = useRef<BetterAuthClient | null>(null);
+
+  // ── Mirrors of the auth state, for the code that runs outside a render:
+  // the status-check interval, the AppState listener, and the axios 401
+  // callback are each registered once and would otherwise be frozen against
+  // whichever render installed them. Reading through refs keeps them correct
+  // without having to tear down and re-register on every state change.
+  const serverRef = useRef<string | null>(null);
+  const accessTokenRef = useRef<string | null>(null);
+  const userRef = useRef<User | null>(null);
+  serverRef.current = server;
+  accessTokenRef.current = accessToken;
+  userRef.current = user;
+
+  /**
+   * Re-entrancy guards. Refs, not state, on purpose: a state flag read inside
+   * a long-lived closure is a snapshot of the render that installed that
+   * closure, so it can be permanently wrong. That is exactly how the 30s
+   * session poll used to wedge — see startStatusChecking(). `isRefreshing`
+   * state still exists, but only to drive UI.
+   */
+  const isRefreshingRef = useRef(false);
+  const signingOutRef = useRef(false);
+  /**
+   * Shared in-flight probe. A dead session makes every visible query 401 at
+   * once, and without this each one would fire its own get-session and its
+   * own sign-out.
+   */
+  const sessionProbeRef = useRef<Promise<boolean> | null>(null);
 
   // 1️⃣ Keep splash up until we rehydrate
   useEffect(() => {
@@ -228,16 +271,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
     })();
   }, []);
 
-  // 3️⃣ Start/stop status checking based on auth state
+  // 3️⃣ Start/stop status checking based on auth state.
+  //
+  // Keyed on whether a session EXISTS, not on the identity of the values.
+  // With `user` in the deps this tore down and rebuilt the interval every time
+  // a status check refreshed the user object — and since startStatusChecking()
+  // also fires an immediate check, a user record that differs on each response
+  // would drive a probe/re-render/probe loop.
+  const hasSession = !!(server && user && accessToken);
   useEffect(() => {
-    if (server && user && accessToken) {
+    if (hasSession) {
       startStatusChecking();
     } else {
       stopStatusChecking();
     }
 
     return () => stopStatusChecking();
-  }, [server, user, accessToken]);
+    // startStatusChecking/stopStatusChecking are intentionally omitted: they
+    // are re-created every render but only ever touch refs, so re-subscribing
+    // on their identity would reintroduce the churn described above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSession]);
 
   // 4️⃣ Handle app state changes (check status when app becomes active)
   useEffect(() => {
@@ -245,8 +299,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (
         appStateRef.current.match(/inactive|background/) &&
         nextAppState === "active" &&
-        user &&
-        accessToken
+        userRef.current &&
+        accessTokenRef.current
       ) {
         refreshUserStatus();
       }
@@ -258,7 +312,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       handleAppStateChange,
     );
     return () => subscription?.remove();
-  }, [user, accessToken]);
+    // Subscribe once. The handler reads current auth state through refs, so
+    // it never needs re-registering — and re-registering on every `user`
+    // change is what let this listener go stale in the first place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 5️⃣ Ensure polling stops when user becomes authenticated
   useEffect(() => {
@@ -297,6 +355,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       enhancedApiClient.setBaseUrl(null);
       enhancedApiClient.setAuthToken(null);
       enhancedApiClient.setTokenRefreshCallback(null);
+      // Also drop the status-check callback. Leaving it registered meant a
+      // late axios error after sign-out could still invoke a checkServerStatus
+      // closure holding the old server, restarting the recovery interval
+      // against a host we're no longer signed in to.
+      enhancedApiClient.setServerStatusCheckCallback(null);
       setApiReady(false);
     }
   }, [server, accessToken]);
@@ -367,7 +430,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
   };
 
   const checkServerStatus = async (): Promise<void> => {
-    if (!server) return;
+    // Via the ref, not `server`: this runs from the probe's error paths and
+    // from the axios status-check callback, both of which can be holding an
+    // older render's closure. Reading state directly there would see null and
+    // silently skip every check.
+    if (!serverRef.current) return;
     try {
       if (DEBUG_AUTH)
         console.log("[Auth] Checking server status via enhanced client");
@@ -408,74 +475,131 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   };
 
+  /**
+   * The single authoritative "is this session still alive?" probe. Resolves
+   * true while the session is live, false otherwise — and when the server
+   * says the session is gone, it performs the sign-out itself.
+   *
+   * This deliberately owns the sign-out decision outright. It used to be
+   * split: refreshUserStatus() would detect a dead session and then delegate
+   * to refreshToken(), which repeated the identical request and only signed
+   * out if that SECOND call also said dead. Any 5xx or timeout on the second
+   * call left the user signed in holding a dead token. One authoritative
+   * answer is enough — classifySessionBody() only reports "sign-out" for
+   * responses that are conclusive on their own.
+   *
+   * Concurrent callers share one request: a revoked session makes every
+   * visible query 401 at once, and N unshared probes would mean N sign-outs.
+   */
+  const probeSession = async (): Promise<boolean> => {
+    if (sessionProbeRef.current) return sessionProbeRef.current;
+
+    const currentServer = serverRef.current;
+    const currentToken = accessTokenRef.current;
+    if (!currentServer || !currentToken) return false;
+    // A sign-out already in progress is itself the answer.
+    if (signingOutRef.current) return false;
+
+    const run = (async (): Promise<boolean> => {
+      try {
+        // disableCookieCache defeats better-auth's cookie-cache read path, so
+        // a revoked session can't answer "valid" from a cached copy. Bearer
+        // requests don't normally carry the session_data cookie that feeds
+        // that cache, but Android's OS cookie jar can attach one uninvited.
+        // NB: the server coerces this with z.coerce.boolean(), where the
+        // string "false" is truthy — the param must be omitted to mean false,
+        // never sent as false.
+        const response = await fetchWithTimeout(
+          `${currentServer}${API_ENDPOINTS.AUTH.GET_SESSION}?disableCookieCache=true`,
+          { headers: { Authorization: `Bearer ${currentToken}` } },
+        );
+
+        // Read as text, not .json(). classifySessionBody() has to tell an
+        // authoritative `null` body apart from a body that simply didn't
+        // parse — the first means the session is gone, the second means a
+        // proxy answered instead of the server and proves nothing.
+        const rawBody = await response.text();
+        const outcome = classifySessionBody(response.status, rawBody);
+
+        let data: GetSessionResponse | null = null;
+        if (outcome === "valid") {
+          data = JSON.parse(rawBody) as GetSessionResponse | null;
+        }
+
+        switch (outcome) {
+          case "sign-out":
+            if (DEBUG_AUTH)
+              console.log(
+                "[Auth] Server reports no live session (status:",
+                response.status,
+                ") — signing out",
+              );
+            await signOut({ reason: "session-invalidated" });
+            return false;
+
+          case "server-issue":
+            // The server is unwell, which says nothing about this session.
+            // Signing out here would evict users over a transient 5xx.
+            console.warn("[Auth] Server error during session check");
+            await checkServerStatus();
+            return false;
+
+          case "unknown-error":
+            if (DEBUG_AUTH)
+              console.log(
+                `[Auth] Unexpected session check status: ${response.status}`,
+              );
+            return false;
+
+          case "valid":
+            break;
+        }
+
+        // classifySessionBody() only returns "valid" when the body carries a
+        // user, but that isn't visible to TS as a type guard on `data`.
+        if (!data?.user) return false;
+
+        const updatedUser: User = {
+          ...data.user,
+          admin: data.user.role === "admin",
+        };
+
+        if (JSON.stringify(updatedUser) !== JSON.stringify(userRef.current)) {
+          if (DEBUG_AUTH)
+            console.log("[Auth] User data changed, updating state");
+          setUser(updatedUser);
+          await persist(currentServer, updatedUser, currentToken);
+        }
+        return true;
+      } catch (error: unknown) {
+        // A genuine network failure (TypeError) or this fetch's own timeout
+        // abort. We couldn't complete the check, so treat it as a
+        // connectivity/server problem — never as grounds for a sign-out.
+        console.warn("[Auth] Session check failed:", error);
+        await checkServerStatus();
+        return false;
+      }
+    })();
+
+    sessionProbeRef.current = run;
+    try {
+      return await run;
+    } finally {
+      sessionProbeRef.current = null;
+    }
+  };
+
   /** Fetch current session from server, update user state */
   const refreshUserStatus = async () => {
-    if (!server || !accessToken || isRefreshing) return;
+    if (!serverRef.current || !accessTokenRef.current) return;
+    if (isRefreshingRef.current) return;
 
+    isRefreshingRef.current = true;
     setIsRefreshing(true);
     try {
-      const response = await fetchWithTimeout(
-        `${server}${API_ENDPOINTS.AUTH.GET_SESSION}`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        },
-      );
-
-      let data: GetSessionResponse | null = null;
-      try {
-        data = (await response.json()) as GetSessionResponse | null;
-      } catch {
-        // Non-JSON body — classifySessionResult() below treats a missing
-        // user the same way whether it's from a parse failure or a bare null.
-      }
-
-      switch (classifySessionResult(response.status, data)) {
-        case "sign-out":
-          // refreshToken() owns the sign-out decision — it re-validates the
-          // session itself and only signs out once it confirms there's no
-          // live session (real 401/403, or a 200 with no user/session).
-          if (DEBUG_AUTH)
-            console.log(
-              "[Auth] Session no longer valid, attempting token refresh",
-            );
-          await refreshToken();
-          return;
-        case "server-issue":
-          console.warn("[Auth] Server error detected, checking server status");
-          await checkServerStatus();
-          return;
-        case "unknown-error":
-          if (DEBUG_AUTH)
-            console.log(
-              `[Auth] Unexpected status check result: ${response.status}`,
-            );
-          return;
-        case "valid":
-          break;
-      }
-
-      // classifySessionResult() only returns "valid" when body.user is
-      // present, but that isn't visible to TS as a type guard on `data`.
-      if (!data?.user) return;
-
-      // Normalise admin field from role
-      const updatedUser: User = {
-        ...data.user,
-        admin: data.user.role === "admin",
-      };
-
-      if (JSON.stringify(updatedUser) !== JSON.stringify(user)) {
-        if (DEBUG_AUTH) console.log("[Auth] User data changed, updating state");
-        setUser(updatedUser);
-        await persist(server, updatedUser, accessToken);
-      }
-    } catch (error: unknown) {
-      // Covers a genuine network failure (TypeError) as well as this fetch's
-      // own timeout abort — either way we couldn't complete the check, so
-      // treat it as a possible server/connectivity issue, not a sign-out.
-      console.warn("[Auth] Status check failed:", error);
-      await checkServerStatus();
+      await probeSession();
     } finally {
+      isRefreshingRef.current = false;
       setIsRefreshing(false);
     }
   };
@@ -548,6 +672,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   /** Request a device code from the server */
   async function requestDeviceCode(): Promise<DeviceCodeResponse> {
+    // Self-heal rather than dead-ending. The client is a per-server object we
+    // can rebuild from `server` at any time, so there is no reason to make the
+    // user re-enter a host they already gave us just because the instance went
+    // missing (sign-out used to null it, and rehydrate skips it when no server
+    // was stored).
+    if (!betterAuthClient.current && serverRef.current) {
+      betterAuthClient.current = createBetterAuthClient(serverRef.current);
+    }
     const client = betterAuthClient.current;
     if (!client)
       throw new Error(
@@ -884,6 +1016,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     setUser(u);
     setAccessToken(token);
+    userRef.current = u;
+    accessTokenRef.current = token;
+    // A fresh sign-in retires any "your session ended" notice.
+    setSessionExpired(false);
     await persist(server, u, token);
     setIsAuthenticating(false);
   }
@@ -940,105 +1076,179 @@ export function AuthProvider({ children }: PropsWithChildren) {
   };
 
   /**
-   * better-auth sessions auto-refresh within the updateAge window (24h).
-   * A 401 means the 30-day session has expired — sign out.
+   * Verify the session is still usable. Kept as its own name because the
+   * axios 401 interceptor and the context both consume it, but it is now just
+   * the shared probe — which owns the sign-out decision itself.
    */
   const refreshToken = async (): Promise<boolean> => {
-    if (!server || !accessToken) return false;
-
     if (DEBUG_AUTH)
       console.log("[Auth] Verifying session validity via get-session");
+    return probeSession();
+  };
+
+  /**
+   * Clear all local auth data and invalidate the session server-side.
+   *
+   * Local state is cleared FIRST and the server call happens after. The route
+   * guards key off `user`, so clearing first is what actually evicts someone
+   * from a protected screen; awaiting a POST to a server that may be gone
+   * (bounded, but still up to SESSION_FETCH_TIMEOUT_MS) would leave them
+   * sitting on a dead screen for that whole window.
+   *
+   * Safe to call concurrently and repeatedly — a burst of 401s all landing at
+   * once must produce exactly one sign-out.
+   */
+  const signOut = async (options?: { reason?: "session-invalidated" }) => {
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
 
     try {
-      const resp = await fetchWithTimeout(
-        `${server}${API_ENDPOINTS.AUTH.GET_SESSION}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
+      stopStatusChecking();
+      stopAuthPolling();
+      stopServerRecoveryChecking();
 
-      let data: GetSessionResponse | null = null;
+      // Capture before clearing — the server call below still needs them.
+      const priorServer = serverRef.current;
+      const priorToken = accessTokenRef.current;
+
+      // 1) Local state first, so the guards redirect immediately.
+      setUser(null);
+      setAccessToken(null);
+      setIsAuthenticating(false);
+      setIsServerDown(false);
+      setServerStatusMessage(null);
+      setSessionExpired(options?.reason === "session-invalidated");
+      userRef.current = null;
+      accessTokenRef.current = null;
+
+      // Rebuild the per-server auth client rather than dropping it. Nulling it
+      // used to strand the user: `server` stays set, so the QR screen is
+      // reachable, but requestDeviceCode() would throw "Sign-in isn't ready"
+      // because only setServer() ever recreated the client — meaning a forced
+      // sign-out could only be recovered by re-typing the host.
+      betterAuthClient.current = priorServer
+        ? createBetterAuthClient(priorServer)
+        : null;
+
+      // 2) Cache hygiene. Cancel in-flight queries before clearing so nothing
+      // resolves into a cleared cache and repopulates it with the old user's
+      // data. Each step is isolated: a failure in one must not skip the rest.
       try {
-        data = (await resp.json()) as GetSessionResponse | null;
-      } catch {
-        // Non-JSON body — classifySessionResult() treats a missing user the
-        // same way whether it's from a parse failure or a bare null.
+        cacheStore.clear();
+      } catch (e) {
+        console.warn("[Auth] cacheStore clear failed during sign-out", e);
+      }
+      try {
+        await clearAllCaches();
+      } catch (e) {
+        console.warn("[Auth] query cache clear failed during sign-out", e);
+      }
+      try {
+        useBackdropStore.getState().reset();
+      } catch (e) {
+        console.warn("[Auth] backdrop reset failed during sign-out", e);
       }
 
-      switch (classifySessionResult(resp.status, data)) {
-        case "valid":
-          if (DEBUG_AUTH) console.log("[Auth] Session still valid");
-          return true;
-        case "sign-out":
-          if (DEBUG_AUTH)
-            console.log(
-              "[Auth] Session no longer valid (status:",
-              resp.status,
-              "), signing out",
-            );
-          await signOut();
-          return false;
-        case "server-issue":
-          if (DEBUG_AUTH)
-            console.log(
-              "[Auth] Server error during session check (status:",
-              resp.status,
-              "), not signing out",
-            );
-          await checkServerStatus();
-          return false;
-        case "unknown-error":
-          if (DEBUG_AUTH)
-            console.log(
-              "[Auth] Unexpected status during session check:",
-              resp.status,
-            );
-          return false;
+      // 3) Persist the cleared blob. If this throws, the dead token would
+      // survive a restart, so it must not be able to skip anything above.
+      try {
+        await persist(priorServer, null, null);
+      } catch (e) {
+        console.warn("[Auth] Failed to persist cleared auth state", e);
       }
-    } catch (error: unknown) {
-      if (DEBUG_AUTH)
-        console.error("[Auth] Error during session check:", error);
-      return false;
+
+      // 4) Best-effort server-side invalidation, last. better-auth's
+      // /sign-out needs no valid session and is idempotent, so this is safe
+      // even when the session is already gone.
+      if (priorServer && priorToken) {
+        try {
+          await fetchWithTimeout(
+            `${priorServer}${API_ENDPOINTS.AUTH.SIGN_OUT}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${priorToken}`,
+                Origin: serverOrigin(priorServer),
+              },
+              credentials: "omit",
+            },
+          );
+        } catch {
+          // Ignore — local state is already cleared, which is what matters.
+        }
+      }
+    } finally {
+      signingOutRef.current = false;
     }
   };
 
-  /** Invalidate server session and clear all local auth data */
-  const signOut = async () => {
-    stopStatusChecking();
-    stopAuthPolling();
-    stopServerRecoveryChecking();
-
-    // Best-effort server-side session invalidation — bounded by a timeout
-    // so an unreachable/hanging server can't delay clearing local state below.
-    if (server && accessToken) {
-      try {
-        await fetchWithTimeout(`${server}${API_ENDPOINTS.AUTH.SIGN_OUT}`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            Origin: serverOrigin(server),
-          },
-          credentials: "omit",
-        });
-      } catch {
-        // Ignore — we still clear local state
-      }
-    }
-
-    setUser(null);
-    setAccessToken(null);
-    setIsAuthenticating(false);
-    setIsServerDown(false);
-    setServerStatusMessage(null);
-    // Drop the per-server auth client so a stale instance can't be reused.
-    betterAuthClient.current = null;
-    await persist(server, null, null);
-
-    cacheStore.clear();
-    // Clear the React Query cache (in-memory + the 24h persisted AsyncStorage
-    // cache) so the next user on a shared device can't see the previous
-    // user's content/history.
-    await clearAllCaches();
-    useBackdropStore.getState().reset();
+  // ── Stable identities for everything exposed on the context.
+  //
+  // The implementations above are re-created on every render because they
+  // close over state, and consumers put them in effect dependency arrays —
+  // pending-approval.tsx rebuilds its poll interval every render for exactly
+  // this reason, and useLoginLogic's device-flow effect re-runs on it too.
+  // Dispatching through a ref keeps the exported functions referentially
+  // stable for the life of the provider while still calling the current
+  // implementation.
+  const impl = useRef({
+    setServer,
+    signInWithProvider,
+    signInWithQRCode,
+    pollQRAuthentication,
+    cancelQRAuthentication,
+    signOut,
+    refreshUserStatus,
+    refreshToken,
+  });
+  impl.current = {
+    setServer,
+    signInWithProvider,
+    signInWithQRCode,
+    pollQRAuthentication,
+    cancelQRAuthentication,
+    signOut,
+    refreshUserStatus,
+    refreshToken,
   };
+
+  const stableSetServer = useCallback(
+    (url: string) => impl.current.setServer(url),
+    [],
+  );
+  const stableSignInWithProvider = useCallback(
+    (providerId: string) => impl.current.signInWithProvider(providerId),
+    [],
+  );
+  const stableSignInWithQRCode = useCallback(
+    () => impl.current.signInWithQRCode(),
+    [],
+  );
+  const stablePollQRAuthentication = useCallback(
+    (
+      deviceCode: string,
+      onTerminalError?: (
+        code: "expired" | "access_denied" | "server_down",
+      ) => void,
+    ) => impl.current.pollQRAuthentication(deviceCode, onTerminalError),
+    [],
+  );
+  const stableCancelQRAuthentication = useCallback(
+    () => impl.current.cancelQRAuthentication(),
+    [],
+  );
+  // Exposed without the options param: everything reaching the context is a
+  // user-initiated sign-out, which must not raise the "session ended" notice.
+  const stableSignOut = useCallback(() => impl.current.signOut(), []);
+  const stableRefreshUserStatus = useCallback(
+    () => impl.current.refreshUserStatus(),
+    [],
+  );
+  const stableRefreshToken = useCallback(() => impl.current.refreshToken(), []);
+  const clearSessionExpiredNotice = useCallback(
+    () => setSessionExpired(false),
+    [],
+  );
 
   return (
     <AuthContext.Provider
@@ -1046,19 +1256,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
         ready,
         apiReady,
         server,
-        setServer,
-        signInWithProvider,
-        signInWithQRCode,
-        pollQRAuthentication,
-        cancelQRAuthentication,
+        setServer: stableSetServer,
+        signInWithProvider: stableSignInWithProvider,
+        signInWithQRCode: stableSignInWithQRCode,
+        pollQRAuthentication: stablePollQRAuthentication,
+        cancelQRAuthentication: stableCancelQRAuthentication,
         user,
-        signOut,
-        refreshUserStatus,
+        signOut: stableSignOut,
+        refreshUserStatus: stableRefreshUserStatus,
         isRefreshing,
         isAuthenticating,
-        refreshToken,
+        refreshToken: stableRefreshToken,
         isServerDown,
         serverStatusMessage,
+        sessionExpired,
+        clearSessionExpiredNotice,
       }}
     >
       {children}

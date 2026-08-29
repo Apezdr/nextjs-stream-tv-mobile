@@ -34,6 +34,7 @@ export function useLoginLogic(
     pollQRAuthentication,
     cancelQRAuthentication,
     user,
+    sessionExpired,
   } = useAuth();
 
   // State
@@ -359,6 +360,44 @@ export function useLoginLogic(
     loadRecentlyUsedHosts();
   }, [loadRecentlyUsedHosts]);
 
+  // ── Resume against an already-known server instead of asking for the host
+  // again. This is what a forced sign-out (server-side session invalidation)
+  // lands on: `server` survives, credentials don't. Without it the user is
+  // dropped on an empty host field even though we know exactly where they
+  // were signed in.
+  //
+  // Fires at most once per mount, so "Back" from the resumed stage still
+  // reaches the host-entry screen and stays there.
+  const autoResumedRef = useRef(false);
+  useEffect(() => {
+    if (autoResumedRef.current) return;
+    // Mobile only. TV navigates by route, and app/login/index.tsx already
+    // sends it straight to /login/qr when a server is known. Advancing the
+    // stage here as well would be actively harmful on TV: login/enter renders
+    // EnterStage regardless of `stage`, but the device-flow effect below fires
+    // on stage === "qr" — so backing out of the QR screen would silently
+    // request a device code behind the host-entry form.
+    if (isTVPlatform) return;
+    if (!ready) return;
+    // Already past host entry (route-based screens pass their own stage), or
+    // signed in — nothing to resume.
+    if (stage !== "enter" || user) {
+      autoResumedRef.current = true;
+      return;
+    }
+    if (!server) return;
+
+    autoResumedRef.current = true;
+    // Seed the field from the stored URL rather than re-deriving it, since
+    // the stored value carries the scheme.
+    try {
+      setHost(new URL(server).host);
+    } catch {
+      setHost(server.replace(/^https?:\/\//, "").replace(/\/+$/, ""));
+    }
+    setStage("choose");
+  }, [ready, server, stage, user, isTVPlatform]);
+
   // ── Fetch providers whenever we hit the "choose" stage
   useEffect(() => {
     if (stage === "choose" && server) {
@@ -553,6 +592,7 @@ export function useLoginLogic(
     server,
     signInWithProvider,
     isTVPlatform,
+    sessionExpired,
 
     // Login state
     state,

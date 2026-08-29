@@ -167,6 +167,10 @@ export const persistOptions = {
 
 // Helper to clear all caches
 export async function clearAllCaches() {
+  // Cancel first. Sign-out calls this, and a request that was already in
+  // flight would otherwise resolve *after* the clear and repopulate the cache
+  // with the previous user's data.
+  await queryClient.cancelQueries();
   queryClient.clear();
   await AsyncStorage.removeItem("REACT_QUERY_OFFLINE_CACHE");
 }
