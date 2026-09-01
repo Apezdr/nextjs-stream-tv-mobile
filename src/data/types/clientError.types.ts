@@ -68,4 +68,15 @@ export interface PlaybackErrorDetails {
   mediaType: string | null;
   /** Decoder capability probe (Android only; empty elsewhere). */
   codecSupport: CodecSupportProbeEntry[];
+  /**
+   * Present when this report records an automatic delivery-tier descent
+   * (FRONTEND_PLAYBACK_REQUIREMENTS.md §8): which tier failed, where playback
+   * fell to, and at what position. Client-side counterpart of the server's
+   * jit.direct.verdicts metric.
+   */
+  tierDescent?: {
+    from: string;
+    to: string;
+    position: number;
+  };
 }

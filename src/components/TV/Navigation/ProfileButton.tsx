@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import {
   StyleSheet,
@@ -42,6 +43,7 @@ const ProfileButton: React.FC<ProfileButtonProps> = ({
   onBlur,
 }) => {
   const { signOut, user } = useAuth();
+  const router = useRouter();
   const [isDropdownVisible, setIsDropdownVisible] = useState(false);
   const [selectedDropdownIndex, setSelectedDropdownIndex] = useState(0);
   const [isDropdownFocused, setIsDropdownFocused] = useState(false);
@@ -110,6 +112,9 @@ const ProfileButton: React.FC<ProfileButtonProps> = ({
             console.error("Profile switching error:", error);
           }
           break;
+        case "settings":
+          router.push("/(tv)/(protected)/(browse)/settings");
+          break;
         case "sign-out":
           try {
             console.log("Signing out user...");
@@ -130,7 +135,7 @@ const ProfileButton: React.FC<ProfileButtonProps> = ({
           console.warn("Unknown profile action:", action);
       }
     },
-    [signOut],
+    [signOut, router],
   );
 
   const handleDropdownItemFocus = useCallback(() => {

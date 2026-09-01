@@ -50,7 +50,7 @@ export interface ProfileDropdownItem {
   key: string;
   title: string;
   icon: keyof typeof Ionicons.glyphMap;
-  action: "switch-profiles" | "sign-out" | "exit-app";
+  action: "switch-profiles" | "settings" | "sign-out" | "exit-app";
 }
 
 export const PROFILE_DROPDOWN_ITEMS: ProfileDropdownItem[] = [
@@ -59,6 +59,12 @@ export const PROFILE_DROPDOWN_ITEMS: ProfileDropdownItem[] = [
     title: "Switch Profiles",
     icon: "people",
     action: "switch-profiles",
+  },
+  {
+    key: "settings",
+    title: "Settings",
+    icon: "settings",
+    action: "settings",
   },
   {
     key: "sign-out",

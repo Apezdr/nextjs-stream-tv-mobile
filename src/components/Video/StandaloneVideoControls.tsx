@@ -29,6 +29,7 @@ import CaptionControls, {
   SUBTITLE_BACKGROUND_OPTIONS,
 } from "./CaptionControls";
 import EpisodeCarousel from "./EpisodeCarousel";
+import QualityControls from "./QualityControls";
 import SeekBar, { type PlayerState, type SeekBarRef } from "./SeekBar";
 import SubtitlePlayer from "./SubtitlePlayer";
 
@@ -44,6 +45,7 @@ import {
 } from "@/src/hooks/useAudioTracks";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
+import { QualityTierId, QualityTierOption } from "@/src/utils/qualityTiers";
 
 interface StandaloneVideoControlsProps {
   player: VideoPlayer; // expo-video player instance
@@ -91,6 +93,14 @@ interface StandaloneVideoControlsProps {
   // Enhanced episode switching props
   isEpisodeSwitching?: boolean;
   episodeSwitchError?: string | null;
+  // Delivery-tier quality menu (from useQualityTier). The button renders only
+  // with 2+ tiers and a handler; the badge lights the top-right slot.
+  qualityTiers?: QualityTierOption[];
+  activeQualityTier?: QualityTierId;
+  onSelectQualityTier?: (tier: QualityTierId) => void;
+  isQualitySwitching?: boolean;
+  hasQualityDescended?: boolean;
+  qualityBadge?: string | null;
 }
 
 // Self-contained video controls that get time data directly from player
@@ -116,6 +126,12 @@ const StandaloneVideoControls = memo(
     isLoadingEpisodes = false,
     isEpisodeSwitching = false,
     episodeSwitchError = null,
+    qualityTiers,
+    activeQualityTier = "auto",
+    onSelectQualityTier,
+    isQualitySwitching = false,
+    hasQualityDescended = false,
+    qualityBadge = null,
   }: StandaloneVideoControlsProps) => {
     // Get dynamic dimensions
     const { window } = useDimensions();
@@ -256,6 +272,14 @@ const StandaloneVideoControls = memo(
     const audioButtonVisible = useStickyForSource(
       !!showAudioControls &&
         (audioLanguageCount >= 2 || formatOptions.length >= 2),
+      videoURL,
+    );
+
+    // Same latch for the quality button: the verdict (direct.json) arrives
+    // async after playback opens, and a focused button vanishing mid-wait
+    // breaks TV focus. Keyed on the same source URL as the audio latch.
+    const qualityButtonVisible = useStickyForSource(
+      !!onSelectQualityTier && (qualityTiers?.length ?? 0) >= 2,
       videoURL,
     );
 
@@ -761,7 +785,14 @@ const StandaloneVideoControls = memo(
                 </Pressable>
               </View>
               <View style={styles.topRightSection}>
-                {/* Future: Content rating, quality indicators, etc. */}
+                {/* Delivery-tier badge from direct.json — the §5 "re-light
+                    the Dolby Vision badge" surface. Facts only, not a
+                    control; never derived from client probing. */}
+                {qualityBadge ? (
+                  <View style={styles.qualityBadge}>
+                    <Text style={styles.qualityBadgeText}>{qualityBadge}</Text>
+                  </View>
+                ) : null}
               </View>
             </View>
 
@@ -930,47 +961,71 @@ const StandaloneVideoControls = memo(
                   (its only child is absolutely positioned), so the row keeps
                   floating at the same spot between the seek bar and the
                   episode carousel that the caption row occupied before. */}
-              {duration > 0 && (showCaptionControls || audioButtonVisible) && (
-                <View>
-                  <View style={styles.bottomControlsRow}>
-                    {showCaptionControls && (
-                      <CaptionControls
-                        captionURLs={videoInfo?.captionURLs}
-                        selectedCaptionLanguage={selectedCaptionLanguage}
-                        onCaptionLanguageChange={setSelectedCaptionLanguage}
-                        selectedSubtitleStyle={selectedSubtitleStyle}
-                        onSubtitleStyleChange={setSelectedSubtitleStyle}
-                        selectedSubtitleBackground={selectedSubtitleBackground}
-                        onSubtitleBackgroundChange={
-                          setSelectedSubtitleBackground
-                        }
-                        onActivityReset={resetActivityTimer}
-                        // Trap DOWN only when there's no carousel below to
-                        // navigate to.
-                        trapFocusDown={trapCaptionAudioFocusDown}
-                        // Let focus flow right into the audio button when
-                        // it's present.
-                        trapFocusRight={!audioButtonVisible}
-                      />
-                    )}
-                    {audioButtonVisible && (
-                      <AudioControls
-                        audioTracks={availableAudioTracks}
-                        selectedAudioTrack={selectedAudioTrack}
-                        onAudioTrackChange={selectAudioTrack}
-                        formatOptions={formatOptions}
-                        selectedFormatGroupId={selectedFormatGroupId}
-                        isAutoFormat={isAutomaticSelection}
-                        canSelectAuto={supportsAutomaticSelection}
-                        onSelectAuto={selectAutomatic}
-                        onActivityReset={resetActivityTimer}
-                        trapFocusDown={trapCaptionAudioFocusDown}
-                        trapFocusLeft={!showCaptionControls}
-                      />
-                    )}
+              {duration > 0 &&
+                (showCaptionControls ||
+                  audioButtonVisible ||
+                  qualityButtonVisible) && (
+                  <View>
+                    <View style={styles.bottomControlsRow}>
+                      {showCaptionControls && (
+                        <CaptionControls
+                          captionURLs={videoInfo?.captionURLs}
+                          selectedCaptionLanguage={selectedCaptionLanguage}
+                          onCaptionLanguageChange={setSelectedCaptionLanguage}
+                          selectedSubtitleStyle={selectedSubtitleStyle}
+                          onSubtitleStyleChange={setSelectedSubtitleStyle}
+                          selectedSubtitleBackground={
+                            selectedSubtitleBackground
+                          }
+                          onSubtitleBackgroundChange={
+                            setSelectedSubtitleBackground
+                          }
+                          onActivityReset={resetActivityTimer}
+                          // Trap DOWN only when there's no carousel below to
+                          // navigate to.
+                          trapFocusDown={trapCaptionAudioFocusDown}
+                          // Let focus flow right into the next button when
+                          // one is present.
+                          trapFocusRight={
+                            !audioButtonVisible && !qualityButtonVisible
+                          }
+                        />
+                      )}
+                      {audioButtonVisible && (
+                        <AudioControls
+                          audioTracks={availableAudioTracks}
+                          selectedAudioTrack={selectedAudioTrack}
+                          onAudioTrackChange={selectAudioTrack}
+                          formatOptions={formatOptions}
+                          selectedFormatGroupId={selectedFormatGroupId}
+                          isAutoFormat={isAutomaticSelection}
+                          canSelectAuto={supportsAutomaticSelection}
+                          onSelectAuto={selectAutomatic}
+                          onActivityReset={resetActivityTimer}
+                          trapFocusDown={trapCaptionAudioFocusDown}
+                          trapFocusLeft={!showCaptionControls}
+                          trapFocusRight={!qualityButtonVisible}
+                        />
+                      )}
+                      {qualityButtonVisible &&
+                        qualityTiers &&
+                        onSelectQualityTier && (
+                          <QualityControls
+                            tiers={qualityTiers}
+                            activeTier={activeQualityTier}
+                            onSelectTier={onSelectQualityTier}
+                            isSwitching={isQualitySwitching}
+                            hasDescended={hasQualityDescended}
+                            onActivityReset={resetActivityTimer}
+                            trapFocusDown={trapCaptionAudioFocusDown}
+                            trapFocusLeft={
+                              !showCaptionControls && !audioButtonVisible
+                            }
+                          />
+                        )}
+                    </View>
                   </View>
-                </View>
-              )}
+                )}
 
               {/* 5. Episode Carousel Section - only show when duration is available */}
               {duration > 0 &&
@@ -1259,6 +1314,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 40,
     justifyContent: "center",
+  },
+
+  qualityBadge: {
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    borderColor: "rgba(255, 255, 255, 0.35)",
+    borderRadius: 4,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+
+  qualityBadgeText: {
+    color: "rgba(255, 255, 255, 0.85)",
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.5,
   },
 
   restartButtonFocused: {

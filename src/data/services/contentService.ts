@@ -32,6 +32,10 @@ import {
   WatchlistStatusResponse,
   MediaItem,
 } from "@/src/data/types/content.types";
+import {
+  DirectPlayInfo,
+  DirectPlayInfoParams,
+} from "@/src/data/types/directPlay.types";
 import { generateUserAgent } from "@/src/utils/deviceInfo";
 
 // Media details responses carry the playback videoURL, which the server can
@@ -192,6 +196,31 @@ export const contentService = {
     // Use regular get method - React Query will handle caching
     return enhancedApiClient.get<MediaDetailsResponse>(
       `${API_ENDPOINTS.CONTENT.MEDIA}${queryParams}`,
+      { headers: NO_CACHE_HEADERS },
+    );
+  },
+
+  /**
+   * Fetch the delivery-tier verdict for a playable item. The server proxies
+   * jit-transcoder's `direct.json` (with auth) and enriches it with display
+   * fields. The first call for a title can block on upstream keyframe
+   * derivation — callers must treat a timeout as "no verdict yet", not an
+   * error surface.
+   */
+  getDirectPlayInfo: async (
+    params: DirectPlayInfoParams,
+  ): Promise<DirectPlayInfo> => {
+    const { mediaType, mediaId, season, episode } = params;
+
+    const queryParams = buildQueryParams({
+      mediaType,
+      mediaId,
+      season,
+      episode,
+    });
+
+    return enhancedApiClient.get<DirectPlayInfo>(
+      `${API_ENDPOINTS.CONTENT.DIRECT_INFO}${queryParams}`,
       { headers: NO_CACHE_HEADERS },
     );
   },

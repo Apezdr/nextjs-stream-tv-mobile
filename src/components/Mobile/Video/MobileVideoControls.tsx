@@ -21,6 +21,7 @@ import MobileCaptionControls, {
   SubtitleStyle,
   SubtitleBackgroundOption,
 } from "./MobileCaptionControls";
+import MobileQualityControls from "./MobileQualityControls";
 
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
 import {
@@ -33,6 +34,7 @@ import {
 } from "@/src/hooks/useAudioTracks";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
+import { QualityTierId, QualityTierOption } from "@/src/utils/qualityTiers";
 
 interface MobileVideoControlsProps {
   player: VideoPlayer;
@@ -69,6 +71,14 @@ interface MobileVideoControlsProps {
   // The active source URL; fetched and parsed for audio format metadata
   // (CHANNELS/codec per rendition group) that the player API doesn't expose.
   videoURL?: string | null;
+  // Delivery-tier quality menu (from useQualityTier). The button renders only
+  // with 2+ tiers and a handler; the badge sits beside the title.
+  qualityTiers?: QualityTierOption[];
+  activeQualityTier?: QualityTierId;
+  onSelectQualityTier?: (tier: QualityTierId) => void;
+  isQualitySwitching?: boolean;
+  hasQualityDescended?: boolean;
+  qualityBadge?: string | null;
 }
 
 const formatTime = (seconds: number): string => {
@@ -100,6 +110,12 @@ const MobileVideoControls = memo(
     showCaptionControls = false,
     showAudioControls = false,
     videoURL = null,
+    qualityTiers,
+    activeQualityTier = "auto",
+    onSelectQualityTier,
+    isQualitySwitching = false,
+    hasQualityDescended = false,
+    qualityBadge = null,
   }: MobileVideoControlsProps) => {
     // Get dynamic window dimensions that will update with orientation changes
     const { window } = useDimensions();
@@ -176,6 +192,14 @@ const MobileVideoControls = memo(
     const audioButtonVisible = useStickyForSource(
       !!showAudioControls &&
         (audioLanguageCount >= 2 || formatOptions.length >= 2),
+      videoURL,
+    );
+
+    // Same latch for the quality button: the verdict (direct.json) arrives
+    // async after playback opens; the latch keeps the button stable across
+    // the loading windows that follow a source swap.
+    const qualityButtonVisible = useStickyForSource(
+      !!onSelectQualityTier && (qualityTiers?.length ?? 0) >= 2,
       videoURL,
     );
 
@@ -738,6 +762,13 @@ const MobileVideoControls = memo(
               <Text style={styles.videoTitle} numberOfLines={2}>
                 {videoInfo?.title || ""}
               </Text>
+              {/* Delivery-tier badge from direct.json — facts only, never
+                  derived from client probing. */}
+              {qualityBadge && (
+                <View style={styles.qualityBadge}>
+                  <Text style={styles.qualityBadgeText}>{qualityBadge}</Text>
+                </View>
+              )}
               {videoInfo?.description && (
                 <Text style={styles.videoDescription} numberOfLines={5}>
                   {videoInfo.description}
@@ -828,6 +859,17 @@ const MobileVideoControls = memo(
                   isAutoFormat={isAutomaticSelection}
                   canSelectAuto={supportsAutomaticSelection}
                   onSelectAuto={selectAutomatic}
+                  onShowControls={showControls}
+                />
+              )}
+              {/* Quality tier selector - delivery-tiers contract */}
+              {qualityButtonVisible && qualityTiers && onSelectQualityTier && (
+                <MobileQualityControls
+                  tiers={qualityTiers}
+                  activeTier={activeQualityTier}
+                  onSelectTier={onSelectQualityTier}
+                  isSwitching={isQualitySwitching}
+                  hasDescended={hasQualityDescended}
                   onShowControls={showControls}
                 />
               )}
@@ -1012,6 +1054,22 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "500",
+  },
+  qualityBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    borderColor: "rgba(255, 255, 255, 0.35)",
+    borderRadius: 4,
+    borderWidth: 1,
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  qualityBadgeText: {
+    color: "rgba(255, 255, 255, 0.85)",
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.5,
   },
   seekBarTouchArea: {
     paddingVertical: 10, // Larger touch area

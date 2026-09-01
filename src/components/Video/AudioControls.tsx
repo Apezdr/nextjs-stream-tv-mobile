@@ -43,6 +43,8 @@ interface AudioControlsProps {
   // False when the caption row renders to the left of this button so focus
   // can flow between the two.
   trapFocusLeft?: boolean;
+  // False when another button (quality) renders to the right of this one.
+  trapFocusRight?: boolean;
 }
 
 // A single flyout button mirroring the captions "More" pattern: audio icon +
@@ -62,6 +64,7 @@ const AudioControls = memo(
     onActivityReset,
     trapFocusDown = true,
     trapFocusLeft = true,
+    trapFocusRight = true,
   }: AudioControlsProps) => {
     const [showFlyout, setShowFlyout] = useState(false);
 
@@ -189,7 +192,7 @@ const AudioControls = memo(
     return (
       <TVFocusGuideView
         autoFocus
-        trapFocusRight
+        trapFocusRight={trapFocusRight}
         trapFocusLeft={trapFocusLeft}
         trapFocusDown={trapFocusDown}
       >

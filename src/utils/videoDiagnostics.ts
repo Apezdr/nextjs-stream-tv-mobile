@@ -140,6 +140,12 @@ export interface PlaybackErrorInput {
   playbackSessionId?: string | null;
   mediaId?: string | null;
   mediaType?: string | null;
+  /** Set when this report records an automatic delivery-tier descent (§8). */
+  tierDescent?: {
+    from: string;
+    to: string;
+    position: number;
+  };
 }
 
 export async function buildPlaybackErrorReport(
@@ -186,6 +192,7 @@ export async function logPlaybackError(
         mediaId: input.mediaId ?? null,
         mediaType: input.mediaType ?? null,
         codecSupport: report.codecSupport,
+        ...(input.tierDescent ? { tierDescent: input.tierDescent } : {}),
       } satisfies PlaybackErrorDetails,
     });
 

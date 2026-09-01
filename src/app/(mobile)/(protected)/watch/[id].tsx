@@ -1,6 +1,7 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { NetworkStateType, useNetworkState } from "expo-network";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { BufferOptions, VideoView } from "expo-video";
+import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
 import {
   useEffect,
   useState,
@@ -23,8 +24,10 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import MobileVideoControls from "@/src/components/Mobile/Video/MobileVideoControls";
 import { Colors } from "@/src/constants/Colors";
+import { useDirectPlayInfo } from "@/src/data/hooks/queries/useDirectPlayInfo";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
+import { useVideoTierFallback } from "@/src/data/hooks/useVideoTierFallback";
 import { contentService } from "@/src/data/services/contentService";
 import {
   MediaDetailsResponse,
@@ -33,8 +36,11 @@ import {
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
+import { useQualityTier } from "@/src/hooks/useQualityTier";
+import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
+import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -168,6 +174,64 @@ export default function MobileWatchPage() {
   const effectiveEpisodeNumber =
     currentEpisodeData?.episodeNumber || currentEpisodeNumber;
 
+  // Watch-history/presence identity must stay the canonical master URL no
+  // matter which tier is playing — a `?direct=1` or `/file` videoId would
+  // split resume history and restart the presence session mid-viewing.
+  const presenceVideoId = useMemo(
+    () => (effectiveVideoURL ? canonicalVideoId(effectiveVideoURL) : null),
+    [effectiveVideoURL],
+  );
+
+  // Per-item delivery-tier verdict, fetched at playback-open only (§3 — the
+  // first call for a title triggers the server's one-time keyframe
+  // derivation, so browse surfaces must never request it).
+  const directPlayInfoParams = useMemo(() => {
+    if (!params.id || !params.type) return null;
+    if (params.type === "tv") {
+      const season = effectiveVideoData?.seasonNumber ?? currentSeasonNumber;
+      const episode =
+        effectiveVideoData?.episodeNumber ?? effectiveEpisodeNumber;
+      if (season == null || episode == null) return null;
+      return { mediaType: params.type, mediaId: params.id, season, episode };
+    }
+    return { mediaType: params.type, mediaId: params.id };
+  }, [
+    params.id,
+    params.type,
+    effectiveVideoData,
+    currentSeasonNumber,
+    effectiveEpisodeNumber,
+  ]);
+  const { data: directPlayInfo } = useDirectPlayInfo(directPlayInfoParams);
+
+  // Cellular awareness for the data-saver preference: on cellular with the
+  // saver on, Original/high-bitrate tiers are never auto-applied (explicit
+  // in-session selection still works).
+  const networkState = useNetworkState();
+  const isCellular = networkState.type === NetworkStateType.CELLULAR;
+
+  // Delivery-tier source policy + in-place tier switching (§4-§6). The hook
+  // decides the source URL the player mounts with — Apple defaults to the
+  // `?direct=1` master, Android "Original" is the raw file — applies the
+  // remembered-per-title preference, and performs position-preserving swaps.
+  // The player itself is wired in via refs right after it is created below.
+  const playerRef = useRef<VideoPlayer | null>(null);
+  const notifySourceReplacedRef = useRef<((url: string | null) => void) | null>(
+    null,
+  );
+  const quality = useQualityTier({
+    videoURL: effectiveVideoURL,
+    directPlayInfo,
+    mediaKey:
+      params.id && params.type
+        ? qualityPrefMediaKey(params.type, params.id)
+        : null,
+    isCellular,
+    playerRef,
+    notifySourceReplacedRef,
+  });
+  const playbackSourceURL = quality.activeSourceURL;
+
   // Backdrop URL resolution - prioritize route param, then current data, then loaded data
   const effectiveBackdropURL =
     params.backdrop || // From route navigation
@@ -193,9 +257,10 @@ export default function MobileWatchPage() {
     [],
   );
 
-  // Create optimized player
+  // Create optimized player. The source stays null until the quality
+  // preference has resolved — the hook pins its first URL for the mount.
   const { player, notifySourceReplaced } = useOptimizedVideoPlayer(
-    effectiveVideoURL,
+    quality.sourceReady ? playbackSourceURL : null,
     (p) => {
       p.timeUpdateEventInterval = 1;
       p.loop = false;
@@ -219,6 +284,8 @@ export default function MobileWatchPage() {
       p.play();
     },
   );
+  playerRef.current = player;
+  notifySourceReplacedRef.current = notifySourceReplaced;
 
   // Clear restart parameter after player is configured (prevent setState during render)
   useEffect(() => {
@@ -372,30 +439,43 @@ export default function MobileWatchPage() {
     };
   }, [player]);
 
-  // Handle audio‐codec errors and fallback using effective data
+  // Handle audio‐codec errors and fallback using what is actually playing
   const audioError = useAudioFallback({
-    videoURL: effectiveVideoURL,
+    videoURL: playbackSourceURL,
     player,
     preferredLanguages: ["en"],
     fallbackTimeoutMs: 5000,
   });
 
-  // Enable playback + presence tracking using effective data
+  // Enable playback + presence tracking, keyed by the canonical identity URL
   const { flushCurrentProgress, endSession, getSessionId } =
     usePlaybackPresenceTracking(
       player,
       effectiveVideoData,
-      effectiveVideoURL,
+      presenceVideoId,
       params,
     );
+
+  // §8 decode-error descent: retry once, then drop a tier at position.
+  // Declared BEFORE useVideoErrorHandling so its statusChange listener
+  // registers first and claims errors the descent can recover from.
+  const tierFallback = useVideoTierFallback({
+    player,
+    quality,
+    videoURL: playbackSourceURL,
+    getPlaybackSessionId: getSessionId,
+    mediaId: params.id ?? null,
+    mediaType: params.type ?? null,
+  });
 
   // Handle video codec errors and provide user-friendly messages
   const videoError = useVideoErrorHandling({
     player,
-    videoURL: effectiveVideoURL,
+    videoURL: playbackSourceURL,
     getPlaybackSessionId: getSessionId,
     mediaId: params.id ?? null,
     mediaType: params.type ?? null,
+    suppressWhile: tierFallback.isHandling,
   });
 
   // Function to fetch episode data for TV shows
@@ -512,7 +592,7 @@ export default function MobileWatchPage() {
               "[MobileWatchPage] Sending final playback update for current episode",
             );
             await contentService.updatePlaybackProgress({
-              videoId: effectiveVideoURL,
+              videoId: canonicalVideoId(effectiveVideoURL),
               playbackTime: currentTime,
               isPaused: !player.playing,
               mediaMetadata: {
@@ -542,15 +622,20 @@ export default function MobileWatchPage() {
           throw new Error("No video URL available for selected episode");
         }
 
-        // Phase 3: Replace video source seamlessly
+        // Phase 3: Replace video source seamlessly. applyEpisodeSource pins
+        // the engine's source for the new item (Android "original" demotes to
+        // auto — the old file's verdict cannot authorize the new file).
         if (player) {
           console.log("[MobileWatchPage] Replacing video source");
-          await player.replaceAsync({ uri: newEpisodeData.videoURL });
+          const nextSourceURL = quality.applyEpisodeSource(
+            newEpisodeData.videoURL,
+          );
+          await player.replaceAsync({ uri: nextSourceURL });
           // Tell the hook we swapped the source ourselves, so its drift effect
           // does not issue a second redundant replaceAsync when
           // effectiveVideoURL catches up — that reload would discard both the
           // resume seek below and the selected audio track.
-          notifySourceReplaced(newEpisodeData.videoURL);
+          notifySourceReplaced(nextSourceURL);
 
           // Apply resume position from watch history
           const watchHistory = newEpisodeData.watchHistory;
@@ -623,6 +708,7 @@ export default function MobileWatchPage() {
       router,
       endSession,
       getSessionId,
+      quality.applyEpisodeSource,
     ],
   );
 
@@ -630,8 +716,11 @@ export default function MobileWatchPage() {
   const finalError =
     contentError || audioError || videoError || episodeSwitchError;
 
-  // Separate initial loading from episode switching
-  const showFullLoading = loading && !currentEpisodeData;
+  // Separate initial loading from episode switching. Quality-source
+  // resolution (preference hydration + bounded verdict wait) is part of
+  // initial loading.
+  const showFullLoading =
+    (loading || !quality.sourceReady) && !currentEpisodeData;
 
   // Keep screen awake during video playback and handle PiP state changes
   useEffect(() => {
@@ -974,8 +1063,17 @@ export default function MobileWatchPage() {
           isEpisodeSwitching={isEpisodeSwitching}
           episodeSwitchError={episodeSwitchError}
           showCaptionControls={!!videoInfo?.captionURLs}
-          showAudioControls={isAdaptiveStreamURL(effectiveVideoURL)}
-          videoURL={effectiveVideoURL}
+          showAudioControls={
+            isAdaptiveStreamURL(playbackSourceURL) ||
+            isFileTierURL(playbackSourceURL)
+          }
+          videoURL={playbackSourceURL}
+          qualityTiers={quality.tiers}
+          activeQualityTier={quality.activeTier}
+          onSelectQualityTier={quality.selectTier}
+          isQualitySwitching={quality.isSwitching}
+          hasQualityDescended={quality.hasDescended}
+          qualityBadge={quality.badge}
         />
       </GestureHandlerRootView>
     </View>

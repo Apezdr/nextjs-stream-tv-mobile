@@ -43,6 +43,14 @@ export const queryKeys = {
   media: (mediaType: string, identifier: string) =>
     [...queryKeys.content(), "media", mediaType, identifier] as const,
 
+  // Delivery-tier verdict (proxied direct.json) for one playable item
+  directPlayInfo: (params: {
+    mediaType: string;
+    mediaId: string;
+    season?: number;
+    episode?: number;
+  }) => [...queryKeys.content(), "directPlayInfo", params] as const,
+
   // Content count queries
   contentCount: (type?: string) =>
     [...queryKeys.content(), "count", type || "all"] as const,

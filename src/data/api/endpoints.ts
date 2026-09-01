@@ -18,6 +18,7 @@ export const API_ENDPOINTS = {
     LIST: "/api/authenticated/list",
     COUNT: "/api/authenticated/count",
     MEDIA: "/api/authenticated/media",
+    DIRECT_INFO: "/api/authenticated/media/direct-info",
     SUBTITLES: "/api/authenticated/subtitles",
     THUMBNAILS: "/api/authenticated/thumbnails",
     CHAPTER: "/api/authenticated/chapter",

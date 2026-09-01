@@ -1048,6 +1048,62 @@ Used to mark watch-history entries valid/invalid after playback checks.
 
 ---
 
+### 12.4 Delivery-tier verdict (proxied direct.json)
+
+### `GET /api/authenticated/media/direct-info?mediaType=&mediaId=&season=&episode=`
+
+The authenticated proxy of jit-transcoder's `GET /stream/{key}/direct.json`
+(see `FRONTEND_PLAYBACK_REQUIREMENTS.md` §3). The server resolves the stream
+key from the media identity, forwards the verdict, and enriches it with
+display fields so all client surfaces share one mapping.
+
+```ts
+// Response (DirectPlayInfo — src/data/types/directPlay.types.ts)
+{
+  hls: {
+    offered: boolean;              // Original-over-HLS copy rung exists on ?direct=1
+    reason?: string;               // withhold reason when offered=false (open-gop-avc, …)
+    variantIndex?: number;
+    codecs?: string;
+    bandwidth?: number;
+    averageBandwidth?: number;
+    videoRange?: string;           // "PQ" on HDR10/DV base layers
+    supplementalCodecs?: string;   // presence ⇒ Dolby Vision
+  };
+  file: {
+    available: boolean;            // GET /stream/{key}/file serves original bytes
+    sizeBytes?: number;
+    container?: string;
+    videoCodec?: string;
+  };
+  badgeLabel?: string;             // enriched: "Original (Dolby Vision)" | "Original (HDR10)" | "Original"
+  reasonCopy?: string;             // enriched: user copy for `reason`
+}
+```
+
+Client behavior (both watch screens, `useDirectPlayInfo`):
+
+- Fetched at **playback-open only** — never from browse/info surfaces, because
+  the first request for an eligible title triggers the server's one-time
+  keyframe derivation (seconds on MP4, minutes on a huge un-indexed MKV).
+- `season`/`episode` are sent for shows — the verdict is per playable file.
+- `404` (pre-deploy server, or feature off) is treated as
+  `{ hls: { offered: false }, file: { available: false } }`: the quality menu
+  simply lacks Original and nothing else regresses.
+- Timeouts/5xx are treated as "no verdict yet"; the client re-queries at a
+  generous interval while the watch screen stays open.
+- The proxy SHOULD use a long upstream timeout (derivation), cache in line
+  with the transcoder's memoization, and send `Cache-Control: no-store` like
+  the media routes.
+
+Related client source policy (app-local, not server contract): Apple players
+load `videoURL` with `?direct=1` appended by default; Android "Original" plays
+`/stream/{key}/file` (derived from `videoURL` by string surgery) when
+`file.available`. Heartbeat `videoId` stays the canonical un-suffixed
+`videoURL` (quirk #8).
+
+---
+
 ## 13. Player support assets
 
 ### 13.1 Subtitles
@@ -1183,6 +1239,7 @@ Response: **iCal string** (`text` / string body).
 | GET | `/api/authenticated/horizontal-list` | Browse rows / grids |
 | GET | `/api/authenticated/genres` | Genre list + content |
 | GET | `/api/authenticated/media` | Detail + player |
+| GET | `/api/authenticated/media/direct-info` | Delivery-tier verdict (proxied direct.json, §12.4) |
 | POST | `/api/authenticated/media` | Legacy detail |
 | GET | `/api/authenticated/banner` | Home banner |
 | GET | `/api/authenticated/screensaver` | TV idle |
@@ -1228,7 +1285,7 @@ Document these so backend changes don’t “fix” the app unexpectedly.
 
 7. **Duration units** differ between movie and episode UI math (seconds vs ms). Keep server units stable.
 
-8. **`videoId` in playback updates is the stream URL string**, not necessarily the media document id. `mediaMetadata.mediaId` carries the catalog id.
+8. **`videoId` in playback updates is the stream URL string**, not necessarily the media document id. `mediaMetadata.mediaId` carries the catalog id. **Delivery-tiers amendment:** the client always sends the *canonical* master URL — `videoURL` exactly as the media payload delivered it, with any tier surgery reversed (`?direct=1` stripped, a `/file` path mapped back to `master.m3u8`; see `src/utils/streamUrls.ts` `canonicalVideoId()`). A tier-mutated `videoId` would split resume history across tiers, so the server SHOULD also normalize defensively by stripping the query string.
 
 9. **Presence finalization** omits `sessionId` on the last progress write when paired with `presence/end`.
 

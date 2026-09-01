@@ -12,6 +12,14 @@ interface Options {
   getPlaybackSessionId?: () => string | null;
   mediaId?: string | null;
   mediaType?: string | null;
+  /**
+   * When this returns true at error time, the user-facing error surface is
+   * skipped (diagnostics still report) — the tier-descent fallback is
+   * mid-recovery and a descent beats a dead-end error screen. The fallback
+   * hook must be declared BEFORE this one so its listener claims the error
+   * first.
+   */
+  suppressWhile?: () => boolean;
 }
 
 export function useVideoErrorHandling({
@@ -20,6 +28,7 @@ export function useVideoErrorHandling({
   getPlaybackSessionId,
   mediaId,
   mediaType,
+  suppressWhile,
 }: Options): string | null {
   const errorRef = useRef<string | null>(null);
   const [error, setErrorState] = useState<string | null>(null);
@@ -76,8 +85,15 @@ export function useVideoErrorHandling({
     getPlaybackSessionId,
     mediaId,
     mediaType,
+    suppressWhile,
   });
-  contextRef.current = { videoURL, getPlaybackSessionId, mediaId, mediaType };
+  contextRef.current = {
+    videoURL,
+    getPlaybackSessionId,
+    mediaId,
+    mediaType,
+    suppressWhile,
+  };
 
   // — One effect: subscribe once per player instance —
   useEffect(() => {
@@ -108,6 +124,15 @@ export function useVideoErrorHandling({
           /MediaCodecVideoRenderer|video.*codec|video.*decoder|DecoderInitializationException|NO_EXCEEDS_CAPABILITIES|NO_UNSUPPORTED_TYPE|h264|h265|hevc|vp9|av1|avc/i,
         )
       ) {
+        if (contextRef.current.suppressWhile?.()) {
+          // The tier-descent fallback claimed this error and is swapping the
+          // source — a recovery in progress must not flash a fatal screen.
+          console.log(
+            "[useVideoErrorHandling] Error surface suppressed during tier descent:",
+            e.message,
+          );
+          return;
+        }
         console.log(
           "[useVideoErrorHandling] Video codec error detected:",
           e.message,
