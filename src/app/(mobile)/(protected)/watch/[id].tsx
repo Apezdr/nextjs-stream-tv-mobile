@@ -244,18 +244,43 @@ export default function MobileWatchPage() {
     currentEpisodeData?.backdropBlurhash || // From episode switching
     videoData?.backdropBlurhash; // From initial data load
 
-  // Buffer Options (mobile-optimized)
+  // Buffer Options (mobile-optimized). NOTE: with
+  // prioritizeTimeOverSizeThreshold true, media3 keeps loading until the TIME
+  // target regardless of maxBufferBytes — the byte value is advisory for HLS.
   const bufferOptions = useMemo<BufferOptions>(
     () => ({
       // More conservative for mobile devices
       preferredForwardBufferDuration: 10, // 10 seconds for mobile
       waitsToMinimizeStalling: true,
       minBufferForPlayback: 2, // 2 seconds minimum for mobile
-      maxBufferBytes: 67108864, // 64 MB for mobile (half of TV)
+      maxBufferBytes: 67108864, // 64 MB for mobile (advisory under the flag)
       prioritizeTimeOverSizeThreshold: true,
     }),
     [],
   );
+
+  // Direct-play (/file) sources need the OPPOSITE trade-off: Mp4Extractor
+  // materializes the container's full sample index on the Java heap before
+  // playback (hundreds of MB for a TrueHD-in-MP4 remux), so the media buffer
+  // must be small and the byte cap must actually bind (see the SHIELD OOM in
+  // PlaybackErrorDetails.tierDescent telemetry).
+  const fileTierBufferOptions = useMemo<BufferOptions>(
+    () => ({
+      preferredForwardBufferDuration: 8,
+      waitsToMinimizeStalling: true,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 50331648, // 48 MB
+      prioritizeTimeOverSizeThreshold: false, // byte cap is authoritative
+    }),
+    [],
+  );
+  const activeBufferOptions = isFileTierURL(playbackSourceURL)
+    ? fileTierBufferOptions
+    : bufferOptions;
+  // Ref so the one-shot setup callback reads the value for the source it is
+  // actually setting up, without re-running setup on tier switches.
+  const activeBufferOptionsRef = useRef(activeBufferOptions);
+  activeBufferOptionsRef.current = activeBufferOptions;
 
   // Create optimized player. The source stays null until the quality
   // preference has resolved — the hook pins its first URL for the mount.
@@ -264,7 +289,7 @@ export default function MobileWatchPage() {
     (p) => {
       p.timeUpdateEventInterval = 1;
       p.loop = false;
-      p.bufferOptions = bufferOptions;
+      p.bufferOptions = activeBufferOptionsRef.current;
 
       // Check if we should restart from beginning or resume from watch history
       const shouldRestart = params.restart === "true";
@@ -286,6 +311,14 @@ export default function MobileWatchPage() {
   );
   playerRef.current = player;
   notifySourceReplacedRef.current = notifySourceReplaced;
+
+  // Keep buffer options matched to the active tier: a switch onto or off the
+  // raw /file source must swap between the HLS profile and the hard-capped
+  // direct-play profile.
+  useEffect(() => {
+    if (!player) return;
+    player.bufferOptions = activeBufferOptions;
+  }, [player, activeBufferOptions]);
 
   // Clear restart parameter after player is configured (prevent setState during render)
   useEffect(() => {

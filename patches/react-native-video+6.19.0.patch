@@ -1,0 +1,16 @@
+diff --git a/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt b/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt
+index 2cd41ca..24b6a29 100644
+--- a/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt
++++ b/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt
+@@ -58,7 +58,10 @@ class VideoDecoderInfoModule(reactContext: ReactApplicationContext?) : ReactCont
+         val isHardwareAccelerated = mRegularCodecs.codecInfos.any {
+             it.name.equals(codecName, ignoreCase = true) && it.isHardwareAccelerated
+         }
+-        p?.resolve(if (isHardwareAccelerated) "software" else "hardware")
++        // Upstream bug: the original resolved "software" when the codec IS
++        // hardware-accelerated and vice versa, inverting every capability
++        // probe (a SHIELD reported all-software). Branches corrected here.
++        p?.resolve(if (isHardwareAccelerated) "hardware" else "software")
+     }
+ 
+     @ReactMethod

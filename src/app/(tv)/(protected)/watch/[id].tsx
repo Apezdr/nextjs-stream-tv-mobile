@@ -233,7 +233,9 @@ export default function WatchPage() {
     currentEpisodeData?.backdropBlurhash || // From episode switching
     videoData?.backdropBlurhash; // From initial data load
 
-  // Buffer Options
+  // Buffer Options. NOTE: with prioritizeTimeOverSizeThreshold true, media3
+  // keeps loading until the TIME target regardless of maxBufferBytes — the
+  // byte value below is advisory, not a hard limit, for HLS sources.
   const bufferOptions = useMemo<BufferOptions>(
     () => ({
       // Conservative forward buffer - balance smoothness vs memory
@@ -244,11 +246,35 @@ export default function WatchPage() {
 
       // Android: Memory-conscious settings
       minBufferForPlayback: 3, // Just 3 seconds minimum = ~23 MB
-      maxBufferBytes: 134217728, // 128 MB hard limit (vs 0 = unlimited)
+      maxBufferBytes: 134217728, // 128 MB (advisory under the flag below)
       prioritizeTimeOverSizeThreshold: true, // Prioritize time over aggressive buffering
     }),
     [],
   );
+
+  // Direct-play (/file) sources need the OPPOSITE trade-off: Mp4Extractor
+  // materializes the container's full sample index on the same 512MB Java
+  // heap before playback (hundreds of MB for a TrueHD-in-MP4 remux), so the
+  // media buffer must be small and the byte cap must actually bind. At remux
+  // bitrates a 15s time target alone is ~140MB — which is how a SHIELD OOMed
+  // playing a 4K remux (see PlaybackErrorDetails.tierDescent telemetry).
+  const fileTierBufferOptions = useMemo<BufferOptions>(
+    () => ({
+      preferredForwardBufferDuration: 8,
+      waitsToMinimizeStalling: true,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 67108864, // 64 MB
+      prioritizeTimeOverSizeThreshold: false, // byte cap is authoritative
+    }),
+    [],
+  );
+  const activeBufferOptions = isFileTierURL(playbackSourceURL)
+    ? fileTierBufferOptions
+    : bufferOptions;
+  // Ref so the one-shot setup callback reads the value for the source it is
+  // actually setting up, without widening its effect deps.
+  const activeBufferOptionsRef = useRef(activeBufferOptions);
+  activeBufferOptionsRef.current = activeBufferOptions;
 
   // Step 1: Create optimized player with deferred setup (no automatic watch history application)
   const { player, setupPlayer, notifySourceReplaced } = useOptimizedVideoPlayer(
@@ -275,17 +301,19 @@ export default function WatchPage() {
       setupPlayer((p) => {
         p.timeUpdateEventInterval = 1;
         p.loop = false;
-        p.bufferOptions = bufferOptions;
+        p.bufferOptions = activeBufferOptionsRef.current;
         p.play();
       });
     }
-  }, [
-    player,
-    watchHistoryStatus,
-    effectiveVideoData,
-    setupPlayer,
-    bufferOptions,
-  ]);
+  }, [player, watchHistoryStatus, effectiveVideoData, setupPlayer]);
+
+  // Keep buffer options matched to the active tier: a switch onto or off the
+  // raw /file source must swap between the HLS profile and the hard-capped
+  // direct-play profile.
+  useEffect(() => {
+    if (!player) return;
+    player.bufferOptions = activeBufferOptions;
+  }, [player, activeBufferOptions]);
 
   // Video player loading state tracking
   useEffect(() => {
