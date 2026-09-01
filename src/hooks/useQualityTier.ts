@@ -326,7 +326,7 @@ export function useQualityTier({
   // re-derived URL restart playback from zero.
   useEffect(() => {
     if (activeTier !== "original") return;
-    if (!directPlayInfo || directPlayInfo.file.available) return;
+    if (!directPlayInfo || directPlayInfo.file?.available) return;
     console.warn(
       "[useQualityTier] Verdict withdrew the file tier — demoting to auto",
     );
@@ -335,11 +335,20 @@ export function useQualityTier({
 
   useEffect(() => clearWatchdog, [clearWatchdog]);
 
+  // Stable identity matters: `tiers` is a prop of the memo-ized controls
+  // components, and a fresh array here would defeat their memo on EVERY
+  // watch-page render (remote presses, activity ticks), re-rendering the
+  // whole controls tree — carousel, seek bar, focus guides — each time.
+  const tiers = useMemo(
+    () => resolveAvailableTiers(directPlayInfo, platformClass),
+    [directPlayInfo, platformClass],
+  );
+
   return {
     sourceReady,
     activeSourceURL,
     applyEpisodeSource,
-    tiers: resolveAvailableTiers(directPlayInfo, platformClass),
+    tiers,
     activeTier,
     selectTier: selectTierInternal,
     descendTier: descendTierInternal,

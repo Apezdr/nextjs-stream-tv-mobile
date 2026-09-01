@@ -31,8 +31,8 @@ export interface QualityTierOption {
  * `badgeLabel` — never call this to override a server-provided label.
  */
 export function deriveOriginalLabel(info: DirectPlayInfo): string {
-  if (info.hls.supplementalCodecs) return "Original (Dolby Vision)";
-  if (info.hls.videoRange === "PQ") return "Original (HDR10)";
+  if (info.hls?.supplementalCodecs) return "Original (Dolby Vision)";
+  if (info.hls?.videoRange === "PQ") return "Original (HDR10)";
   return "Original";
 }
 
@@ -43,7 +43,9 @@ export function deriveOriginalLabel(info: DirectPlayInfo): string {
 export function badgeLabel(
   info: DirectPlayInfo | null | undefined,
 ): string | null {
-  if (!info?.hls.offered) return null;
+  // Optional-chain hls too: a misrouted proxy response (HTML error page
+  // parsed as data) must render as "no badge", never throw mid-playback.
+  if (!info?.hls?.offered) return null;
   return info.badgeLabel ?? deriveOriginalLabel(info);
 }
 
@@ -73,7 +75,7 @@ export function reasonToUserCopy(reason: string | undefined): string | null {
 }
 
 function resolveReasonCopy(info: DirectPlayInfo): string | null {
-  return info.reasonCopy ?? reasonToUserCopy(info.hls.reason);
+  return info.reasonCopy ?? reasonToUserCopy(info.hls?.reason);
 }
 
 /**
@@ -98,9 +100,9 @@ export function resolveAvailableTiers(
   // exactly what §6 forbids (remux audio, open-GOP seeking).
   if (platformClass === "web" || !info) return tiers;
 
-  if (info.file.available) {
+  if (info.file?.available) {
     tiers.push({ id: "original", label: "Original (Direct Play)" });
-  } else if (info.hls.reason !== undefined && info.hls.reason !== "disabled") {
+  } else if (info.hls?.reason !== undefined && info.hls.reason !== "disabled") {
     // A concrete withhold reason means the feature exists and this title is
     // gated — show the row with the explanation. No reason at all (the 404
     // sentinel from a pre-deploy server, or `disabled`) means §10's "the
@@ -133,7 +135,7 @@ export function resolveTierSourceURL(
       ? stripDirectParam(masterURL)
       : withDirectParam(masterURL);
   }
-  if (platformClass !== "web" && tier === "original" && info?.file.available) {
+  if (platformClass !== "web" && tier === "original" && info?.file?.available) {
     return fileURL(masterURL) ?? masterURL;
   }
   // Defensive: the transcode-only default master must never carry a stray
@@ -159,7 +161,7 @@ export function resolveInitialTier(
     return storedTier === "transcode" ? "transcode" : "auto";
   }
   if (platformClass === "web" || dataSaverActive) return "auto";
-  return storedTier === "original" && info?.file.available
+  return storedTier === "original" && info?.file?.available
     ? "original"
     : "auto";
 }

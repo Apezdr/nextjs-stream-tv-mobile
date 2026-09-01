@@ -39,7 +39,11 @@ export function useDirectPlayInfo(params: DirectPlayInfoParams | null) {
     // The first request for an un-memoized title can outlive the 30s HTTP
     // timeout while the server derives keyframes. Keep asking at a generous
     // interval while the watch screen is open; the quality menu picks the
-    // verdict up whenever it lands. Once any verdict exists, stop polling.
-    refetchInterval: (query) => (query.state.data ? false : 30_000),
+    // verdict up whenever it lands. Stop once any verdict exists — and stop
+    // after a few hard failures too, so a misbehaving endpoint (non-404
+    // errors don't hit the sentinel) can't keep a whole playback session
+    // polling, retrying, and session-verifying every 30 seconds.
+    refetchInterval: (query) =>
+      query.state.data || query.state.errorUpdateCount >= 3 ? false : 30_000,
   });
 }

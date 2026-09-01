@@ -966,7 +966,14 @@ const StandaloneVideoControls = memo(
                   audioButtonVisible ||
                   qualityButtonVisible) && (
                   <View>
-                    <View style={styles.bottomControlsRow}>
+                    {/* Full-width focus guide so DOWN from the (full-width)
+                        seek bar reliably lands in this row of narrow centered
+                        buttons instead of spatially skipping to the episode
+                        carousel below. */}
+                    <TVFocusGuideView
+                      autoFocus
+                      style={styles.bottomControlsRow}
+                    >
                       {showCaptionControls && (
                         <CaptionControls
                           captionURLs={videoInfo?.captionURLs}
@@ -1023,7 +1030,7 @@ const StandaloneVideoControls = memo(
                             }
                           />
                         )}
-                    </View>
+                    </TVFocusGuideView>
                   </View>
                 )}
 
