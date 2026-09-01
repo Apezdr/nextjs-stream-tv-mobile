@@ -27,6 +27,7 @@ import type {
 } from "@/src/data/types/auth.types";
 import { classifySessionBody } from "@/src/providers/authSessionPolicy";
 import { useBackdropStore } from "@/src/stores/backdropStore";
+import { clearCookieJar } from "@/src/utils/cookieJar";
 
 type User = {
   id: string;
@@ -511,7 +512,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
         // never sent as false.
         const response = await fetchWithTimeout(
           `${currentServer}${API_ENDPOINTS.AUTH.GET_SESSION}?disableCookieCache=true`,
-          { headers: { Authorization: `Bearer ${currentToken}` } },
+          {
+            headers: { Authorization: `Bearer ${currentToken}` },
+            credentials: "omit",
+          },
         );
 
         // Read as text, not .json(). classifySessionBody() has to tell an
@@ -966,9 +970,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
   async function fetchSession(
     token: string,
   ): Promise<GetSessionResponse | null> {
+    // disableCookieCache for the same reason probeSession() sends it, and it
+    // matters more here. better-auth's bearer plugin rewrites the request's
+    // session_token cookie from the Authorization header, but it leaves
+    // session_data — the cookie cache — untouched, and get-session answers
+    // from that cache before it ever looks at the bearer token. Its HMAC only
+    // proves this server minted the cookie, not that it belongs to the token
+    // we just received. So a stale session_data in Android's OS cookie jar
+    // (which attaches regardless of `credentials`) would hand the user who
+    // just signed in the *previous* user's session, as a 200 with a fully
+    // valid body that nothing downstream can distinguish from the real one.
     const sessionResp = await fetch(
-      `${server}${API_ENDPOINTS.AUTH.GET_SESSION}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      `${server}${API_ENDPOINTS.AUTH.GET_SESSION}?disableCookieCache=true`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        // Suppresses the cookie outright on iOS/tvOS, which is why the native
+        // jar-clearing module is linked on Android only. Android ignores this.
+        credentials: "omit",
+      },
     );
     if (!sessionResp.ok) {
       throw new Error(
@@ -988,6 +1007,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   /** Fetch the session for the given token and persist auth state */
   async function completeAuthentication(token: string): Promise<void> {
+    // Empty the OS cookie jar before the first read on this token. The device
+    // flow issues no cookie of its own (/device/token sets none), so anything
+    // in there belongs to a previous sign-in on this device and can only
+    // mislead the session read that follows. Best-effort: a failure here still
+    // leaves disableCookieCache=true guarding fetchSession().
+    await clearCookieJar();
+
     let sessionData: GetSessionResponse | null;
     try {
       sessionData = await fetchSession(token);
@@ -1148,6 +1174,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       } catch (e) {
         console.warn("[Auth] backdrop reset failed during sign-out", e);
       }
+      // The OS cookie jar is cache too, and the only one holding a credential.
+      // Clearing it here is what stops the next user on this device from
+      // inheriting it; clearCookieJar() logs and resolves on its own failures,
+      // so it cannot skip the steps below.
+      await clearCookieJar();
 
       // 3) Persist the cleared blob. If this throws, the dead token would
       // survive a restart, so it must not be able to skip anything above.

@@ -19,6 +19,7 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-cookies/cookies": "^6.2.1",
     "@shopify/flash-list": "2.0.2",
     "@tanstack/react-query": "^5.80.7",
     "@types/uuid": "^10.0.0",
@@ -109,6 +110,7 @@
         "exclude": [
           "@typescript-eslint/eslint-plugin",
           "eslint",
+          "@react-native-cookies/cookies",
           "react-native-subtitles"
         ],
         "listUnknownPackages": false
