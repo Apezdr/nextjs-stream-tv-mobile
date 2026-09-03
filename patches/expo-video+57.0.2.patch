@@ -32,13 +32,14 @@ index 65f16a5..cd5db7b 100644
            ref.audioTracks.currentAudioTrack
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/FlacSafeRenderersFactory.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/FlacSafeRenderersFactory.kt
 new file mode 100644
-index 0000000..3f1144f
+index 0000000..ca60998
 --- /dev/null
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/FlacSafeRenderersFactory.kt
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,187 @@
 +package expo.modules.video.player
 +
 +import android.content.Context
++import android.media.MediaFormat
 +import android.os.Handler
 +import androidx.media3.common.Format
 +import androidx.media3.common.MimeTypes
@@ -52,6 +53,7 @@ index 0000000..3f1144f
 +import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 +import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 +import androidx.media3.extractor.FlacStreamMetadata
++import java.nio.ByteBuffer
 +
 +/**
 + * A [DefaultRenderersFactory] whose audio renderer sizes the decoder's input
@@ -133,6 +135,45 @@ index 0000000..3f1144f
 +    return maxOf(inherited, flacMaxInputSize(format))
 +  }
 +
++  override fun getMediaFormat(
++    format: Format,
++    codecMimeType: String,
++    codecMaxInputSize: Int,
++    codecOperatingRate: Float
++  ): MediaFormat {
++    val mediaFormat =
++      super.getMediaFormat(format, codecMimeType, codecMaxInputSize, codecOperatingRate)
++    if (format.sampleMimeType == MimeTypes.AUDIO_FLAC) {
++      canonicalFlacConfig(format)?.let { csd ->
++        mediaFormat.setByteBuffer("csd-0", ByteBuffer.wrap(csd))
++      }
++    }
++    return mediaFormat
++  }
++
++  /**
++   * Android's FLAC decoder takes the "fLaC" marker followed by one STREAMINFO
++   * block as codec config. Matroska CodecPrivate carries the whole metadata
++   * header (STREAMINFO plus VORBIS_COMMENT, PICTURE, ...), which the SHIELD's
++   * decoder rejects — logging "decodeOneFrame: no streaminfo metadata block"
++   * for every frame — and then decodes blind. Returns marker + STREAMINFO with
++   * the last-metadata-block flag set, or null when the data isn't that shape
++   * (leaving the stock csd untouched).
++   */
++  private fun canonicalFlacConfig(format: Format): ByteArray? {
++    val data = format.initializationData.firstOrNull() ?: return null
++    val offset = streamInfoOffset(data) ?: return null
++    if (data.size < offset + STREAMINFO_SIZE) return null
++    val out = ByteArray(FLAC_MARKER.size + 4 + STREAMINFO_SIZE)
++    System.arraycopy(FLAC_MARKER, 0, out, 0, FLAC_MARKER.size)
++    out[4] = 0x80.toByte() // last-metadata-block flag | block type 0 (STREAMINFO)
++    out[5] = 0
++    out[6] = 0
++    out[7] = STREAMINFO_SIZE.toByte()
++    System.arraycopy(data, offset, out, 8, STREAMINFO_SIZE)
++    return out
++  }
++
 +  private fun flacMaxInputSize(format: Format): Int {
 +    val streamInfo = format.initializationData.firstOrNull()?.let(::parseStreamInfo)
 +      ?: return FALLBACK_MAX_INPUT_SIZE
@@ -148,19 +189,22 @@ index 0000000..3f1144f
 +  }
 +
 +  /**
-+   * Matroska A_FLAC CodecPrivate is the "fLaC" marker followed by metadata
-+   * blocks, STREAMINFO first; other containers hand over the bare block, with
-+   * or without its 4-byte header. Returns null when nothing parses.
++   * Offset of the 34-byte STREAMINFO body inside FLAC codec config. Matroska
++   * A_FLAC CodecPrivate is the "fLaC" marker followed by metadata blocks,
++   * STREAMINFO first; other containers hand over the bare block, with or
++   * without its 4-byte header. Null when nothing fits.
 +   */
++  private fun streamInfoOffset(data: ByteArray): Int? = when {
++    data.size >= FLAC_MARKER.size + 4 + STREAMINFO_SIZE &&
++      data.copyOfRange(0, FLAC_MARKER.size).contentEquals(FLAC_MARKER) &&
++      (data[4].toInt() and 0x7f) == 0 -> 8
++    data.size >= 4 + STREAMINFO_SIZE && (data[0].toInt() and 0x7f) == 0 -> 4
++    data.size >= STREAMINFO_SIZE -> 0
++    else -> null
++  }
++
 +  private fun parseStreamInfo(data: ByteArray): FlacStreamMetadata? {
-+    val offset = when {
-+      data.size >= 42 &&
-+        data[0] == 'f'.code.toByte() && data[1] == 'L'.code.toByte() &&
-+        data[2] == 'a'.code.toByte() && data[3] == 'C'.code.toByte() -> 8
-+      data.size >= 38 && (data[0].toInt() and 0x7f) == 0 -> 4
-+      data.size >= 34 -> 0
-+      else -> return null
-+    }
++    val offset = streamInfoOffset(data) ?: return null
 +    return try {
 +      FlacStreamMetadata(data, offset)
 +    } catch (e: Exception) {
@@ -169,6 +213,8 @@ index 0000000..3f1144f
 +  }
 +
 +  private companion object {
++    val FLAC_MARKER = byteArrayOf('f'.code.toByte(), 'L'.code.toByte(), 'a'.code.toByte(), 'C'.code.toByte())
++    const val STREAMINFO_SIZE = 34
 +    // Frame header, subframe headers and CRC on top of the sample payload.
 +    const val FRAME_OVERHEAD_BYTES = 1024
 +    // Floor for streams whose frames are small anyway: costs nothing.
