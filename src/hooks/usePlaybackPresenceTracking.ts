@@ -11,6 +11,15 @@ import { MediaDetailsResponse } from "@/src/data/types/content.types";
 
 const PLAYING_HEARTBEAT_INTERVAL_MS = 30_000;
 const PAUSED_HEARTBEAT_INTERVAL_MS = 180_000;
+// A source swap (tier switch, retry, descent) can briefly report a position
+// near zero before its resume seek lands. Persisting that would overwrite the
+// saved position within seconds, so a sharp regression right after a swap is
+// treated as transient; a genuine restart shows up again once the grace
+// period is over.
+const SOURCE_SWAP_GRACE_MS = 20_000;
+// Only a drop to the opening seconds counts: a backward seek into the middle
+// of the title right after a swap is a real position and persists normally.
+const NEAR_START_S = 60;
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -39,6 +48,7 @@ export function usePlaybackPresenceTracking(
   params: WatchParams,
 ) {
   const lastUpdateTimeRef = useRef<number>(0);
+  const sourceChangedAtRef = useRef<number>(0);
   const updateIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pausedHeartbeatIntervalRef = useRef<ReturnType<
     typeof setTimeout
@@ -85,6 +95,17 @@ export function usePlaybackPresenceTracking(
     }
   }, []);
 
+  const isTransientRegression = useCallback((currentTime: number) => {
+    const sinceSwap = Date.now() - sourceChangedAtRef.current;
+    const lastSent = lastUpdateTimeRef.current;
+    if (sinceSwap > SOURCE_SWAP_GRACE_MS) return false;
+    if (lastSent <= NEAR_START_S || currentTime >= NEAR_START_S) return false;
+    console.log(
+      `[PlaybackPresenceTracking] Skipping ${currentTime.toFixed(1)}s update ${Math.round(sinceSwap / 1000)}s after a source swap (last sent ${lastSent.toFixed(1)}s)`,
+    );
+    return true;
+  }, []);
+
   // Expose function to flush current progress immediately (for navigation
   // events and PiP transitions). `includeSessionId` defaults to true; pass
   // `false` when this flush is paired with an `endSession()` call for the
@@ -100,6 +121,7 @@ export function usePlaybackPresenceTracking(
       try {
         const currentTime = player.currentTime;
         if (typeof currentTime === "number" && currentTime > 0) {
+          if (isTransientRegression(currentTime)) return;
           const mediaMetadata = buildMediaMetadata();
           if (!mediaMetadata) return;
 
@@ -146,6 +168,7 @@ export function usePlaybackPresenceTracking(
       }
 
       try {
+        if (isTransientRegression(currentTime)) return;
         const mediaMetadata = buildMediaMetadata();
         if (!mediaMetadata) return;
 
@@ -368,9 +391,19 @@ export function usePlaybackPresenceTracking(
             "playingChange",
             handlePlayingChange,
           );
+          const sourceChangeListener = player.addListener(
+            "sourceChange",
+            () => {
+              sourceChangedAtRef.current = Date.now();
+            },
+          );
 
           // Store listeners for cleanup
-          listenersRef.current.push(timeUpdateListener, playingChangeListener);
+          listenersRef.current.push(
+            timeUpdateListener,
+            playingChangeListener,
+            sourceChangeListener,
+          );
         } catch (error) {
           console.error(
             "[PlaybackPresenceTracking] Error setting up listeners:",

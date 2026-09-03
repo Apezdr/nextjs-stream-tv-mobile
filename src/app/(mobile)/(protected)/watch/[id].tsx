@@ -39,6 +39,7 @@ import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTrac
 import { useQualityTier } from "@/src/hooks/useQualityTier";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
 import { navigationHelper } from "@/src/utils/navigationHelper";
+import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
 
@@ -301,7 +302,8 @@ export default function MobileWatchPage() {
         console.log(
           `[MobileWatchPage] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
         );
-        p.currentTime = resumeTime;
+        // Survives the async source commit (see resumeGuard).
+        applyResumePosition(p, resumeTime, "MobileWatchPage");
       } else if (shouldRestart) {
         p.currentTime = 0;
       }

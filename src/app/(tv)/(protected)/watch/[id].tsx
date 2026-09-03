@@ -1,4 +1,5 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
+import { Image } from "expo-image";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
@@ -33,6 +34,7 @@ import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTrac
 import { useQualityTier } from "@/src/hooks/useQualityTier";
 import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
+import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
 
@@ -286,6 +288,15 @@ export default function WatchPage() {
   );
   playerRef.current = player;
   notifySourceReplacedRef.current = notifySourceReplaced;
+
+  // Free the browse screens' decoded images for the length of the session:
+  // Glide keeps every backdrop and poster the user scrolled past in memory
+  // although nothing draws them here. On a memory-tight TV (a 3 GB SHIELD in
+  // a 4K Dolby Vision session) that headroom is the difference between steady
+  // playback and lmkd process churn that starves the audio track.
+  useEffect(() => {
+    Image.clearMemoryCache().catch(() => {});
+  }, []);
 
   // Step 2: Use watch history application hook to manage the stepped process
   const { status: watchHistoryStatus, isControlsReady } =
@@ -612,7 +623,8 @@ export default function WatchPage() {
           if (watchHistory && watchHistory.playbackTime > 0) {
             const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
             console.log(`[WatchPage] Resuming new episode from ${resumeTime}s`);
-            player.currentTime = resumeTime;
+            // Survives the async source commit (see resumeGuard).
+            applyResumePosition(player, resumeTime, "WatchPage");
           }
 
           player.play();

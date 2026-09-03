@@ -14,6 +14,7 @@ import type { VideoPlayer, StatusChangeEventPayload } from "expo-video";
 import { useCallback, useEffect, useRef } from "react";
 
 import { QualityTierController } from "@/src/hooks/useQualityTier";
+import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { logPlaybackError } from "@/src/utils/videoDiagnostics";
 
 // Matches useAudioFallback's trigger exactly — those errors are its job.
@@ -118,8 +119,13 @@ export function useVideoTierFallback({
       // Claim the error synchronously so useVideoErrorHandling's listener
       // (registered after this hook's) suppresses its fatal error surface.
       handlingRef.current = true;
+      // A player mid-error or still preparing reports 0; use the last
+      // position observed from timeUpdate so recovery never restarts a
+      // resumed session from the beginning.
+      const observed = player.currentTime || 0;
+      const position = observed > 0 ? observed : q.positionHintRef.current;
+      if (position > 0) q.positionHintRef.current = position;
       try {
-        const position = player.currentTime || 0;
         if (retriedForSourceRef.current !== src) {
           // §8 step 1: one plain recovery attempt on the same source.
           retriedForSourceRef.current = src;
@@ -128,7 +134,9 @@ export function useVideoTierFallback({
             e.message,
           );
           await player.replaceAsync({ uri: src });
-          if (position > 0) player.currentTime = position;
+          if (position > 0) {
+            applyResumePosition(player, position, "useVideoTierFallback");
+          }
           player.play();
         } else {
           // §8 step 2: recurrence — descend a tier at the same position.
@@ -144,16 +152,24 @@ export function useVideoTierFallback({
           "[useVideoTierFallback] Recovery attempt failed — descending:",
           fallbackError,
         );
-        reportDescent(e.message, status, player.currentTime || 0);
+        reportDescent(e.message, status, position);
         await qualityRef.current.descendTier();
       } finally {
         handlingRef.current = false;
       }
     };
 
+    const onTimeUpdate = ({ currentTime }: { currentTime: number }) => {
+      if (Number.isFinite(currentTime) && currentTime > 0) {
+        qualityRef.current.positionHintRef.current = currentTime;
+      }
+    };
+
     const sub = player.addListener("statusChange", onStatusChange);
+    const timeSub = player.addListener("timeUpdate", onTimeUpdate);
     return () => {
       sub.remove();
+      timeSub.remove();
     };
   }, [player, reportDescent]);
 
@@ -175,7 +191,11 @@ export function useVideoTierFallback({
       console.warn(
         `[useVideoTierFallback] Source never became playable after ${LOAD_STALL_MS}ms — descending`,
       );
-      reportDescent("Initial load stall", player.status, 0);
+      reportDescent(
+        "Initial load stall",
+        player.status,
+        q.positionHintRef.current,
+      );
       q.descendTier();
     }, LOAD_STALL_MS);
     stallTimerRef.current = timer;

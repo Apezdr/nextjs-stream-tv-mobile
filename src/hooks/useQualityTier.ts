@@ -26,6 +26,7 @@ import {
   resolveInitialTier,
   resolveTierSourceURL,
 } from "@/src/utils/qualityTiers";
+import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { canonicalVideoId } from "@/src/utils/streamUrls";
 
 // How long an Android session holding a remembered "original" preference
@@ -63,6 +64,13 @@ export interface QualityTierController {
   sourceReady: boolean;
   /** The URL the player should hold right now for the active tier. */
   activeSourceURL: string | null;
+  /**
+   * Best-known playback position in seconds, for swaps that happen while the
+   * player reports 0 (a resume seek still pending, an errored load). Fed by
+   * useVideoTierFallback from timeUpdate events; read by selectTier so a
+   * resumed session is never swapped back to the start.
+   */
+  positionHintRef: React.MutableRefObject<number>;
   /**
    * Resolve + pin the source for a NEW item's master URL (episode switch).
    * Master-level tiers carry over; Android "original" demotes to auto — the
@@ -233,6 +241,12 @@ export function useQualityTier({
     applyEpisodeSource(videoURL);
   }, [sourceReady, videoURL, overrideSourceURL, applyEpisodeSource]);
 
+  const positionHintRef = useRef(0);
+
+  // Disposer of the resume guard armed by the last swap (see resumeGuard).
+  const resumeGuardRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => resumeGuardRef.current?.(), []);
+
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current) {
       clearTimeout(watchdogRef.current);
@@ -268,8 +282,15 @@ export function useQualityTier({
       setIsSwitching(true);
       clearWatchdog();
       try {
-        const currentTime = player.currentTime || 0;
+        // A player that has not reached ready (a resume seek still pending, an
+        // errored load) reports 0 even though the session has a position; fall
+        // back to the last position the fallback hook observed.
+        const observed = player.currentTime || 0;
+        const currentTime = observed > 0 ? observed : positionHintRef.current;
         const audioTrack = player.audioTrack;
+        console.log(
+          `[useQualityTier] Switching to "${tier}" at ${currentTime.toFixed(1)}s (player reported ${observed.toFixed(1)}s)`,
+        );
 
         await player.replaceAsync({ uri: target });
         notifySourceReplacedRef.current?.(target);
@@ -280,7 +301,14 @@ export function useQualityTier({
 
         // Tier timelines are identical (§4), so this is a seek-free resume in
         // spirit — restore the position and keep going.
-        if (currentTime > 0) player.currentTime = currentTime;
+        if (currentTime > 0) {
+          resumeGuardRef.current?.();
+          resumeGuardRef.current = applyResumePosition(
+            player,
+            currentTime,
+            "useQualityTier",
+          );
+        }
         player.play();
 
         setSelectedTier(tier);
@@ -347,6 +375,7 @@ export function useQualityTier({
   return {
     sourceReady,
     activeSourceURL,
+    positionHintRef,
     applyEpisodeSource,
     tiers,
     activeTier,

@@ -2,6 +2,7 @@ import { VideoPlayer } from "expo-video";
 import { useCallback, useRef, useState, useEffect } from "react";
 
 import { MediaDetailsResponse } from "@/src/data/types/content.types";
+import { applyResumePosition } from "@/src/utils/resumeGuard";
 
 export type WatchHistoryStatus =
   | "loading" // Waiting for content data
@@ -29,6 +30,7 @@ export function useWatchHistoryApplication({
 }: UseWatchHistoryApplicationParams): UseWatchHistoryApplicationReturn {
   const [status, setStatus] = useState<WatchHistoryStatus>("loading");
   const hasAppliedRef = useRef(false);
+  const resumeGuardRef = useRef<(() => void) | null>(null);
 
   // Reset when content changes
   useEffect(() => {
@@ -61,8 +63,16 @@ export function useWatchHistoryApplication({
           `[useWatchHistoryApplication] Resuming playback from ${resumeTime}s (saved: ${watchHistory.playbackTime}s)`,
         );
 
-        // Set the player position
-        player.currentTime = resumeTime;
+        // Seek, and keep the seek alive across the source commit: expo-video
+        // attaches the source asynchronously, and a seek that lands before
+        // the media item is set is reset away (playback from zero, and the
+        // heartbeat then overwrites the saved position). See resumeGuard.
+        resumeGuardRef.current?.();
+        resumeGuardRef.current = applyResumePosition(
+          player,
+          resumeTime,
+          "useWatchHistoryApplication",
+        );
 
         // Small delay to let the seek complete before marking as success
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -94,6 +104,8 @@ export function useWatchHistoryApplication({
       applyWatchHistory();
     }
   }, [status, player, videoData, applyWatchHistory]);
+
+  useEffect(() => () => resumeGuardRef.current?.(), []);
 
   const isControlsReady = status === "success" || status === "failed";
 
