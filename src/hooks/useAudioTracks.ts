@@ -533,8 +533,27 @@ export function useAudioTracks(player: VideoPlayer | null): {
           `${t.id ?? "?"}|${t.language ?? "-"}|${t.name ?? "-"}|${t.label ?? "-"}|${t.channelCount ?? "-"}ch|${t.sampleMimeType ?? "-"}|${t.isSupported === false ? "unsupported" : "ok"}`,
       )
       .join(" ; ");
+    // What the native side knows beyond the audio list: if video tracks are
+    // listed and an audio track is selected while this list is empty, the
+    // native audio filter is dropping formats (a null sample MIME type on
+    // HLS renditions, say) rather than the track events failing to arrive.
+    let native = "";
+    try {
+      const p = player as unknown as {
+        availableVideoTracks?: unknown[];
+        availableSubtitleTracks?: unknown[];
+        audioTrack?: AudioTrack | null;
+      };
+      const selected = p.audioTrack;
+      const selectedText = selected
+        ? `${selected.id ?? "?"}|${selected.language ?? "-"}|${selected.sampleMimeType ?? "-"}`
+        : "none";
+      native = ` | native: video=${p.availableVideoTracks?.length ?? "?"} subs=${p.availableSubtitleTracks?.length ?? "?"} selectedAudio=${selectedText}`;
+    } catch {
+      native = " | native: unreadable";
+    }
     console.log(
-      `[useAudioTracks] ${availableAudioTracks.length} tracks -> ${rows.length} rows [${rows.map((r) => r.key).join(", ")}] :: ${summary || "(none)"}`,
+      `[useAudioTracks] ${availableAudioTracks.length} tracks -> ${rows.length} rows [${rows.map((r) => r.key).join(", ")}] :: ${summary || "(none)"}${native}`,
     );
   }, [player, availableAudioTracks]);
 
