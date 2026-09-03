@@ -13,8 +13,9 @@ import {
 
 import { AudioFormatOption } from "@/src/hooks/useAudioFormats";
 import {
+  effectiveAudioTrack,
+  isDescriptiveAudioTrack,
   AudioLanguageOption,
-  audioTrackKey,
   audioTracksEqual,
   effectiveAudioLanguage,
   groupAudioTracksByLanguage,
@@ -79,12 +80,21 @@ const MobileAudioControls = memo(
       audioTracks,
     );
 
+    // Whether what is playing is a commentary / audio-description track, so
+    // the language row and its commentary row never tick together.
+    const selectedIsDescriptive = isDescriptiveAudioTrack(
+      effectiveAudioTrack(selectedAudioTrack, audioTracks),
+    );
+
     const isOptionSelected = useCallback(
-      (option: AudioLanguageOption) =>
-        option.language
-          ? option.language === selectedLanguage
-          : audioTracksEqual(option.track, selectedAudioTrack),
-      [selectedLanguage, selectedAudioTrack],
+      (option: AudioLanguageOption) => {
+        if (!option.language) {
+          return audioTracksEqual(option.track, selectedAudioTrack);
+        }
+        if (option.language !== selectedLanguage) return false;
+        return option.descriptive === selectedIsDescriptive;
+      },
+      [selectedLanguage, selectedAudioTrack, selectedIsDescriptive],
     );
 
     const handleOptionSelect = useCallback(
@@ -222,7 +232,7 @@ const MobileAudioControls = memo(
                     )}
                     {languageOptions.map((option) =>
                       renderOptionRow(
-                        option.language || audioTrackKey(option.track),
+                        option.key,
                         option.label,
                         isOptionSelected(option),
                         () => handleOptionSelect(option),

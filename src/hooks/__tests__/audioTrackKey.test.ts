@@ -7,6 +7,7 @@ import {
   audioTracksEqual,
   effectiveAudioLanguage,
   groupAudioTracksByLanguage,
+  preferredMainTrack,
   isAudioTrackSupported,
   isDescriptiveAudioTrack,
   setVerdictAudioTracks,
@@ -205,8 +206,22 @@ describe("groupAudioTracksByLanguage", () => {
     };
     const ac3 = { id: "1", language: "en", label: "English", name: "English" };
     const options = groupAudioTracksByLanguage([truehd, commentary, ac3]);
-    expect(options).toHaveLength(1);
+    expect(options).toHaveLength(2);
+    expect(options[0]).toMatchObject({
+      key: "en",
+      label: "English",
+      descriptive: false,
+    });
     expect(options[0].track).toBe(ac3);
+    // The commentary is its own row, named by its own title, right after
+    // the language it belongs to.
+    expect(options[1]).toMatchObject({
+      key: "en:descriptive",
+      language: "en",
+      label: "English [Commentary]",
+      descriptive: true,
+    });
+    expect(options[1].track).toBe(commentary);
   });
 
   it("prefers decodable commentary over a main mix the device cannot decode", () => {
@@ -223,19 +238,64 @@ describe("groupAudioTracksByLanguage", () => {
       label: "English",
       name: "English [Commentary]",
     };
-    expect(groupAudioTracksByLanguage([truehd, commentary])[0].track).toBe(
-      commentary,
-    );
+    const options = groupAudioTracksByLanguage([truehd, commentary]);
+    expect(options).toHaveLength(1);
+    expect(options[0].track).toBe(commentary);
+    expect(options[0].descriptive).toBe(false);
   });
 
-  it("keeps rows in order of first appearance", () => {
+  it("keeps rows in order of first appearance, commentary under its language", () => {
     const options = groupAudioTracksByLanguage([
       appleTrack("en", "English (Commentary)"),
       appleTrack("es", "Español"),
       appleTrack("en", "English"),
     ]);
-    expect(options.map((o) => o.language)).toEqual(["en", "es"]);
+    expect(options.map((o) => o.key)).toEqual(["en", "en:descriptive", "es"]);
     expect(options[0].track.label).toBe("English");
+    expect(options[1].label).toBe("English (Commentary)");
+  });
+
+  it("names a commentary row generically when only the verdict flagged it", () => {
+    setVerdictAudioTracks([
+      {
+        index: 0,
+        channels: 6,
+        language: "en",
+        title: "English",
+        descriptive: false,
+      },
+      {
+        index: 1,
+        channels: 2,
+        language: "en",
+        title: "English",
+        descriptive: true,
+      },
+    ]);
+    try {
+      const options = groupAudioTracksByLanguage([
+        {
+          id: "0",
+          language: "en",
+          label: "English",
+          name: "English",
+          channelCount: 6,
+        },
+        {
+          id: "1",
+          language: "en",
+          label: "English",
+          name: "English",
+          channelCount: 2,
+        },
+      ] as any);
+      expect(options.map((o) => o.label)).toEqual([
+        "English",
+        "English (Commentary)",
+      ]);
+    } finally {
+      setVerdictAudioTracks(null);
+    }
   });
 
   it("collapses same-language renditions into one option", () => {
@@ -350,5 +410,62 @@ describe("verdictMarksDescriptive (server-side track verdict)", () => {
     expect(isDescriptiveAudioTrack(track)).toBe(true);
     setVerdictAudioTracks(null);
     expect(isDescriptiveAudioTrack(track)).toBe(false);
+  });
+});
+
+describe("preferredMainTrack", () => {
+  const commentary = {
+    id: "8",
+    language: "en",
+    label: "English",
+    name: "English [Commentary]",
+    channelCount: 2,
+  } as any;
+
+  it("moves to the widest decodable main mix of the same language", () => {
+    const dts = {
+      id: "0",
+      language: "en",
+      label: "English",
+      name: "English",
+      channelCount: 8,
+      isSupported: false,
+    };
+    const ac3 = {
+      id: "1",
+      language: "en",
+      label: "English",
+      name: "English",
+      channelCount: 6,
+    };
+    const aac = {
+      id: "2",
+      language: "en",
+      label: "English",
+      name: "English",
+      channelCount: 2,
+    };
+    expect(
+      preferredMainTrack(commentary, [dts, aac, ac3, commentary] as any),
+    ).toBe(ac3);
+  });
+
+  it("returns null when the language has no decodable main mix", () => {
+    const dts = {
+      id: "0",
+      language: "en",
+      label: "English",
+      name: "English",
+      isSupported: false,
+    };
+    const french = {
+      id: "3",
+      language: "fr",
+      label: "Français",
+      name: "Français",
+    };
+    expect(
+      preferredMainTrack(commentary, [dts, french, commentary] as any),
+    ).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import type { AudioTrack, VideoPlayer } from "expo-video";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 
 import type { DirectPlayAudioTrack } from "@/src/data/types/directPlay.types";
 
@@ -39,6 +39,18 @@ export function effectiveAudioLanguage(
   return normalizeLanguageTag(
     selectedAudioTrack?.language ?? availableAudioTracks[0]?.language,
   );
+}
+
+/**
+ * The track the player is actually rendering, as far as the app can tell:
+ * the reported selection, else the declared default (first track) while the
+ * player is on automatic selection.
+ */
+export function effectiveAudioTrack(
+  selectedAudioTrack: AudioTrack | null | undefined,
+  availableAudioTracks: AudioTrack[],
+): AudioTrack | null {
+  return selectedAudioTrack ?? availableAudioTracks[0] ?? null;
 }
 
 // On Android, ExoPlayer builds the HLS rendition format id as
@@ -107,7 +119,10 @@ export function verdictMarksDescriptive(
     (v) => v.title && titles.includes(normalizeTitle(v.title)),
   );
   if (byTitle.length > 0) {
-    return byTitle.every((v) => v.descriptive === true);
+    // Titles agree: that is the answer. Ambiguous titles ("English" on every
+    // track) fall through to the shape match below.
+    const flags = new Set(byTitle.map((v) => v.descriptive === true));
+    if (flags.size === 1) return byTitle[0].descriptive === true;
   }
   const language = normalizeLanguageTag(track.language);
   const channels = track.channelCount;
@@ -192,12 +207,31 @@ const LANGUAGE_NAMES: Record<string, string> = {
 };
 
 export interface AudioLanguageOption {
+  // Stable row key: the language, or `<language>:descriptive` for a
+  // commentary / audio-description row.
+  key: string;
   // Normalized primary subtag, e.g. "en". Always non-empty.
   language: string;
   // Human-readable row label.
   label: string;
-  // Representative track to assign when this language is chosen.
+  // Representative track to assign when this row is chosen.
   track: AudioTrack;
+  // True for the commentary / audio-description row of a language.
+  descriptive: boolean;
+}
+
+function languageName(language: string, track: AudioTrack): string {
+  return LANGUAGE_NAMES[language] ?? track.label ?? track.language ?? "Unknown";
+}
+
+// The commentary row is named by the track's own title when that title says
+// what it is ("English [Commentary]"); a track flagged only by the server's
+// verdict gets a generic name.
+function descriptiveRowLabel(language: string, track: AudioTrack): string {
+  const own = [track.name, track.label].find(
+    (text) => text && DESCRIPTIVE_AUDIO_RE.test(text),
+  );
+  return own?.trim() || `${languageName(language, track)} (Commentary)`;
 }
 
 // An HLS master frequently exposes several renditions of the SAME language
@@ -212,6 +246,13 @@ export interface AudioLanguageOption {
 // played container "English" assigned the TrueHD default no Android device
 // decodes, or the commentary track when that happened to come first.
 //
+// Commentary and audio description get their OWN row, right after their
+// language, whenever the language also has a main mix: folded into the
+// language they share, a commentary track the player happened to pick is
+// invisible, unreachable, and impossible to leave. When the only decodable
+// track of a language IS the commentary, it represents the language and no
+// second row is added.
+//
 // Tracks with no language tag are skipped entirely rather than each becoming
 // its own row: on a master without LANGUAGE, Android would otherwise turn N
 // codec renditions into N "Unknown" rows and wrongly open the button, while
@@ -221,6 +262,7 @@ export function groupAudioTracksByLanguage(
 ): AudioLanguageOption[] {
   // Insertion order is row order: first appearance of each language.
   const representatives = new Map<string, AudioTrack>();
+  const descriptives = new Map<string, AudioTrack>();
   for (const track of tracks) {
     const language = normalizeLanguageTag(track.language);
     if (!language) continue;
@@ -231,13 +273,63 @@ export function groupAudioTracksByLanguage(
     ) {
       representatives.set(language, track);
     }
+    if (isDescriptiveAudioTrack(track)) {
+      const currentDescriptive = descriptives.get(language);
+      if (
+        !currentDescriptive ||
+        audioTrackPreferenceRank(track) <
+          audioTrackPreferenceRank(currentDescriptive)
+      ) {
+        descriptives.set(language, track);
+      }
+    }
   }
-  return [...representatives].map(([language, track]) => ({
-    language,
-    label:
-      LANGUAGE_NAMES[language] ?? track.label ?? track.language ?? "Unknown",
-    track,
-  }));
+  const options: AudioLanguageOption[] = [];
+  for (const [language, track] of representatives) {
+    options.push({
+      key: language,
+      language,
+      label: languageName(language, track),
+      track,
+      descriptive: false,
+    });
+    const descriptive = descriptives.get(language);
+    if (descriptive && !isDescriptiveAudioTrack(track)) {
+      options.push({
+        key: `${language}:descriptive`,
+        language,
+        label: descriptiveRowLabel(language, descriptive),
+        track: descriptive,
+        descriptive: true,
+      });
+    }
+  }
+  return options;
+}
+
+/**
+ * The main mix to move to when the player's automatic selection landed on
+ * commentary / audio description: a decodable, non-descriptive track of the
+ * same language, the widest one (channel count) first, else the first
+ * declared. Null when the language has no such track.
+ */
+export function preferredMainTrack(
+  descriptive: AudioTrack,
+  tracks: AudioTrack[],
+): AudioTrack | null {
+  const language = normalizeLanguageTag(descriptive.language);
+  if (!language) return null;
+  let best: AudioTrack | null = null;
+  for (const track of tracks) {
+    if (normalizeLanguageTag(track.language) !== language) continue;
+    if (isDescriptiveAudioTrack(track) || !isAudioTrackSupported(track)) {
+      continue;
+    }
+    if (!best || (track.channelCount ?? 0) > (best.channelCount ?? 0)) {
+      best = track;
+    }
+  }
+  return best;
 }
 
 // Player-derived audio track state for the watch page controls. Listeners are
@@ -302,6 +394,10 @@ export function useAudioTracks(player: VideoPlayer | null): {
         return null;
       }
     });
+  // Set once the viewer picks a track for this source; cleared on sourceLoad.
+  const userChoseRef = useRef(false);
+  // The track list the descriptive-track correction below already handled.
+  const correctedListRef = useRef<AudioTrack[] | null>(null);
 
   useEffect(() => {
     if (!player) return;
@@ -322,6 +418,7 @@ export function useAudioTracks(player: VideoPlayer | null): {
       // sourceLoad is the canonical load-time source of the track list; it
       // also fires after replaceAsync, resetting state on episode switches.
       player.addListener("sourceLoad", (payload) => {
+        userChoseRef.current = false;
         setAvailableAudioTracks(keepIfSameList(payload.availableAudioTracks));
         try {
           setSelectedAudioTrack(keepIfSameTrack(player.audioTrack ?? null));
@@ -356,9 +453,41 @@ export function useAudioTracks(player: VideoPlayer | null): {
     };
   }, [player]);
 
+  // Automatic selection can land on commentary: on a direct-played container
+  // when the main mix is a codec the device lacks (a DTS main and an AC-3
+  // commentary on a phone), on a master when the commentary rendition is the
+  // only stereo one. Nothing in the player knows a track titled "English
+  // [Commentary]" is not the dialogue, so once per track list, unless the
+  // viewer chose a track themselves, move to the language's main mix.
+  useEffect(() => {
+    if (!player || userChoseRef.current) return;
+    if (correctedListRef.current === availableAudioTracks) return;
+    const playing = effectiveAudioTrack(
+      selectedAudioTrack,
+      availableAudioTracks,
+    );
+    if (!playing || !isDescriptiveAudioTrack(playing)) return;
+    const main = preferredMainTrack(playing, availableAudioTracks);
+    if (!main) return;
+    correctedListRef.current = availableAudioTracks;
+    console.log(
+      `[useAudioTracks] Automatic selection landed on "${playing.name ?? playing.label}" — moving to "${main.name ?? main.label}"`,
+    );
+    try {
+      player.audioTrack = main;
+      setSelectedAudioTrack(keepIfSameTrack(main));
+    } catch (e) {
+      console.warn(
+        "[useAudioTracks] Failed to leave the descriptive track:",
+        e,
+      );
+    }
+  }, [player, availableAudioTracks, selectedAudioTrack]);
+
   const selectAudioTrack = useCallback(
     (track: AudioTrack) => {
       if (!player) return;
+      userChoseRef.current = true;
       try {
         // Assigning audioTrack switches natively without reloading the source
         // — never replaceAsync here (it would drop position and selection).
