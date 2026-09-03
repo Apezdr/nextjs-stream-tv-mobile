@@ -234,6 +234,54 @@ function descriptiveRowLabel(language: string, track: AudioTrack): string {
   return own?.trim() || `${languageName(language, track)} (Commentary)`;
 }
 
+// Codec names for container tracks, from the sample MIME type our expo-video
+// patch reports on Android (the only platform that direct-plays containers).
+const CONTAINER_CODEC_NAMES: [RegExp, string][] = [
+  [/true-?hd|mlp/i, "TrueHD"],
+  [/eac3|ec-3/i, "Dolby Digital+"],
+  [/\bac3\b|ac-3/i, "Dolby Digital"],
+  [/dts-?hd|dts_hd/i, "DTS-HD"],
+  [/dts/i, "DTS"],
+  [/flac/i, "FLAC"],
+  [/opus/i, "Opus"],
+  [/vorbis/i, "Vorbis"],
+  [/mp4a|aac/i, "AAC"],
+  [/mpeg|mp3/i, "MP3"],
+  [/raw|pcm/i, "PCM"],
+];
+
+function channelLabel(channels: number | null | undefined): string {
+  if (channels == null) return "";
+  if (channels >= 8) return "7.1";
+  if (channels >= 6) return "5.1";
+  if (channels === 1) return "Mono";
+  return "Stereo";
+}
+
+/**
+ * A row label for a container track that carries no language: what the
+ * viewer can tell apart is the format — "Track 2 · Dolby Digital Stereo".
+ */
+export function describeContainerAudioTrack(
+  track: AudioTrack,
+  ordinal: number,
+): string {
+  const mime = track.sampleMimeType ?? "";
+  const codec = CONTAINER_CODEC_NAMES.find(([re]) => re.test(mime))?.[1];
+  const format = [codec, channelLabel(track.channelCount)]
+    .filter((part): part is string => !!part)
+    .join(" ");
+  return format ? `Track ${ordinal} · ${format}` : `Track ${ordinal}`;
+}
+
+// A track with no language tag from a direct-played container (its id is
+// ExoPlayer's plain track number, never an HLS "<GROUP-ID>:<NAME>" pair).
+function isUntaggedContainerTrack(track: AudioTrack): boolean {
+  return (
+    !normalizeLanguageTag(track.language) && audioTrackGroupId(track) === null
+  );
+}
+
 // An HLS master frequently exposes several renditions of the SAME language
 // (AAC stereo / AC3 5.1 / EAC3 5.1 / low-bitrate mono), which arrive as
 // separate AudioTracks with identical label+language. The selector offers
@@ -253,10 +301,15 @@ function descriptiveRowLabel(language: string, track: AudioTrack): string {
 // track of a language IS the commentary, it represents the language and no
 // second row is added.
 //
-// Tracks with no language tag are skipped entirely rather than each becoming
+// HLS renditions with no language tag are skipped rather than each becoming
 // its own row: on a master without LANGUAGE, Android would otherwise turn N
 // codec renditions into N "Unknown" rows and wrongly open the button, while
 // Apple drops such tracks anyway (its record construction requires a locale).
+// Untagged tracks of a direct-played CONTAINER are different: they are
+// distinct audio (a remux with a DTS main and two unlabeled AC-3 stereo
+// tracks, one of them the commentary), and skipping them left the viewer with
+// no way to leave whatever the player picked. Each gets its own row, named by
+// its format, after the language rows.
 export function groupAudioTracksByLanguage(
   tracks: AudioTrack[],
 ): AudioLanguageOption[] {
@@ -285,6 +338,7 @@ export function groupAudioTracksByLanguage(
     }
   }
   const options: AudioLanguageOption[] = [];
+  const untagged = tracks.filter(isUntaggedContainerTrack);
   for (const [language, track] of representatives) {
     options.push({
       key: language,
@@ -304,6 +358,15 @@ export function groupAudioTracksByLanguage(
       });
     }
   }
+  untagged.forEach((track, i) => {
+    options.push({
+      key: `track:${track.id ?? i}`,
+      language: "",
+      label: describeContainerAudioTrack(track, i + 1),
+      track,
+      descriptive: isDescriptiveAudioTrack(track),
+    });
+  });
   return options;
 }
 

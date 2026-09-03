@@ -6,6 +6,7 @@ import {
   audioTrackPreferenceRank,
   audioTracksEqual,
   effectiveAudioLanguage,
+  describeContainerAudioTrack,
   groupAudioTracksByLanguage,
   preferredMainTrack,
   isAudioTrackSupported,
@@ -467,5 +468,90 @@ describe("preferredMainTrack", () => {
     expect(
       preferredMainTrack(commentary, [dts, french, commentary] as any),
     ).toBeNull();
+  });
+});
+
+describe("untagged container tracks (direct play)", () => {
+  // Hardcore Henry: a DTS 5.1 main and two AC-3 stereo tracks, none with a
+  // language or a title. ExoPlayer ids are the plain track numbers.
+  const dts = {
+    id: "1",
+    language: null,
+    label: null,
+    name: null,
+    channelCount: 6,
+    sampleMimeType: "audio/vnd.dts",
+  };
+  const ac3a = {
+    id: "2",
+    language: null,
+    label: null,
+    name: null,
+    channelCount: 2,
+    sampleMimeType: "audio/ac3",
+  };
+  const ac3b = {
+    id: "3",
+    language: null,
+    label: null,
+    name: null,
+    channelCount: 2,
+    sampleMimeType: "audio/ac3",
+  };
+
+  it("gives each untagged container track its own format-named row", () => {
+    const options = groupAudioTracksByLanguage([dts, ac3a, ac3b] as any);
+    expect(options.map((o) => o.key)).toEqual([
+      "track:1",
+      "track:2",
+      "track:3",
+    ]);
+    expect(options.map((o) => o.label)).toEqual([
+      "Track 1 · DTS 5.1",
+      "Track 2 · Dolby Digital Stereo",
+      "Track 3 · Dolby Digital Stereo",
+    ]);
+    expect(options.every((o) => o.language === "")).toBe(true);
+    expect(options[1].track).toBe(ac3a);
+  });
+
+  it("lists them after the language rows", () => {
+    const english = {
+      id: "4",
+      language: "en",
+      label: "English",
+      name: "English",
+      channelCount: 6,
+    };
+    const options = groupAudioTracksByLanguage([dts, english] as any);
+    expect(options.map((o) => o.key)).toEqual(["en", "track:1"]);
+  });
+
+  it("still skips untagged HLS renditions", () => {
+    expect(
+      groupAudioTracksByLanguage([
+        { id: "aud-aac:Audio", language: "", label: "" },
+        { id: "aud-ec3:Audio", language: "", label: "" },
+      ] as any),
+    ).toEqual([]);
+  });
+
+  it("names a track by whatever it knows", () => {
+    expect(
+      describeContainerAudioTrack(
+        { sampleMimeType: "audio/true-hd", channelCount: 8 } as any,
+        1,
+      ),
+    ).toBe("Track 1 · TrueHD 7.1");
+    expect(
+      describeContainerAudioTrack(
+        { sampleMimeType: "audio/mp4a-latm", channelCount: 2 } as any,
+        2,
+      ),
+    ).toBe("Track 2 · AAC Stereo");
+    expect(describeContainerAudioTrack({ channelCount: 1 } as any, 3)).toBe(
+      "Track 3 · Mono",
+    );
+    expect(describeContainerAudioTrack({} as any, 4)).toBe("Track 4");
   });
 });
