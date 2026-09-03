@@ -131,3 +131,20 @@ export function canonicalVideoId(url: string): string {
       : parts.path;
   return joinURL({ ...parts, path, query: stripDirectFromQuery(parts.query) });
 }
+
+/**
+ * A URL-free description of which delivery tier a source URL points at, for
+ * diagnostics. Stream URLs carry the private transcoder host and per-title
+ * key, so log lines must never print them.
+ */
+export function describeStreamTier(url: string | null | undefined): string {
+  if (!url) return "none";
+  const parts = splitURL(url);
+  const tail = parts.path.match(STREAM_TAIL_RE)?.[2];
+  if (tail === "file") return "file";
+  if (tail !== "master.m3u8") return "other";
+  const params = parts.query.split("&");
+  if (params.includes("direct=only")) return "hls:direct=only";
+  if (params.includes("direct=1")) return "hls:direct=1";
+  return "hls";
+}

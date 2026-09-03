@@ -35,6 +35,7 @@ import {
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
 import { QualityTierId, QualityTierOption } from "@/src/utils/qualityTiers";
+import { describeStreamTier } from "@/src/utils/streamUrls";
 
 interface MobileVideoControlsProps {
   player: VideoPlayer;
@@ -197,7 +198,7 @@ const MobileVideoControls = memo(
     // Diagnostic: why the audio button is or is not on screen.
     useEffect(() => {
       console.log(
-        `[%s] audio button: showAudioControls=${String(showAudioControls)} rows=${audioLanguageCount} formats=${formatOptions.length} visible=${String(audioButtonVisible)} source=${videoURL ?? "-"}`.replace(
+        `[%s] audio button: showAudioControls=${String(showAudioControls)} rows=${audioLanguageCount} formats=${formatOptions.length} visible=${String(audioButtonVisible)} source=${describeStreamTier(videoURL)}`.replace(
           "%s",
           "MobileVideoControls",
         ),

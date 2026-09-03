@@ -1,4 +1,5 @@
 import {
+  describeStreamTier,
   isDirectOnlyURL,
   withDirectOnlyParam,
   canonicalVideoId,
@@ -166,6 +167,31 @@ describe("withDirectOnlyParam / isDirectOnlyURL", () => {
     expect(stripDirectParam(`${master}?direct=only`)).toBe(master);
     expect(canonicalVideoId(`${master}?direct=only`)).toBe(
       canonicalVideoId(`${master}?direct=1`),
+    );
+  });
+});
+
+describe("describeStreamTier", () => {
+  it("names the tier without leaking the host or key", () => {
+    expect(describeStreamTier(MASTER)).toBe("hls");
+    expect(describeStreamTier(MASTER_WITH_TOKEN)).toBe("hls");
+    expect(describeStreamTier(withDirectParam(MASTER))).toBe("hls:direct=1");
+    expect(describeStreamTier(withDirectOnlyParam(MASTER_WITH_TOKEN))).toBe(
+      "hls:direct=only",
+    );
+    expect(describeStreamTier(FILE)).toBe("file");
+    for (const url of [MASTER, MASTER_WITH_TOKEN, FILE]) {
+      expect(describeStreamTier(url)).not.toContain("abc123");
+      expect(describeStreamTier(url)).not.toContain("transcoder");
+    }
+  });
+
+  it("handles missing and non-stream URLs", () => {
+    expect(describeStreamTier(null)).toBe("none");
+    expect(describeStreamTier(undefined)).toBe("none");
+    expect(describeStreamTier("")).toBe("none");
+    expect(describeStreamTier("https://cdn.example.com/banner.mp4")).toBe(
+      "other",
     );
   });
 });

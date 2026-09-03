@@ -46,6 +46,7 @@ import {
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
 import { QualityTierId, QualityTierOption } from "@/src/utils/qualityTiers";
+import { describeStreamTier } from "@/src/utils/streamUrls";
 
 interface StandaloneVideoControlsProps {
   player: VideoPlayer; // expo-video player instance
@@ -277,7 +278,7 @@ const StandaloneVideoControls = memo(
     // Diagnostic: why the audio button is or is not on screen.
     useEffect(() => {
       console.log(
-        `[%s] audio button: showAudioControls=${String(showAudioControls)} rows=${audioLanguageCount} formats=${formatOptions.length} visible=${String(audioButtonVisible)} source=${videoURL ?? "-"}`.replace(
+        `[%s] audio button: showAudioControls=${String(showAudioControls)} rows=${audioLanguageCount} formats=${formatOptions.length} visible=${String(audioButtonVisible)} source=${describeStreamTier(videoURL)}`.replace(
           "%s",
           "StandaloneVideoControls",
         ),
