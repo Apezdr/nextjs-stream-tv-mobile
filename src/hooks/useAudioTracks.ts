@@ -57,6 +57,54 @@ export function audioTrackGroupId(
   return colonIndex > 0 ? id.slice(0, colonIndex) : null;
 }
 
+// Track names that mark a supplementary mix rather than the main one: the
+// same four keywords the transcoder uses to demote such tracks out of the
+// default rendition slot, so the app and the server agree on what counts as
+// descriptive. On a direct-played container every track keeps its own name,
+// and nothing else in the pipeline knows that "English [Commentary]" is not
+// the film's dialogue. The Matroska Name element surfaces as `name` on
+// Android (`label` there is the locale's display name and never matches);
+// Apple platforms carry the option's display name in `label`.
+const DESCRIPTIVE_AUDIO_RE =
+  /commentary|audio description|descriptive|visually impaired/i;
+
+export function isDescriptiveAudioTrack(
+  track: AudioTrack | null | undefined,
+): boolean {
+  if (!track) return false;
+  return (
+    DESCRIPTIVE_AUDIO_RE.test(track.name ?? "") ||
+    DESCRIPTIVE_AUDIO_RE.test(track.label ?? "")
+  );
+}
+
+// ExoPlayer's own verdict on whether the device can decode the track — false
+// means it found no decoder (or none whose capabilities the format fits), so
+// assigning the track can only end in a codec error. Only patched runtimes
+// report it; a runtime that says nothing is assumed capable.
+export function isAudioTrackSupported(
+  track: AudioTrack | null | undefined,
+): boolean {
+  return track?.isSupported !== false;
+}
+
+// How likely a track is to be what the viewer wants to hear, lower is better:
+//   0 — decodable main mix
+//   1 — decodable commentary / audio description
+//   2 — main mix the device has no decoder for
+//   3 — undecodable commentary / audio description
+// A decodable descriptive track outranks an undecodable main mix because
+// assigning the latter fails and the fallback lands on the former anyway,
+// one reload later. Every chooser that must settle on ONE track among
+// several of a language (the language row's representative, the codec-error
+// fallback) orders by this first so they agree with each other.
+export function audioTrackPreferenceRank(track: AudioTrack): number {
+  return (
+    (isAudioTrackSupported(track) ? 0 : 2) +
+    (isDescriptiveAudioTrack(track) ? 1 : 0)
+  );
+}
+
 // Endonyms for the language rows. Hermes has no Intl.DisplayNames, and the
 // playlist NAME attribute is often a generic "Audio", so a static map is the
 // only reliable source of readable names.
@@ -106,6 +154,12 @@ export interface AudioLanguageOption {
 // languages, so collapse to one option per distinct language; rendition
 // choice within a language belongs to the Sound Format axis.
 //
+// The representative — what a tap on the row assigns — is the best-ranked
+// track of the language (see audioTrackPreferenceRank), the first declared
+// one among equals. Taking the first track outright meant that on a direct
+// played container "English" assigned the TrueHD default no Android device
+// decodes, or the commentary track when that happened to come first.
+//
 // Tracks with no language tag are skipped entirely rather than each becoming
 // its own row: on a master without LANGUAGE, Android would otherwise turn N
 // codec renditions into N "Unknown" rows and wrongly open the button, while
@@ -113,23 +167,25 @@ export interface AudioLanguageOption {
 export function groupAudioTracksByLanguage(
   tracks: AudioTrack[],
 ): AudioLanguageOption[] {
-  const seen = new Map<string, AudioLanguageOption>();
+  // Insertion order is row order: first appearance of each language.
+  const representatives = new Map<string, AudioTrack>();
   for (const track of tracks) {
     const language = normalizeLanguageTag(track.language);
     if (!language) continue;
-    if (!seen.has(language)) {
-      seen.set(language, {
-        language,
-        label:
-          LANGUAGE_NAMES[language] ??
-          track.label ??
-          track.language ??
-          "Unknown",
-        track,
-      });
+    const current = representatives.get(language);
+    if (
+      !current ||
+      audioTrackPreferenceRank(track) < audioTrackPreferenceRank(current)
+    ) {
+      representatives.set(language, track);
     }
   }
-  return [...seen.values()];
+  return [...representatives].map(([language, track]) => ({
+    language,
+    label:
+      LANGUAGE_NAMES[language] ?? track.label ?? track.language ?? "Unknown",
+    track,
+  }));
 }
 
 // Player-derived audio track state for the watch page controls. Listeners are

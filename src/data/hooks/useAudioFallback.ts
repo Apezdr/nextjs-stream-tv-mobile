@@ -8,16 +8,86 @@ import { useEffect, useRef, useState } from "react";
 import {
   audioTrackGroupId,
   audioTrackKey,
+  audioTrackPreferenceRank,
   audioTracksEqual,
   normalizeLanguageTag,
 } from "@/src/hooks/useAudioTracks";
-import { getCachedAudioGroups } from "@/src/utils/hlsAudioFormats";
+import {
+  HlsAudioGroupInfo,
+  getCachedAudioGroups,
+} from "@/src/utils/hlsAudioFormats";
 
 interface Options {
   videoURL: string | null;
   player: VideoPlayer;
   preferredLanguages: string[];
   fallbackTimeoutMs?: number;
+}
+
+// The next track to try after a codec error, or null when every track has
+// been tried. Pure, so the walk order is testable without a player.
+//
+// Candidates are split by audioTrackPreferenceRank into pools that are
+// exhausted strictly in order — decodable main mixes, then decodable
+// commentary / audio-description, then the tracks ExoPlayer has already
+// declared undecodable — and the preferred languages are honoured WITHIN a
+// pool: the first language that has a candidate there wins, else the pool's
+// best. So a main mix in another language beats commentary in the preferred
+// one (the film's own audio is closer to what the viewer wanted, and the
+// language row then honestly says which language is playing), and both beat
+// a track that can only end in another codec error and reload. Undecodable
+// tracks are still tried once everything else has failed: ExoPlayer's
+// capability check is conservative, and mono beats silence.
+//
+// Within a pool, groups that only serve low video rungs (a cellular-only mono
+// group) come last since pinning one would cap video quality, then more
+// channels beat fewer so a 5.1 mix wins over a stereo one on merit. Ties keep
+// the source's declared order.
+export function pickFallbackAudioTrack(
+  tracks: AudioTrack[],
+  currentTrack: AudioTrack | null | undefined,
+  tried: ReadonlySet<string>,
+  groups: HlsAudioGroupInfo[] | null,
+  preferredLanguages: string[],
+): AudioTrack | null {
+  const withinPoolRank = (track: AudioTrack): [number, number] => {
+    const id = audioTrackGroupId(track);
+    const group =
+      id && groups ? groups.find((g) => g.groupId === id) : undefined;
+    return [group && !group.selectable ? 1 : 0, -(track.channelCount ?? 0)];
+  };
+
+  const ordered = tracks
+    .map((track, index) => ({ track, index, rank: withinPoolRank(track) }))
+    .filter(
+      ({ track }) =>
+        !audioTracksEqual(track, currentTrack) &&
+        !tried.has(audioTrackKey(track)),
+    )
+    .sort(
+      (a, b) =>
+        a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.index - b.index,
+    )
+    .map(({ track }) => track);
+
+  const pools = new Map<number, AudioTrack[]>();
+  for (const track of ordered) {
+    const pool = audioTrackPreferenceRank(track);
+    pools.set(pool, [...(pools.get(pool) ?? []), track]);
+  }
+
+  const normalizedLanguages = preferredLanguages.map(normalizeLanguageTag);
+  for (const pool of [...pools.keys()].sort((a, b) => a - b)) {
+    const candidates = pools.get(pool) ?? [];
+    for (const language of normalizedLanguages) {
+      const match = candidates.find(
+        (track) => normalizeLanguageTag(track.language) === language,
+      );
+      if (match) return match;
+    }
+    if (candidates.length > 0) return candidates[0];
+  }
+  return null;
 }
 
 export function useAudioFallback({
@@ -88,42 +158,32 @@ export function useAudioFallback({
   // — Pick next track by reading from refs only —
   const pickNext = (): AudioTrack | null => {
     const { availableAudioTracks = [], audioTrack } = player;
-    // Compare via audioTrackKey — `id` is Android-only, so filtering on it
-    // matched nothing on Apple platforms.
-    const candidates = availableAudioTracks.filter(
-      (t) =>
-        !audioTracksEqual(t, audioTrack) &&
-        !triedRef.current.has(audioTrackKey(t)),
+    return pickFallbackAudioTrack(
+      availableAudioTracks,
+      audioTrack,
+      triedRef.current,
+      getCachedAudioGroups(urlRef.current),
+      langsRef.current,
     );
+  };
 
-    // Groups that only serve low video rungs (a cellular-only mono group)
-    // would cap video quality, so try them last — but still try them, since
-    // mono beats silence when everything else has failed.
-    const groups = getCachedAudioGroups(urlRef.current);
-    const ranked = groups
-      ? [...candidates].sort((a, b) => {
-          const rank = (t: AudioTrack) => {
-            const id = audioTrackGroupId(t);
-            const group = id ? groups.find((g) => g.groupId === id) : undefined;
-            return group && !group.selectable ? 1 : 0;
-          };
-          return rank(a) - rank(b);
-        })
-      : candidates;
-
-    for (const lang of langsRef.current) {
-      const normalized = normalizeLanguageTag(lang);
-      const match = ranked.find(
-        (t) => normalizeLanguageTag(t.language) === normalized,
-      );
-      if (match) return match;
+  // The track that just failed is excluded from this round as "current", but
+  // it is not in the tried set — so once the fallback has moved on it would
+  // become a candidate again and be reloaded for a second time before the
+  // walk reaches anything new. Pin it so each track fails at most once.
+  const markCurrentTried = () => {
+    try {
+      const current = player.audioTrack;
+      if (current) triedRef.current.add(audioTrackKey(current));
+    } catch {
+      // The native getter can throw while the player is tearing down.
     }
-    return ranked[0] || null;
   };
 
   // — The main fallback routine —
   const doFallback = async () => {
     clearTimer();
+    markCurrentTried();
     const next = pickNext();
     if (!next) {
       setError("All audio tracks failed or are unsupported.");
@@ -139,7 +199,10 @@ export function useAudioFallback({
       // Preserve current playback position before replace
       const currentTime = player.currentTime || 0;
       console.log(
-        `[useAudioFallback] Preserving current time: ${currentTime}s before audio track fallback`,
+        `[useAudioFallback] Falling back to audio track ${audioTrackKey(next)} ` +
+          `(${next.language}, ${next.name ?? next.label}, ` +
+          `${next.channelCount ?? "?"}ch, ${next.sampleMimeType ?? "codec unknown"}) ` +
+          `at ${currentTime}s`,
       );
 
       player.audioTrack = next;
