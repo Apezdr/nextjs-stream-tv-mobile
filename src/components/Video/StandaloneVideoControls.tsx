@@ -274,6 +274,21 @@ const StandaloneVideoControls = memo(
         (audioLanguageCount >= 2 || formatOptions.length >= 2),
       videoURL,
     );
+    // Diagnostic: why the audio button is or is not on screen.
+    useEffect(() => {
+      console.log(
+        `[%s] audio button: showAudioControls=${String(showAudioControls)} rows=${audioLanguageCount} formats=${formatOptions.length} visible=${String(audioButtonVisible)} source=${videoURL ?? "-"}`.replace(
+          "%s",
+          "StandaloneVideoControls",
+        ),
+      );
+    }, [
+      showAudioControls,
+      audioLanguageCount,
+      formatOptions.length,
+      audioButtonVisible,
+      videoURL,
+    ]);
 
     // Same latch for the quality button: the verdict (direct.json) arrives
     // async after playback opens, and a focused button vanishing mid-wait

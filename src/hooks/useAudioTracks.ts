@@ -516,6 +516,23 @@ export function useAudioTracks(player: VideoPlayer | null): {
     };
   }, [player]);
 
+  // Diagnostic: the track list as the player reports it and the rows it
+  // yields, once per list. Chatty on TV logs is a known hazard, so this is one
+  // compact line rather than one per track.
+  useEffect(() => {
+    if (!player) return;
+    const rows = groupAudioTracksByLanguage(availableAudioTracks);
+    const summary = availableAudioTracks
+      .map(
+        (t) =>
+          `${t.id ?? "?"}|${t.language ?? "-"}|${t.name ?? "-"}|${t.label ?? "-"}|${t.channelCount ?? "-"}ch|${t.sampleMimeType ?? "-"}|${t.isSupported === false ? "unsupported" : "ok"}`,
+      )
+      .join(" ; ");
+    console.log(
+      `[useAudioTracks] ${availableAudioTracks.length} tracks -> ${rows.length} rows [${rows.map((r) => r.key).join(", ")}] :: ${summary || "(none)"}`,
+    );
+  }, [player, availableAudioTracks]);
+
   // Automatic selection can land on commentary: on a direct-played container
   // when the main mix is a codec the device lacks (a DTS main and an AC-3
   // commentary on a phone), on a master when the commentary rendition is the
