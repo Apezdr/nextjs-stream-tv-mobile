@@ -487,6 +487,9 @@ export function useAudioTracks(player: VideoPlayer | null): {
       // also fires after replaceAsync, resetting state on episode switches.
       player.addListener("sourceLoad", (payload) => {
         userChoseRef.current = false;
+        console.log(
+          `[useAudioTracks] sourceLoad: audio=${payload.availableAudioTracks?.length ?? "?"} video=${(payload as { availableVideoTracks?: unknown[] }).availableVideoTracks?.length ?? "?"} subs=${(payload as { availableSubtitleTracks?: unknown[] }).availableSubtitleTracks?.length ?? "?"}`,
+        );
         setAvailableAudioTracks(keepIfSameList(payload.availableAudioTracks));
         try {
           setSelectedAudioTrack(keepIfSameTrack(player.audioTrack ?? null));
@@ -506,6 +509,15 @@ export function useAudioTracks(player: VideoPlayer | null): {
       player.addListener("statusChange", ({ status }) => {
         if (status !== "readyToPlay") return;
         try {
+          const p = player as unknown as {
+            availableVideoTracks?: unknown[];
+            availableSubtitleTracks?: unknown[];
+            audioTrack?: AudioTrack | null;
+            videoTrack?: { id?: string; mimeType?: string | null } | null;
+          };
+          console.log(
+            `[useAudioTracks] readyToPlay: native audio=${player.availableAudioTracks?.length ?? "?"} video=${p.availableVideoTracks?.length ?? "?"} subs=${p.availableSubtitleTracks?.length ?? "?"} selectedAudio=${p.audioTrack ? `${p.audioTrack.id ?? "?"}|${p.audioTrack.sampleMimeType ?? "-"}` : "none"} videoTrack=${p.videoTrack ? `${p.videoTrack.id ?? "?"}|${p.videoTrack.mimeType ?? "-"}` : "none"}`,
+          );
           setAvailableAudioTracks(
             keepIfSameList(player.availableAudioTracks ?? []),
           );
