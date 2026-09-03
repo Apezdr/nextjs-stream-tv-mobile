@@ -1,6 +1,8 @@
 import type { AudioTrack, VideoPlayer } from "expo-video";
 import { useCallback, useEffect, useState } from "react";
 
+import type { DirectPlayAudioTrack } from "@/src/data/types/directPlay.types";
+
 // `AudioTrack.id` only exists on Android; on Apple platforms it is absent, so
 // tracks are keyed by language+label there (which is also how the native side
 // matches an assigned track).
@@ -68,13 +70,63 @@ export function audioTrackGroupId(
 const DESCRIPTIVE_AUDIO_RE =
   /commentary|audio description|descriptive|visually impaired/i;
 
+// The server's per-track verdict (`file.audioTracks[].descriptive`) for the
+// container currently playing, when a watch screen has one. It catches what
+// the title keywords miss: a commentary track flagged only by its
+// disposition. Module-level on purpose — there is one playback context at a
+// time, and threading it through every chooser (language rows, the
+// codec-error fallback, both controls trees) would touch five components to
+// pass a hint.
+let verdictAudioTracks: DirectPlayAudioTrack[] | null = null;
+
+export function setVerdictAudioTracks(
+  tracks: DirectPlayAudioTrack[] | null | undefined,
+): void {
+  verdictAudioTracks = tracks && tracks.length > 0 ? tracks : null;
+}
+
+function normalizeTitle(title: string | null | undefined): string {
+  return (title ?? "").trim().toLowerCase();
+}
+
+/**
+ * Whether the server marked the container track this player track came from
+ * as commentary / audio description. Joins on the track title first (the
+ * Matroska Name surfaces as `name` on Android and `label` on Apple), then on
+ * language + channel count when that pair is unique in the container.
+ */
+export function verdictMarksDescriptive(
+  track: AudioTrack,
+  verdict: DirectPlayAudioTrack[] | null = verdictAudioTracks,
+): boolean {
+  if (!verdict) return false;
+  const titles = [track.name, track.label]
+    .map(normalizeTitle)
+    .filter((t) => t.length > 0);
+  const byTitle = verdict.filter(
+    (v) => v.title && titles.includes(normalizeTitle(v.title)),
+  );
+  if (byTitle.length > 0) {
+    return byTitle.every((v) => v.descriptive === true);
+  }
+  const language = normalizeLanguageTag(track.language);
+  const channels = track.channelCount;
+  if (!language || channels == null) return false;
+  const byShape = verdict.filter(
+    (v) =>
+      normalizeLanguageTag(v.language) === language && v.channels === channels,
+  );
+  return byShape.length === 1 && byShape[0].descriptive === true;
+}
+
 export function isDescriptiveAudioTrack(
   track: AudioTrack | null | undefined,
 ): boolean {
   if (!track) return false;
   return (
     DESCRIPTIVE_AUDIO_RE.test(track.name ?? "") ||
-    DESCRIPTIVE_AUDIO_RE.test(track.label ?? "")
+    DESCRIPTIVE_AUDIO_RE.test(track.label ?? "") ||
+    verdictMarksDescriptive(track)
   );
 }
 

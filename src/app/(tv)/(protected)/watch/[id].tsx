@@ -28,12 +28,16 @@ import {
   MediaDetailsResponse,
   TVDeviceEpisode,
 } from "@/src/data/types/content.types";
+import { useActiveVideoTrack } from "@/src/hooks/useActiveVideoTrack";
+import { setVerdictAudioTracks } from "@/src/hooks/useAudioTracks";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useQualityTier } from "@/src/hooks/useQualityTier";
 import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
+import { getPlatformClass } from "@/src/utils/deviceInfo";
+import { describeActiveQuality } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
@@ -210,6 +214,13 @@ export default function WatchPage() {
   const notifySourceReplacedRef = useRef<((url: string | null) => void) | null>(
     null,
   );
+  // Publish the server's per-track audio verdict for the audio choosers
+  // (commentary demotion on a direct-played container). Cleared on unmount.
+  useEffect(() => {
+    setVerdictAudioTracks(directPlayInfo?.file?.audioTracks);
+    return () => setVerdictAudioTracks(null);
+  }, [directPlayInfo]);
+
   const quality = useQualityTier({
     videoURL: effectiveVideoURL,
     directPlayInfo,
@@ -221,6 +232,7 @@ export default function WatchPage() {
     playerRef,
     notifySourceReplacedRef,
   });
+
   const playbackSourceURL = quality.activeSourceURL;
 
   // Backdrop URL resolution - prioritize route param, then current data, then loaded data
@@ -287,6 +299,21 @@ export default function WatchPage() {
     true, // deferSetup = true
   );
   playerRef.current = player;
+
+  // The chrome badge reflects what is playing NOW (tier plus the rendered
+  // track), never what the verdict merely offers.
+  const activeVideoTrack = useActiveVideoTrack(player);
+  const qualityBadge = useMemo(
+    () =>
+      describeActiveQuality({
+        tier: quality.activeTier,
+        info: directPlayInfo,
+        platformClass: getPlatformClass(),
+        videoTrack: activeVideoTrack,
+        isSwitching: quality.isSwitching,
+      }),
+    [quality.activeTier, quality.isSwitching, directPlayInfo, activeVideoTrack],
+  );
   notifySourceReplacedRef.current = notifySourceReplaced;
 
   // Free the browse screens' decoded images for the length of the session:
@@ -996,7 +1023,7 @@ export default function WatchPage() {
           onSelectQualityTier={quality.selectTier}
           isQualitySwitching={quality.isSwitching}
           hasQualityDescended={quality.hasDescended}
-          qualityBadge={quality.badge}
+          qualityBadge={qualityBadge}
           episodes={params.type === "tv" ? episodes : undefined}
           currentEpisodeNumber={effectiveEpisodeNumber}
           onEpisodeSelect={handleEpisodeSelect}

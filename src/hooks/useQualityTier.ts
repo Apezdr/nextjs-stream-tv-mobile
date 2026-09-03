@@ -15,12 +15,13 @@ import type { VideoPlayer } from "expo-video";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DirectPlayInfo } from "@/src/data/types/directPlay.types";
+import { useDolbyVisionProfiles } from "@/src/hooks/useDolbyVisionProfiles";
 import { useQualityPreferencesStore } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
 import {
+  DeviceDecodeCapabilities,
   QualityTierId,
   QualityTierOption,
-  badgeLabel,
   descentTierFor,
   resolveAvailableTiers,
   resolveInitialTier,
@@ -98,7 +99,6 @@ export interface QualityTierController {
   descentTarget: QualityTierId | null;
   isSwitching: boolean;
   /** "Original (Dolby Vision)" / "Original (HDR10)" / … or null. */
-  badge: string | null;
   /** True once an automatic descent happened this mount (menu shows why). */
   hasDescended: boolean;
 }
@@ -112,6 +112,16 @@ export function useQualityTier({
   notifySourceReplacedRef,
 }: Options): QualityTierController {
   const platformClass = useMemo(() => getPlatformClass(), []);
+  // What the device's decoders advertise — the tier policy's device-side veto
+  // over a served /file (Dolby Vision profile, MP4 index budget). Null until
+  // the native probe answers; the policy only withholds on facts it has.
+  const dolbyVisionProfiles = useDolbyVisionProfiles();
+  const caps = useMemo<DeviceDecodeCapabilities>(
+    () => ({ dolbyVisionProfiles }),
+    [dolbyVisionProfiles],
+  );
+  const capsRef = useRef(caps);
+  capsRef.current = caps;
 
   const hasHydrated = useQualityPreferencesStore((s) => s.hasHydrated);
   const globalDefault = useQualityPreferencesStore((s) => s.globalDefault);
@@ -158,6 +168,7 @@ export function useQualityTier({
       directPlayInfo,
       dataSaverActive,
       platformClass,
+      caps,
     );
   }
 
@@ -202,6 +213,7 @@ export function useQualityTier({
       initialTierRef.current,
       directPlayInfo,
       platformClass,
+      caps,
     );
   }
   const [overrideSourceURL, setOverrideSourceURL] = useState<string | null>(
@@ -276,6 +288,7 @@ export function useQualityTier({
         tier,
         infoRef.current,
         platformClass,
+        capsRef.current,
       );
 
       switchBusyRef.current = true;
@@ -368,8 +381,8 @@ export function useQualityTier({
   // watch-page render (remote presses, activity ticks), re-rendering the
   // whole controls tree — carousel, seek bar, focus guides — each time.
   const tiers = useMemo(
-    () => resolveAvailableTiers(directPlayInfo, platformClass),
-    [directPlayInfo, platformClass],
+    () => resolveAvailableTiers(directPlayInfo, platformClass, caps),
+    [directPlayInfo, platformClass, caps],
   );
 
   return {
@@ -383,7 +396,6 @@ export function useQualityTier({
     descendTier: descendTierInternal,
     descentTarget: descentTierFor(activeTier, platformClass),
     isSwitching,
-    badge: badgeLabel(directPlayInfo),
     hasDescended,
   };
 }

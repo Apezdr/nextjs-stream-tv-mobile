@@ -1104,6 +1104,21 @@ load `videoURL` with `?direct=1` appended by default; Android "Original" plays
 
 ---
 
+#### 12.4.1 Audio surfaces and index facts (jit-transcoder commit e84afb9, not yet deployed)
+
+Additive fields on the same verdict. Nothing existing changed shape; production currently
+runs a server build that predates all of them, so clients treat every one as optional.
+
+| Field | Meaning | Native-app use |
+|---|---|---|
+| `file.audioTracks[]` | Every audio track the container holds: `index` (ffmpeg `0:a:{n}`), `codec`, `channels`, `language` (BCP-47 or null), `title`, `default`, `descriptive` (commentary / audio description, from dispositions or the four title keywords) | Joined into audio ranking on the raw-file tier: a track the server marks `descriptive` ranks below every main mix even when its title carries no keyword |
+| `original.audio[]` | The renditions an Original master carries: `groupId` (`aud-aac`, `aud-ec3`, `aud-ac3`), `language`, `channels`, `codecs`, `bitrate`, `default`, `sourceTrack` (joins to `file.audioTracks[].index`) | Not consumed yet; would let the audio menu render without fetching the master |
+| `file.dvProfile` | The source's Dolby Vision profile (5, 7, 8) or null. Not `hls.supplementalCodecs`, which is what the server signals and reads null for a profile-7 source | Device-side veto on Android against the decoder's advertised profiles (native probe); profile 7 is withheld even before the probe answers |
+| `file.audioCodecs`, `file.moovBytes`, `file.sampleCount`, `file.indexClass` | Raw-file index facts. Matroska reports `moovBytes: null`, `sampleCount: null`, `indexClass: "not-applicable"` (no whole-file sample table) | MP4-family files with `sampleCount` above 10 M are withheld from the raw-file tier on Android (ExoPlayer's sample table ≈ 24 bytes/sample on a 512 MB heap); without a count, TrueHD in MP4 is withheld. `indexClass` values are not yet documented and are not consulted |
+
+Open with the transcoder side: the `indexClass` enum and its thresholds, and the status of the
+single-variant `?direct=only` Original master.
+
 ## 13. Player support assets
 
 ### 13.1 Subtitles

@@ -33,12 +33,16 @@ import {
   MediaDetailsResponse,
   TVDeviceEpisode,
 } from "@/src/data/types/content.types";
+import { useActiveVideoTrack } from "@/src/hooks/useActiveVideoTrack";
+import { setVerdictAudioTracks } from "@/src/hooks/useAudioTracks";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useQualityTier } from "@/src/hooks/useQualityTier";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
+import { getPlatformClass } from "@/src/utils/deviceInfo";
 import { navigationHelper } from "@/src/utils/navigationHelper";
+import { describeActiveQuality } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
@@ -220,6 +224,13 @@ export default function MobileWatchPage() {
   const notifySourceReplacedRef = useRef<((url: string | null) => void) | null>(
     null,
   );
+  // Publish the server's per-track audio verdict for the audio choosers
+  // (commentary demotion on a direct-played container). Cleared on unmount.
+  useEffect(() => {
+    setVerdictAudioTracks(directPlayInfo?.file?.audioTracks);
+    return () => setVerdictAudioTracks(null);
+  }, [directPlayInfo]);
+
   const quality = useQualityTier({
     videoURL: effectiveVideoURL,
     directPlayInfo,
@@ -231,6 +242,7 @@ export default function MobileWatchPage() {
     playerRef,
     notifySourceReplacedRef,
   });
+
   const playbackSourceURL = quality.activeSourceURL;
 
   // Backdrop URL resolution - prioritize route param, then current data, then loaded data
@@ -312,6 +324,21 @@ export default function MobileWatchPage() {
     },
   );
   playerRef.current = player;
+
+  // The chrome badge reflects what is playing NOW (tier plus the rendered
+  // track), never what the verdict merely offers.
+  const activeVideoTrack = useActiveVideoTrack(player);
+  const qualityBadge = useMemo(
+    () =>
+      describeActiveQuality({
+        tier: quality.activeTier,
+        info: directPlayInfo,
+        platformClass: getPlatformClass(),
+        videoTrack: activeVideoTrack,
+        isSwitching: quality.isSwitching,
+      }),
+    [quality.activeTier, quality.isSwitching, directPlayInfo, activeVideoTrack],
+  );
   notifySourceReplacedRef.current = notifySourceReplaced;
 
   // Keep buffer options matched to the active tier: a switch onto or off the
@@ -1108,7 +1135,7 @@ export default function MobileWatchPage() {
           onSelectQualityTier={quality.selectTier}
           isQualitySwitching={quality.isSwitching}
           hasQualityDescended={quality.hasDescended}
-          qualityBadge={quality.badge}
+          qualityBadge={qualityBadge}
         />
       </GestureHandlerRootView>
     </View>

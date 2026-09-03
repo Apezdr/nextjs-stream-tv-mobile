@@ -9,6 +9,8 @@ import {
   groupAudioTracksByLanguage,
   isAudioTrackSupported,
   isDescriptiveAudioTrack,
+  setVerdictAudioTracks,
+  verdictMarksDescriptive,
   normalizeLanguageTag,
 } from "../useAudioTracks";
 
@@ -263,5 +265,90 @@ describe("groupAudioTracksByLanguage", () => {
       appleTrack("pt", "Portuguese"),
     ]);
     expect(options.map((o) => o.label)).toEqual(["English", "Português"]);
+  });
+});
+
+describe("verdictMarksDescriptive (server-side track verdict)", () => {
+  const hobbit = [
+    {
+      index: 0,
+      codec: "truehd",
+      channels: 8,
+      language: "en",
+      title: "English [Dolby TrueHD Atmos 7.1]",
+      descriptive: false,
+    },
+    {
+      index: 1,
+      codec: "ac3",
+      channels: 6,
+      language: "en",
+      title: "English [Dolby Digital EX 5.1]",
+      descriptive: false,
+    },
+    // Flagged by disposition only: the title carries no keyword.
+    {
+      index: 8,
+      codec: "ac3",
+      channels: 2,
+      language: "en",
+      title: "English (Director's track)",
+      descriptive: true,
+    },
+  ];
+  afterEach(() => setVerdictAudioTracks(null));
+
+  it("joins on the container title", () => {
+    const track = {
+      language: "en",
+      label: "English",
+      name: "English (Director's track)",
+      channelCount: 2,
+    } as any;
+    expect(verdictMarksDescriptive(track, hobbit)).toBe(true);
+    const main = {
+      language: "en",
+      label: "English",
+      name: "English [Dolby TrueHD Atmos 7.1]",
+      channelCount: 8,
+    } as any;
+    expect(verdictMarksDescriptive(main, hobbit)).toBe(false);
+  });
+
+  it("falls back to a unique language + channel-count match", () => {
+    const untitled = {
+      language: "en-US",
+      label: "English",
+      channelCount: 2,
+    } as any;
+    expect(verdictMarksDescriptive(untitled, hobbit)).toBe(true);
+    // Two 6-channel English tracks would be ambiguous; here only one exists,
+    // and it is a main mix.
+    expect(
+      verdictMarksDescriptive(
+        { language: "en", channelCount: 6 } as any,
+        hobbit,
+      ),
+    ).toBe(false);
+    expect(
+      verdictMarksDescriptive(
+        { language: "fr", channelCount: 2 } as any,
+        hobbit,
+      ),
+    ).toBe(false);
+  });
+
+  it("is consulted by isDescriptiveAudioTrack through the published verdict", () => {
+    const track = {
+      language: "en",
+      label: "English",
+      name: "English (Director's track)",
+      channelCount: 2,
+    } as any;
+    expect(isDescriptiveAudioTrack(track)).toBe(false);
+    setVerdictAudioTracks(hobbit);
+    expect(isDescriptiveAudioTrack(track)).toBe(true);
+    setVerdictAudioTracks(null);
+    expect(isDescriptiveAudioTrack(track)).toBe(false);
   });
 });

@@ -332,6 +332,14 @@ the decisions made where the doc left them open, and the work items that now sit
    either bless that deliberately or move it behind a URL token later — the apps' only
    touchpoint is deriving `…/stream/{key}/file` from `videoURL`.
 
+### 11.2.1 Landed server-side (2026-09-02, commit e84afb9, pending deploy)
+
+`direct.json` gained `file.audioTracks[]` (with `descriptive`), `original.audio[]` (with
+`sourceTrack`), and `file.dvProfile`; the raw-file index facts (`file.audioCodecs`,
+`file.moovBytes`, `file.sampleCount`, `file.indexClass`) shipped earlier but are also absent
+from the production build. See docs/frontend-api-contract.md §12.4.1 for the native app's use of
+each. Still requested: the `indexClass` enum, and the single-variant `?direct=only` master.
+
 ### 11.3 Work items for the web frontend
 
 1. [ ] Consume the **same** `direct-info` proxy for the quality menu, badge, and tooltip
