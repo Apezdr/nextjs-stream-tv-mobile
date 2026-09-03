@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 
 import { reportClientError } from "@/src/data/services/errorReportingService";
 import type { PlaybackErrorDetails } from "@/src/data/types/clientError.types";
@@ -60,6 +60,41 @@ let cachedProbe: CodecSupportEntry[] | null = null;
  * cannot distinguish HEVC Main (8-bit) from Main10 (10-bit). A device can
  * report "hardware" here and still fail on Main10 content.
  */
+let cachedDolbyVisionProfiles: number[] | null | undefined;
+
+/**
+ * Dolby Vision profile numbers the device's decoders advertise (a SHIELD
+ * reports 4, 5, 8 and 9). Null when unknown: not Android, an unpatched
+ * react-native-video without the probe, or a failed query. Cached — decoder
+ * capabilities are static for a device.
+ */
+export async function probeDolbyVisionProfiles(): Promise<number[] | null> {
+  if (cachedDolbyVisionProfiles !== undefined) return cachedDolbyVisionProfiles;
+  if (Platform.OS !== "android") {
+    cachedDolbyVisionProfiles = null;
+    return null;
+  }
+  try {
+    const module = NativeModules.VideoDecoderInfoModule as
+      { getDolbyVisionProfiles?: () => Promise<unknown> } | undefined;
+    if (typeof module?.getDolbyVisionProfiles !== "function") {
+      cachedDolbyVisionProfiles = null;
+      return null;
+    }
+    const answer = await module.getDolbyVisionProfiles();
+    cachedDolbyVisionProfiles = Array.isArray(answer)
+      ? answer.filter((n): n is number => Number.isInteger(n))
+      : null;
+  } catch (error) {
+    console.warn(
+      "[VideoDiagnostics] Dolby Vision profile probe failed:",
+      error,
+    );
+    cachedDolbyVisionProfiles = null;
+  }
+  return cachedDolbyVisionProfiles;
+}
+
 export async function probeCodecSupport(): Promise<CodecSupportEntry[]> {
   if (cachedProbe) return cachedProbe;
   if (Platform.OS !== "android") {

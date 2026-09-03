@@ -1,8 +1,16 @@
 diff --git a/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt b/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt
-index 2cd41ca..24b6a29 100644
+index 2cd41ca..48e3fba 100644
 --- a/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt
 +++ b/node_modules/react-native-video/android/src/main/java/com/brentvatne/react/VideoDecoderInfoModule.kt
-@@ -58,7 +58,10 @@ class VideoDecoderInfoModule(reactContext: ReactApplicationContext?) : ReactCont
+@@ -5,6 +5,7 @@ import android.media.MediaDrm
+ import android.media.MediaFormat
+ import android.media.UnsupportedSchemeException
+ import android.os.Build
++import com.facebook.react.bridge.Arguments
+ import com.facebook.react.bridge.Promise
+ import com.facebook.react.bridge.ReactApplicationContext
+ import com.facebook.react.bridge.ReactContextBaseJavaModule
+@@ -58,15 +59,55 @@ class VideoDecoderInfoModule(reactContext: ReactApplicationContext?) : ReactCont
          val isHardwareAccelerated = mRegularCodecs.codecInfos.any {
              it.name.equals(codecName, ignoreCase = true) && it.isHardwareAccelerated
          }
@@ -14,3 +22,48 @@ index 2cd41ca..24b6a29 100644
      }
  
      @ReactMethod
+     fun isHEVCSupported(p: Promise) = isCodecSupported("video/hevc", 1920.0, 1080.0, p)
+ 
++    /**
++     * Dolby Vision profiles the device's decoders advertise, as profile
++     * numbers (4, 5, 8, ...), so a client can gate a raw file's `dvProfile`
++     * before opening it. Android reports profiles as bit flags on
++     * MediaCodecInfo.CodecProfileLevel; the map below is that table.
++     */
++    @ReactMethod
++    fun getDolbyVisionProfiles(p: Promise) {
++        val flagToProfile = mapOf(
++            0x1 to 0, 0x2 to 1, 0x4 to 2, 0x8 to 3, 0x10 to 4, 0x20 to 5,
++            0x40 to 6, 0x80 to 7, 0x100 to 8, 0x200 to 9, 0x400 to 10
++        )
++        val profiles = sortedSetOf<Int>()
++        try {
++            val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS)
++            for (info in codecs.codecInfos) {
++                if (info.isEncoder) continue
++                if (!info.supportedTypes.any { it.equals(DOLBY_VISION_MIME, ignoreCase = true) }) continue
++                val caps = try {
++                    info.getCapabilitiesForType(DOLBY_VISION_MIME)
++                } catch (e: IllegalArgumentException) {
++                    continue
++                }
++                for (level in caps.profileLevels) {
++                    flagToProfile[level.profile]?.let { profiles.add(it) }
++                }
++            }
++        } catch (e: Exception) {
++            p.reject("E_DV_PROBE", e)
++            return
++        }
++        val result = Arguments.createArray()
++        profiles.forEach { result.pushInt(it) }
++        p.resolve(result)
++    }
++
+     companion object {
+         private val WIDEVINE_UUID = UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L)
+         private const val SECURITY_LEVEL_PROPERTY = "securityLevel"
+         private const val REACT_CLASS = "VideoDecoderInfoModule"
++        private const val DOLBY_VISION_MIME = "video/dolby-vision"
+     }
+ }
