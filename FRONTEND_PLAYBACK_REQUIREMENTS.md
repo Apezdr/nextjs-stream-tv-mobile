@@ -291,19 +291,25 @@ the decisions made where the doc left them open, and the work items that now sit
 1. **The verdict is consumed through an authenticated Next.js proxy, not the transcoder
    origin.** The apps call `GET /api/authenticated/media/direct-info` (see 11.2) keyed by
    media identity, at playback-open only. They never fetch `direct.json` from the stream host.
-2. **Apple (iOS/tvOS): menu is master-level, honestly labeled.** Neither AVPlayer nor
-   expo-video can pin an HLS variant, so §4's rung-pinning has no native equivalent. The
-   Apple menu is **"Auto (up to Original)"** (the `?direct=1` master, loaded by default per
-   §5 — this re-lights the DV/HDR badge) vs **"Transcoded only"** (default master). No
-   `STABLE-VARIANT-ID` parsing exists in the apps.
-3. **Android / Android TV: "Original" = `/file` direct play in-app** whenever
-   `file.available` — including gated titles (the §6 escape hatch). HLS-Original pinning via
-   a native ExoPlayer patch was considered and deferred unless telemetry shows container
-   failures.
+2. **Four tiers, one model on every native platform (revised 2026-09-02 once
+   `?direct=only` landed server-side).** **Auto** (default) is the `?direct=1` master: ABR
+   across the ladder and the Original rung when offered. **Original** is the `?direct=only`
+   master: the Original rung pinned, server-picked audio, no ABR. **Direct Play** (Android
+   only) is `/file`: the untouched container, every original track, subject to device-side
+   vetoes (Dolby Vision profile against the decoder's advertised profiles, an MP4 sample-count
+   budget, TrueHD-in-MP4 without a count). **Transcoded only** is the default master: the
+   ladder only, the opt-out. Data saver forces Transcoded only. Web is Auto over the ladder.
+   No `STABLE-VARIANT-ID` parsing exists in the apps.
+3. **`?direct=only` is requested only when the verdict carries the same-deploy marker**
+   (the `original` block) on top of `hls.offered`, so a pre-deploy server is never handed a
+   master it would misinterpret; without the marker Original behaves as Auto and the menu
+   lacks the row.
 4. **§8 descent implemented as policy**: one plain retry of the same source, then a
-   position-preserving drop (Apple `?direct=1` → default master; Android `/file` → Auto),
-   reported to `POST /api/authenticated/client-error` with a `tierDescent` detail field.
-   An initial-load stall (the `?direct=1` master paying keyframe derivation) also descends.
+   position-preserving drop along Direct Play → Original → Transcoded only (Original and Auto
+   drop straight to Transcoded only, so ABR cannot climb back into a failed rung), reported to
+   `POST /api/authenticated/client-error` with a `tierDescent` detail field. Out-of-memory,
+   stuck-player and `?direct=only` 404 errors descend without a retry. An initial-load stall
+   (20 s without ready, armed on every open) and a 20 s rebuffer on a pinned tier also descend.
 5. **Watch-history/presence identity is the canonical master URL**: heartbeat `videoId` is
    always `videoURL` exactly as delivered, with tier surgery reversed (`direct` param
    stripped, `/file` mapped back to `master.m3u8`).

@@ -1116,8 +1116,17 @@ runs a server build that predates all of them, so clients treat every one as opt
 | `file.dvProfile` | The source's Dolby Vision profile (5, 7, 8) or null. Not `hls.supplementalCodecs`, which is what the server signals and reads null for a profile-7 source | Device-side veto on Android against the decoder's advertised profiles (native probe); profile 7 is withheld even before the probe answers |
 | `file.audioCodecs`, `file.moovBytes`, `file.sampleCount`, `file.indexClass` | Raw-file index facts. Matroska reports `moovBytes: null`, `sampleCount: null`, `indexClass: "not-applicable"` (no whole-file sample table) | MP4-family files with `sampleCount` above 10 M are withheld from the raw-file tier on Android (ExoPlayer's sample table ≈ 24 bytes/sample on a 512 MB heap); without a count, TrueHD in MP4 is withheld. `indexClass` values are not yet documented and are not consulted |
 
-Open with the transcoder side: the `indexClass` enum and its thresholds, and the status of the
-single-variant `?direct=only` Original master.
+`GET /stream/{key}/master.m3u8?direct=only` (jit-transcoder commit c35deea, same deploy) lists
+the Original copy rung and nothing transcoded — one `EXT-X-STREAM-INF` per audio group, all the
+same URI, each `STABLE-VARIANT-ID="original"`; the audio groups are exactly `original.audio`.
+The native app's **Original** tier is this master, requested only when `hls.offered` is true
+and the verdict carries the `original` block (same-deploy marker). A 404 carries
+`{"error": "original not available for this source: <reason>"}` and the app descends at once,
+never retrying the URL. One further correction in that deploy: a source whose codec string
+cannot be expressed now reports `offered: false, reason: "unmappable-codec"` (treated like
+`ineligible-source`) instead of `offered: true` with a null `variantIndex`.
+
+Still open with the transcoder side: the `indexClass` enum and its thresholds.
 
 ## 13. Player support assets
 

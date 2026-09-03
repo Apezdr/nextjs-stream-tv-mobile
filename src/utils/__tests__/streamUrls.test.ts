@@ -1,4 +1,6 @@
 import {
+  isDirectOnlyURL,
+  withDirectOnlyParam,
   canonicalVideoId,
   fileURL,
   getStreamKey,
@@ -39,9 +41,7 @@ describe("withDirectParam", () => {
   });
 
   it("is idempotent and replaces stray direct values", () => {
-    expect(withDirectParam(withDirectParam(MASTER))).toBe(
-      `${MASTER}?direct=1`,
-    );
+    expect(withDirectParam(withDirectParam(MASTER))).toBe(`${MASTER}?direct=1`);
     expect(withDirectParam(`${MASTER}?direct=0`)).toBe(`${MASTER}?direct=1`);
   });
 
@@ -122,6 +122,50 @@ describe("canonicalVideoId", () => {
   it("leaves non-stream URLs unchanged", () => {
     expect(canonicalVideoId("https://cdn.example.com/clip.mp4")).toBe(
       "https://cdn.example.com/clip.mp4",
+    );
+  });
+});
+
+describe("withDirectOnlyParam / isDirectOnlyURL", () => {
+  const master = "https://t.example.com/stream/abc/master.m3u8";
+
+  it("adds direct=only, replacing any other direct value, idempotently", () => {
+    expect(withDirectOnlyParam(master)).toBe(`${master}?direct=only`);
+    expect(withDirectOnlyParam(`${master}?direct=1`)).toBe(
+      `${master}?direct=only`,
+    );
+    expect(withDirectOnlyParam(`${master}?direct=only`)).toBe(
+      `${master}?direct=only`,
+    );
+    expect(withDirectOnlyParam(`${master}?token=x&direct=1#f`)).toBe(
+      `${master}?token=x&direct=only#f`,
+    );
+  });
+
+  it("leaves non-master URLs alone", () => {
+    expect(withDirectOnlyParam("https://t.example.com/stream/abc/file")).toBe(
+      "https://t.example.com/stream/abc/file",
+    );
+    expect(withDirectOnlyParam("https://cdn.example.com/clip.mp4")).toBe(
+      "https://cdn.example.com/clip.mp4",
+    );
+  });
+
+  it("recognises the pinned master and nothing else", () => {
+    expect(isDirectOnlyURL(`${master}?direct=only`)).toBe(true);
+    expect(isDirectOnlyURL(`${master}?token=x&direct=only`)).toBe(true);
+    expect(isDirectOnlyURL(`${master}?direct=1`)).toBe(false);
+    expect(isDirectOnlyURL(master)).toBe(false);
+    expect(
+      isDirectOnlyURL("https://t.example.com/stream/abc/file?direct=only"),
+    ).toBe(false);
+    expect(isDirectOnlyURL(null)).toBe(false);
+  });
+
+  it("strips and canonicalises direct=only like any other direct value", () => {
+    expect(stripDirectParam(`${master}?direct=only`)).toBe(master);
+    expect(canonicalVideoId(`${master}?direct=only`)).toBe(
+      canonicalVideoId(`${master}?direct=1`),
     );
   });
 });

@@ -1,15 +1,24 @@
 // Display facts and per-platform tier options for the delivery-tiers contract
-// (FRONTEND_PLAYBACK_REQUIREMENTS.md §3-§6). The server's enriched verdict
-// fields (badgeLabel/reasonCopy) are the primary source; the pure functions
-// here are the client-side fallback so a thin proxy still renders correctly.
-// Source policy itself (which tier maps to which URL) is inherently app-local
-// and lives in resolveAvailableTiers: Apple players cannot pin an HLS variant,
-// so their tiers are master-level choices; Android "Original" is the raw file.
+// (FRONTEND_PLAYBACK_REQUIREMENTS.md §3-§6, §11). The server's enriched
+// verdict fields (badgeLabel/reasonCopy) are the primary source; the pure
+// functions here are the client-side fallback so a thin proxy still renders
+// correctly. Source policy itself (which tier maps to which URL) is inherently
+// app-local and lives here.
+//
+// Four tiers:
+//   auto        `?direct=1` master — ABR across the ladder AND the Original
+//               rung when it is offered. The default.
+//   original    `?direct=only` master — the Original rung pinned (one
+//               variant, nothing to adapt to), server-picked audio. No ABR.
+//   directplay  `/file` — the untouched container, every original track,
+//               Android only, subject to the device-side vetoes below.
+//   transcode   default master — the ladder only. The opt-out.
 import { DirectPlayInfo } from "@/src/data/types/directPlay.types";
 import { PlatformClass } from "@/src/utils/deviceInfo";
 import {
   fileURL,
   stripDirectParam,
+  withDirectOnlyParam,
   withDirectParam,
 } from "@/src/utils/streamUrls";
 
@@ -42,8 +51,8 @@ const MP4_FAMILY = new Set(["mp4", "m4v", "mov", "3gp"]);
 /**
  * Why the raw-file tier must not be opened on this device even though the
  * server serves it — a device-side veto over `file.available`. Null when
- * nothing known forbids it. Android only: Apple tiers are master-level and
- * AVFoundation parses natively; web never gets the tier.
+ * nothing known forbids it. Android only: Apple never gets the tier
+ * (AVFoundation cannot play the containers) and neither does web.
  */
 export function fileTierWithholdReason(
   info: DirectPlayInfo | null | undefined,
@@ -64,21 +73,21 @@ export function fileTierWithholdReason(
       ? !advertised.includes(dvProfile)
       : dvProfile === 7;
     if (unsupported) {
-      return `Dolby Vision profile ${dvProfile} can't be direct-played on this device. Playing the transcode.`;
+      return `Dolby Vision profile ${dvProfile} can't be direct-played on this device.`;
     }
   }
 
   if (MP4_FAMILY.has((file.container ?? "").toLowerCase())) {
     if (typeof file.sampleCount === "number") {
       if (file.sampleCount > MP4_SAMPLE_BUDGET) {
-        return "This file's index is too large for this device to direct-play. Playing the transcode.";
+        return "This file's index is too large for this device to direct-play.";
       }
     } else if (
       (file.audioCodecs ?? []).some((codec) => /truehd|mlp/i.test(codec))
     ) {
       // No sample count from the server: TrueHD (~1,200 access units per
       // second) is the one codec that reliably blows the budget on its own.
-      return "TrueHD audio in an MP4 needs more memory than this device has for direct play. Playing the transcode.";
+      return "TrueHD audio in an MP4 needs more memory than this device has for direct play.";
     }
   }
 
@@ -86,7 +95,7 @@ export function fileTierWithholdReason(
 }
 
 /** Whether Android may open the raw file: served by the server AND not vetoed here. */
-function fileTierUsable(
+export function directPlayUsable(
   info: DirectPlayInfo | null | undefined,
   platformClass: PlatformClass,
   caps?: DeviceDecodeCapabilities | null,
@@ -98,13 +107,49 @@ function fileTierUsable(
   );
 }
 
-export type QualityTierId = "auto" | "original" | "transcode";
+/**
+ * Whether the pinned-Original master can be requested: the verdict offers
+ * the copy rung AND comes from a server that knows `?direct=only`. The
+ * `original` block shipped in the same deploy as the mode, so its presence
+ * is the marker; an older server handed `?direct=only` would serve some
+ * other master while the app believed it was on Original.
+ */
+export function pinnedOriginalSupported(
+  info: DirectPlayInfo | null | undefined,
+): boolean {
+  return !!info?.hls?.offered && info.original !== undefined;
+}
+
+export type QualityTierId = "auto" | "original" | "directplay" | "transcode";
 
 export interface QualityTierOption {
   id: QualityTierId;
   label: string;
-  /** Set when the tier is shown but not selectable — rendered as subtext. */
+  /** One line under the label naming the mechanism, in plain words. */
+  description?: string;
+  /** Set when the tier is shown but not selectable — replaces the description. */
   unavailableReason?: string;
+}
+
+const TIER_LABEL: Record<QualityTierId, string> = {
+  auto: "Auto",
+  original: "Original",
+  directplay: "Direct Play",
+  transcode: "Transcoded only",
+};
+
+const TIER_DESCRIPTION: Record<QualityTierId, string> = {
+  auto: "Adapts to your connection, up to the original video when it fits.",
+  original: "The original video, pinned. Server-picked audio.",
+  directplay: "The untouched file with every original audio track.",
+  transcode:
+    "The server's transcoded ladder only. Lowest bandwidth, most compatible.",
+};
+
+function row(id: QualityTierId, unavailableReason?: string): QualityTierOption {
+  return unavailableReason
+    ? { id, label: TIER_LABEL[id], unavailableReason }
+    : { id, label: TIER_LABEL[id], description: TIER_DESCRIPTION[id] };
 }
 
 /**
@@ -118,8 +163,8 @@ export function deriveOriginalLabel(info: DirectPlayInfo): string {
 }
 
 /**
- * The badge shown in the player chrome, or null when the title has no
- * Original tier to advertise.
+ * The "Original (…)" label for a title that offers Original, or null when it
+ * has no Original to advertise.
  */
 export function badgeLabel(
   info: DirectPlayInfo | null | undefined,
@@ -147,6 +192,7 @@ export function reasonToUserCopy(reason: string | undefined): string | null {
     case "unscannable":
       return "The original stream couldn't be analyzed.";
     case "ineligible-source":
+    case "unmappable-codec":
       return "This format can't be streamed unmodified.";
     case "poisoned":
       return "Original streaming was disabled for this title after a playback fault.";
@@ -160,60 +206,80 @@ function resolveReasonCopy(info: DirectPlayInfo): string | null {
 }
 
 /**
+ * Whether a tier can actually be opened for this title on this device. Auto
+ * and Transcoded only always can; the pinned tiers need the verdict.
+ */
+export function tierUsable(
+  tier: QualityTierId,
+  info: DirectPlayInfo | null | undefined,
+  platformClass: PlatformClass,
+  caps?: DeviceDecodeCapabilities | null,
+): boolean {
+  if (platformClass === "web") return tier === "auto";
+  switch (tier) {
+    case "original":
+      return pinnedOriginalSupported(info);
+    case "directplay":
+      return directPlayUsable(info, platformClass, caps);
+    default:
+      return true;
+  }
+}
+
+/**
  * The quality-menu rows for a platform given the current verdict (null while
- * the verdict is still loading). Apple rows are master-level and always valid;
- * the Android Original row appears only once the verdict is known — the menu
- * grows when it lands (the controls use sticky gating for exactly this).
+ * the verdict is still loading). Auto and Transcoded only are always valid;
+ * the pinned rows appear once the verdict is known — the menu grows when it
+ * lands (the controls use sticky gating for exactly this) — and stay visible
+ * with the reason when this title or this device rules them out.
  */
 export function resolveAvailableTiers(
   info: DirectPlayInfo | null | undefined,
   platformClass: PlatformClass,
   caps?: DeviceDecodeCapabilities | null,
 ): QualityTierOption[] {
-  if (isApple(platformClass)) {
-    return [
-      { id: "auto", label: "Auto (up to Original)" },
-      { id: "transcode", label: "Transcoded only" },
-    ];
-  }
+  // Web builds only ever get the ladder: raw /file in a browser <video> is
+  // exactly what §6 forbids, and nothing pins a variant there.
+  if (platformClass === "web") return [row("auto")];
 
-  const tiers: QualityTierOption[] = [{ id: "auto", label: "Auto" }];
-  // Web builds get no Original tier: raw /file in a browser <video> is
-  // exactly what §6 forbids (remux audio, open-GOP seeking).
-  if (platformClass === "web" || !info) return tiers;
+  const tiers: QualityTierOption[] = [row("auto")];
+  if (info) {
+    if (pinnedOriginalSupported(info)) {
+      tiers.push(row("original"));
+    } else if (
+      !info.hls?.offered &&
+      info.hls?.reason !== undefined &&
+      info.hls.reason !== "disabled"
+    ) {
+      // A concrete withhold reason means the feature exists and this title
+      // is gated — show the row with the explanation. No reason at all (the
+      // 404 sentinel from a pre-deploy server, or `disabled`) means §10's
+      // "the menu simply lacks Original". Offered by a server without the
+      // pinned mode is treated the same way.
+      tiers.push(
+        row(
+          "original",
+          resolveReasonCopy(info) ?? "Original isn't available for this title.",
+        ),
+      );
+    }
 
-  const withhold = fileTierWithholdReason(info, platformClass, caps);
-  if (info.file?.available && withhold === null) {
-    tiers.push({ id: "original", label: "Original (Direct Play)" });
-  } else if (withhold !== null) {
-    // Served, but this device can't take it: keep the row so the viewer
-    // learns why instead of watching it fail into Auto.
-    tiers.push({
-      id: "original",
-      label: "Original",
-      unavailableReason: withhold,
-    });
-  } else if (info.hls?.reason !== undefined && info.hls.reason !== "disabled") {
-    // A concrete withhold reason means the feature exists and this title is
-    // gated — show the row with the explanation. No reason at all (the 404
-    // sentinel from a pre-deploy server, or `disabled`) means §10's "the
-    // menu simply lacks Original": Auto-only.
-    tiers.push({
-      id: "original",
-      label: "Original",
-      unavailableReason:
-        resolveReasonCopy(info) ?? "Original isn't available for this title.",
-    });
+    if (isAndroid(platformClass) && info.file?.available) {
+      const withhold = fileTierWithholdReason(info, platformClass, caps);
+      // Served but vetoed by this device: keep the row so the viewer learns
+      // why instead of watching it fail into a lower tier.
+      tiers.push(row("directplay", withhold ?? undefined));
+    }
   }
+  tiers.push(row("transcode"));
   return tiers;
 }
 
 /**
  * The player-source URL for a tier, given the canonical master URL the API
- * delivered. Apple tiers are master-level (no player can pin an HLS variant):
- * "auto"/"original" mean the `?direct=1` master, "transcode" the default
- * master. Android "original" means the raw file when it is actually served;
- * everything else stays on the transcode-only default master.
+ * delivered. A pinned tier the title or device cannot take resolves to the
+ * next tier that behaves closest to it, never to a URL that lies about what
+ * it plays.
  */
 export function resolveTierSourceURL(
   masterURL: string,
@@ -222,25 +288,29 @@ export function resolveTierSourceURL(
   platformClass: PlatformClass,
   caps?: DeviceDecodeCapabilities | null,
 ): string {
-  if (isApple(platformClass)) {
-    return tier === "transcode"
-      ? stripDirectParam(masterURL)
-      : withDirectParam(masterURL);
+  // Defensive: the default master must never carry a stray `direct` param,
+  // whatever the API delivered.
+  if (platformClass === "web" || tier === "transcode") {
+    return stripDirectParam(masterURL);
   }
-  if (tier === "original" && fileTierUsable(info, platformClass, caps)) {
+  if (tier === "directplay" && directPlayUsable(info, platformClass, caps)) {
     return fileURL(masterURL) ?? masterURL;
   }
-  // Defensive: the transcode-only default master must never carry a stray
-  // `direct` param, whatever the API delivered.
-  return stripDirectParam(masterURL);
+  if (tier === "original" && pinnedOriginalSupported(info)) {
+    return withDirectOnlyParam(masterURL);
+  }
+  // Auto — and any pinned tier this title cannot take: the ?direct=1 master
+  // is the ladder plus the Original rung when offered, identical to the
+  // default master otherwise.
+  return withDirectParam(masterURL);
 }
 
 /**
  * The tier a playback session should open with: the stored preference
- * (remembered-per-title, else global default), demoted to something safe when
- * the preferred tier is unavailable (verdict withholds it, or no verdict at
- * all) or when the cellular data-saver is active. The stored preference
- * itself is never rewritten by demotion.
+ * (remembered-per-title, else global default), demoted to the nearest tier
+ * that works when the preferred one is unavailable (verdict withholds it,
+ * device vetoes it, or no verdict at all) or when the cellular data-saver is
+ * active. The stored preference itself is never rewritten by demotion.
  */
 export function resolveInitialTier(
   storedTier: QualityTierId,
@@ -249,29 +319,46 @@ export function resolveInitialTier(
   platformClass: PlatformClass,
   caps?: DeviceDecodeCapabilities | null,
 ): QualityTierId {
-  if (isApple(platformClass)) {
-    if (dataSaverActive) return "transcode";
-    return storedTier === "transcode" ? "transcode" : "auto";
+  if (platformClass === "web") return "auto";
+  if (dataSaverActive) return "transcode";
+  switch (storedTier) {
+    case "transcode":
+      return "transcode";
+    case "directplay":
+      if (directPlayUsable(info, platformClass, caps)) return "directplay";
+      return pinnedOriginalSupported(info) ? "original" : "auto";
+    case "original":
+      return pinnedOriginalSupported(info) ? "original" : "auto";
+    default:
+      return "auto";
   }
-  if (platformClass === "web" || dataSaverActive) return "auto";
-  return storedTier === "original" && fileTierUsable(info, platformClass, caps)
-    ? "original"
-    : "auto";
 }
 
 /**
  * The next tier down when the current one fails to play — the §8 descent
- * target. Null when there is nothing lower to fall back to.
+ * target. The chain ends on the ladder: descending "to Auto" after the
+ * Original rung failed would let ABR climb straight back into it.
+ *   directplay → original (memory and audio failures are rescued there)
+ *              → transcode when this title has no pinned Original
+ *   original   → transcode
+ *   auto       → transcode
+ *   transcode  → nothing
  */
 export function descentTierFor(
   tier: QualityTierId,
   platformClass: PlatformClass,
+  info?: DirectPlayInfo | null,
 ): QualityTierId | null {
-  if (isApple(platformClass)) {
-    return tier === "transcode" ? null : "transcode";
-  }
   if (platformClass === "web") return null;
-  return tier === "original" ? "auto" : null;
+  switch (tier) {
+    case "directplay":
+      return pinnedOriginalSupported(info) ? "original" : "transcode";
+    case "original":
+    case "auto":
+      return "transcode";
+    default:
+      return null;
+  }
 }
 
 export interface QualityPreferenceOption {
@@ -280,51 +367,24 @@ export interface QualityPreferenceOption {
   description: string;
 }
 
-/**
- * The global-default choices a settings screen offers, phrased per platform:
- * Apple tiers are master-level ABR choices; Android's "original" preference
- * means direct-playing the raw file when the server offers it.
- */
+/** The global-default choices a settings screen offers, per platform. */
 export function globalDefaultOptions(
   platformClass: PlatformClass,
 ): QualityPreferenceOption[] {
-  if (platformClass === "web") {
-    return [
-      {
-        id: "auto",
-        label: "Auto",
-        description: "Adaptive quality from the server's transcoded ladder.",
-      },
-    ];
-  }
+  const option = (id: QualityTierId): QualityPreferenceOption => ({
+    id,
+    label: TIER_LABEL[id],
+    description: TIER_DESCRIPTION[id],
+  });
+  if (platformClass === "web") return [option("auto")];
   if (isApple(platformClass)) {
-    return [
-      {
-        id: "auto",
-        label: "Auto (up to Original)",
-        description:
-          "Adaptive quality across every tier, including the untouched original when available.",
-      },
-      {
-        id: "transcode",
-        label: "Transcoded only",
-        description:
-          "Always stream the server's transcoded ladder. Lower bandwidth.",
-      },
-    ];
+    return [option("auto"), option("original"), option("transcode")];
   }
   return [
-    {
-      id: "auto",
-      label: "Auto",
-      description: "Adaptive quality from the server's transcoded ladder.",
-    },
-    {
-      id: "original",
-      label: "Prefer Original (Direct Play)",
-      description:
-        "Play the untouched original file when available. Highest quality and bandwidth.",
-    },
+    option("auto"),
+    option("original"),
+    option("directplay"),
+    option("transcode"),
   ];
 }
 
@@ -368,8 +428,8 @@ function within(a: number, b: number, tolerance: number): boolean {
 
 /**
  * Whether the rendered track is the Original copy rung of a `?direct=1`
- * master, judged by matching the rung's declared bandwidth. Apple players
- * pick the rung themselves, so this is the only way to know.
+ * master, judged by matching the rung's declared bandwidth. ABR picks the
+ * rung itself, so this is the only way to know.
  */
 function isOriginalRung(
   info: DirectPlayInfo | null | undefined,
@@ -390,9 +450,10 @@ function isOriginalRung(
 
 /**
  * The badge in the player chrome: what is playing NOW, never what the title
- * merely offers. "Original (…)" only when original bytes are on screen — the
- * raw file on Android, or the copy rung recognised by bandwidth on Apple.
- * Everything else names the tier and the rendered resolution and range.
+ * merely offers. "Original (…)" / "Direct Play (…)" only when original bytes
+ * are on screen — the pinned tiers, or Auto sitting on the copy rung
+ * (recognised by bandwidth). Everything else names the tier and the
+ * rendered resolution and range.
  */
 export function describeActiveQuality(
   input: ActiveQualityInput,
@@ -408,20 +469,13 @@ export function describeActiveQuality(
     .join(" · ");
   const withDetail = (label: string) =>
     detail ? `${label} · ${detail}` : label;
+  const original = badgeLabel(info) ?? "Original";
 
-  if (tier === "original" && isAndroid(platformClass)) {
-    return badgeLabel(info) ?? "Original";
-  }
+  if (platformClass === "web") return withDetail("Auto");
+  if (tier === "directplay")
+    return original.replace(/^Original/, "Direct Play");
+  if (tier === "original") return original;
   if (tier === "transcode") return withDetail("Transcode");
-
-  // "auto": Android's default master never carries the Original rung; on
-  // Apple the ?direct=1 master may, and ABR decides.
-  if (
-    isApple(platformClass) &&
-    videoTrack &&
-    isOriginalRung(info, videoTrack)
-  ) {
-    return badgeLabel(info) ?? "Original";
-  }
+  if (videoTrack && isOriginalRung(info, videoTrack)) return original;
   return withDetail("Auto");
 }

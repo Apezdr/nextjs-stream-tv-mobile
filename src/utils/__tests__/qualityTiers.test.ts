@@ -4,6 +4,7 @@ import {
   descentTierFor,
   describeActiveQuality,
   fileTierWithholdReason,
+  globalDefaultOptions,
   reasonToUserCopy,
   resolveAvailableTiers,
   resolveInitialTier,
@@ -97,156 +98,285 @@ describe("reasonToUserCopy", () => {
   });
 });
 
+const PINNED_DV: DirectPlayInfo = {
+  ...OFFERED_DV,
+  // The `original` block ships in the same deploy as ?direct=only: its
+  // presence is what makes the pinned tier requestable.
+  original: { audio: [{ groupId: "aud-ec3", language: "en", channels: 6 }] },
+};
+
+const AUTO_ROW = {
+  id: "auto",
+  label: "Auto",
+  description: expect.stringMatching(/Adapts/),
+};
+const ORIGINAL_ROW = {
+  id: "original",
+  label: "Original",
+  description: expect.stringMatching(/pinned/),
+};
+const DIRECT_PLAY_ROW = {
+  id: "directplay",
+  label: "Direct Play",
+  description: expect.stringMatching(/untouched file/),
+};
+const TRANSCODE_ROW = {
+  id: "transcode",
+  label: "Transcoded only",
+  description: expect.stringMatching(/ladder/),
+};
+
 describe("resolveAvailableTiers", () => {
-  it("Apple platforms get master-level rows regardless of verdict", () => {
-    for (const platform of ["apple-tv", "ios"] as const) {
-      for (const info of [null, OFFERED_DV, WITHHELD_NO_FILE, DISABLED]) {
-        expect(resolveAvailableTiers(info, platform)).toEqual([
-          { id: "auto", label: "Auto (up to Original)" },
-          { id: "transcode", label: "Transcoded only" },
-        ]);
-      }
+  it("shows Auto and Transcoded only while the verdict is loading", () => {
+    for (const platform of ["apple-tv", "ios", "android-tv"] as const) {
+      expect(resolveAvailableTiers(null, platform)).toEqual([
+        AUTO_ROW,
+        TRANSCODE_ROW,
+      ]);
     }
   });
 
-  it("Android shows Auto only while the verdict is loading", () => {
-    expect(resolveAvailableTiers(null, "android-tv")).toEqual([
-      { id: "auto", label: "Auto" },
+  it("offers the pinned Original on both platforms once the server supports it", () => {
+    expect(resolveAvailableTiers(PINNED_DV, "apple-tv")).toEqual([
+      AUTO_ROW,
+      ORIGINAL_ROW,
+      TRANSCODE_ROW,
+    ]);
+    expect(resolveAvailableTiers(PINNED_DV, "android-tv")).toEqual([
+      AUTO_ROW,
+      ORIGINAL_ROW,
+      DIRECT_PLAY_ROW,
+      TRANSCODE_ROW,
     ]);
   });
 
-  it("Android offers Direct Play whenever the file is available", () => {
+  it("treats an offered rung from a server without ?direct=only as absent", () => {
+    // Pre-deploy server: offered, but no `original` block. Never request a
+    // master the server would misinterpret; the menu simply lacks Original.
+    expect(resolveAvailableTiers(OFFERED_DV, "apple-tv")).toEqual([
+      AUTO_ROW,
+      TRANSCODE_ROW,
+    ]);
     expect(resolveAvailableTiers(OFFERED_DV, "android-tv")).toEqual([
-      { id: "auto", label: "Auto" },
-      { id: "original", label: "Original (Direct Play)" },
+      AUTO_ROW,
+      DIRECT_PLAY_ROW,
+      TRANSCODE_ROW,
     ]);
-    // The escape hatch: HLS-Original withheld but the raw file still plays.
+  });
+
+  it("keeps Direct Play as the Android escape hatch when HLS-Original is withheld", () => {
     expect(resolveAvailableTiers(WITHHELD_OPEN_GOP, "android")).toEqual([
-      { id: "auto", label: "Auto" },
-      { id: "original", label: "Original (Direct Play)" },
+      AUTO_ROW,
+      {
+        id: "original",
+        label: "Original",
+        unavailableReason: expect.stringMatching(/processing/),
+      },
+      DIRECT_PLAY_ROW,
+      TRANSCODE_ROW,
+    ]);
+    // Apple has no raw-file tier: the withheld row explains, nothing else.
+    expect(resolveAvailableTiers(WITHHELD_OPEN_GOP, "ios")).toEqual([
+      AUTO_ROW,
+      {
+        id: "original",
+        label: "Original",
+        unavailableReason: expect.stringMatching(/processing/),
+      },
+      TRANSCODE_ROW,
     ]);
   });
 
-  it("Android renders an unavailable row with reason copy when nothing serves the original", () => {
+  it("renders an unavailable Original row with reason copy when nothing serves it", () => {
     const tiers = resolveAvailableTiers(WITHHELD_NO_FILE, "android-tv");
-    expect(tiers).toHaveLength(2);
-    expect(tiers[1].id).toBe("original");
+    expect(tiers.map((t) => t.id)).toEqual(["auto", "original", "transcode"]);
     expect(tiers[1].unavailableReason).toMatch(/analyzed/);
+    expect(
+      resolveAvailableTiers(
+        { ...WITHHELD_NO_FILE, reasonCopy: "Server says no." },
+        "android-tv",
+      )[1].unavailableReason,
+    ).toBe("Server says no.");
   });
 
-  it("prefers server-enriched reason copy on the unavailable row", () => {
-    const tiers = resolveAvailableTiers(
-      { ...WITHHELD_NO_FILE, reasonCopy: "Server says no." },
-      "android-tv",
-    );
-    expect(tiers[1].unavailableReason).toBe("Server says no.");
-  });
-
-  it("hides the Original row entirely when the server feature is off", () => {
+  it("hides Original when the server feature is off or the verdict is the 404 sentinel", () => {
     expect(resolveAvailableTiers(DISABLED, "android-tv")).toEqual([
-      { id: "auto", label: "Auto" },
+      AUTO_ROW,
+      TRANSCODE_ROW,
     ]);
-  });
-
-  it("degrades to Auto-only on the 404 sentinel (no reason, nothing served)", () => {
-    // Pre-deploy server: §10 says the menu simply lacks Original — no
-    // misleading disabled row.
     expect(
       resolveAvailableTiers(
         { hls: { offered: false }, file: { available: false } },
-        "android-tv",
+        "apple-tv",
       ),
-    ).toEqual([{ id: "auto", label: "Auto" }]);
+    ).toEqual([AUTO_ROW, TRANSCODE_ROW]);
   });
 
-  it("web builds never get an Original tier", () => {
-    expect(resolveAvailableTiers(OFFERED_DV, "web")).toEqual([
-      { id: "auto", label: "Auto" },
-    ]);
+  it("web builds only ever get Auto", () => {
+    expect(resolveAvailableTiers(PINNED_DV, "web")).toEqual([AUTO_ROW]);
   });
 });
 
 const MASTER = "https://t.example.com/stream/abc/master.m3u8";
 
 describe("resolveTierSourceURL", () => {
-  it("Apple: auto/original mean the direct master, transcode the default", () => {
-    expect(resolveTierSourceURL(MASTER, "auto", OFFERED_DV, "apple-tv")).toBe(
+  it("Auto is the ?direct=1 master on both platforms, Transcoded only the default master", () => {
+    expect(resolveTierSourceURL(MASTER, "auto", PINNED_DV, "apple-tv")).toBe(
       `${MASTER}?direct=1`,
     );
-    expect(resolveTierSourceURL(MASTER, "original", null, "ios")).toBe(
+    expect(resolveTierSourceURL(MASTER, "auto", null, "android-tv")).toBe(
       `${MASTER}?direct=1`,
     );
     expect(
-      resolveTierSourceURL(`${MASTER}?direct=1`, "transcode", null, "apple-tv"),
+      resolveTierSourceURL(
+        `${MASTER}?direct=1`,
+        "transcode",
+        PINNED_DV,
+        "apple-tv",
+      ),
+    ).toBe(MASTER);
+    expect(
+      resolveTierSourceURL(
+        `${MASTER}?direct=only`,
+        "transcode",
+        PINNED_DV,
+        "android",
+      ),
     ).toBe(MASTER);
   });
 
-  it("Android: original is the raw file only when actually served", () => {
+  it("Original is the pinned master only when the server supports it", () => {
+    expect(resolveTierSourceURL(MASTER, "original", PINNED_DV, "ios")).toBe(
+      `${MASTER}?direct=only`,
+    );
     expect(
-      resolveTierSourceURL(MASTER, "original", OFFERED_DV, "android-tv"),
-    ).toBe("https://t.example.com/stream/abc/file");
+      resolveTierSourceURL(MASTER, "original", PINNED_DV, "android-tv"),
+    ).toBe(`${MASTER}?direct=only`);
+    // Offered by a pre-deploy server, or withheld: behaves as Auto, never a lying URL.
+    expect(
+      resolveTierSourceURL(MASTER, "original", OFFERED_DV, "apple-tv"),
+    ).toBe(`${MASTER}?direct=1`);
     expect(
       resolveTierSourceURL(MASTER, "original", WITHHELD_NO_FILE, "android-tv"),
-    ).toBe(MASTER);
-    expect(resolveTierSourceURL(MASTER, "auto", OFFERED_DV, "android")).toBe(
-      MASTER,
-    );
+    ).toBe(`${MASTER}?direct=1`);
   });
 
-  it("strips a stray direct param from non-Apple default masters", () => {
+  it("Direct Play is the raw file only when served and not vetoed, Android only", () => {
     expect(
-      resolveTierSourceURL(`${MASTER}?direct=1`, "auto", null, "android-tv"),
-    ).toBe(MASTER);
+      resolveTierSourceURL(MASTER, "directplay", PINNED_DV, "android-tv"),
+    ).toBe("https://t.example.com/stream/abc/file");
+    expect(
+      resolveTierSourceURL(MASTER, "directplay", WITHHELD_OPEN_GOP, "android"),
+    ).toBe("https://t.example.com/stream/abc/file");
+    expect(
+      resolveTierSourceURL(
+        MASTER,
+        "directplay",
+        WITHHELD_NO_FILE,
+        "android-tv",
+      ),
+    ).toBe(`${MASTER}?direct=1`);
+    expect(
+      resolveTierSourceURL(MASTER, "directplay", PINNED_DV, "apple-tv"),
+    ).toBe(`${MASTER}?direct=1`);
   });
 
   it("web always resolves to the default master", () => {
     expect(
-      resolveTierSourceURL(`${MASTER}?direct=1`, "original", OFFERED_DV, "web"),
+      resolveTierSourceURL(`${MASTER}?direct=1`, "original", PINNED_DV, "web"),
     ).toBe(MASTER);
+    expect(resolveTierSourceURL(MASTER, "auto", PINNED_DV, "web")).toBe(MASTER);
   });
 });
 
 describe("resolveInitialTier", () => {
-  it("Apple honors transcode, treats original as auto, demotes on data saver", () => {
+  it("honors Auto and Transcoded only, and data saver forces the ladder", () => {
     expect(resolveInitialTier("auto", null, false, "apple-tv")).toBe("auto");
-    expect(resolveInitialTier("original", null, false, "ios")).toBe("auto");
-    expect(resolveInitialTier("transcode", null, false, "apple-tv")).toBe(
+    expect(resolveInitialTier("transcode", null, false, "android-tv")).toBe(
       "transcode",
     );
-    expect(resolveInitialTier("auto", null, true, "ios")).toBe("transcode");
+    expect(resolveInitialTier("auto", PINNED_DV, true, "ios")).toBe(
+      "transcode",
+    );
+    expect(resolveInitialTier("original", PINNED_DV, true, "android")).toBe(
+      "transcode",
+    );
   });
 
-  it("Android honors original only with a served file, never on data saver", () => {
-    expect(
-      resolveInitialTier("original", OFFERED_DV, false, "android-tv"),
-    ).toBe("original");
+  it("opens the pinned Original only when the server supports it", () => {
+    expect(resolveInitialTier("original", PINNED_DV, false, "ios")).toBe(
+      "original",
+    );
+    expect(resolveInitialTier("original", PINNED_DV, false, "android-tv")).toBe(
+      "original",
+    );
+    expect(resolveInitialTier("original", OFFERED_DV, false, "apple-tv")).toBe(
+      "auto",
+    );
     expect(resolveInitialTier("original", null, false, "android-tv")).toBe(
       "auto",
     );
+  });
+
+  it("opens Direct Play when usable, else the nearest tier that works", () => {
     expect(
-      resolveInitialTier("original", WITHHELD_NO_FILE, false, "android"),
+      resolveInitialTier("directplay", PINNED_DV, false, "android-tv"),
+    ).toBe("directplay");
+    // Vetoed file, pinned Original available: land there.
+    const vetoed: DirectPlayInfo = {
+      ...PINNED_DV,
+      file: { available: true, container: "mkv", dvProfile: 7 },
+    };
+    expect(resolveInitialTier("directplay", vetoed, false, "android-tv")).toBe(
+      "original",
+    );
+    expect(
+      resolveInitialTier("directplay", WITHHELD_NO_FILE, false, "android"),
     ).toBe("auto");
-    expect(resolveInitialTier("original", OFFERED_DV, true, "android")).toBe(
+    expect(resolveInitialTier("directplay", PINNED_DV, false, "apple-tv")).toBe(
+      "original",
+    );
+  });
+
+  it("web always opens on auto", () => {
+    expect(resolveInitialTier("original", PINNED_DV, false, "web")).toBe(
       "auto",
     );
   });
 });
 
 describe("descentTierFor", () => {
-  it("steps down one tier and bottoms out", () => {
-    expect(descentTierFor("auto", "apple-tv")).toBe("transcode");
-    expect(descentTierFor("transcode", "apple-tv")).toBeNull();
-    expect(descentTierFor("original", "android-tv")).toBe("auto");
-    expect(descentTierFor("auto", "android-tv")).toBeNull();
-    expect(descentTierFor("original", "web")).toBeNull();
+  it("ends on the ladder so ABR cannot climb back into a failed rung", () => {
+    expect(descentTierFor("directplay", "android-tv", PINNED_DV)).toBe(
+      "original",
+    );
+    expect(descentTierFor("directplay", "android-tv", OFFERED_DV)).toBe(
+      "transcode",
+    );
+    expect(descentTierFor("original", "apple-tv", PINNED_DV)).toBe("transcode");
+    expect(descentTierFor("auto", "android-tv", PINNED_DV)).toBe("transcode");
+    expect(descentTierFor("transcode", "apple-tv", PINNED_DV)).toBeNull();
+    expect(descentTierFor("original", "web", PINNED_DV)).toBeNull();
   });
 });
 
-describe("web platform class", () => {
-  it("always opens on auto", () => {
-    expect(resolveInitialTier("original", OFFERED_DV, false, "web")).toBe(
+describe("globalDefaultOptions", () => {
+  it("offers the tiers each platform can honor", () => {
+    expect(globalDefaultOptions("apple-tv").map((o) => o.id)).toEqual([
       "auto",
-    );
+      "original",
+      "transcode",
+    ]);
+    expect(globalDefaultOptions("android-tv").map((o) => o.id)).toEqual([
+      "auto",
+      "original",
+      "directplay",
+      "transcode",
+    ]);
+    expect(globalDefaultOptions("web").map((o) => o.id)).toEqual(["auto"]);
+    expect(
+      globalDefaultOptions("android").every((o) => o.description.length > 0),
+    ).toBe(true);
   });
 });
 
@@ -355,33 +485,37 @@ describe("fileTierWithholdReason (device-side veto over a served file)", () => {
     expect(fileTierWithholdReason(null, "android-tv")).toBeNull();
   });
 
-  it("threads into the menu rows, the source URL and the initial tier", () => {
+  it("threads into the Direct Play row, the source URL and the initial tier", () => {
     const rows = resolveAvailableTiers(P7, "android-tv", SHIELD);
-    expect(rows).toEqual([
-      { id: "auto", label: "Auto" },
-      {
-        id: "original",
-        label: "Original",
-        unavailableReason: expect.stringMatching(/profile 7/),
-      },
+    expect(rows.map((r) => r.id)).toEqual([
+      "auto",
+      "original",
+      "directplay",
+      "transcode",
     ]);
-    expect(
-      resolveTierSourceURL(MASTER, "original", P7, "android-tv", SHIELD),
-    ).toBe(MASTER);
-    expect(
-      resolveInitialTier("original", P7, false, "android-tv", SHIELD),
-    ).toBe("auto");
-    // And a served, supported file still opens as before.
-    expect(resolveAvailableTiers(P8, "android-tv", SHIELD)[1]).toEqual({
-      id: "original",
-      label: "Original (Direct Play)",
+    expect(rows[2]).toEqual({
+      id: "directplay",
+      label: "Direct Play",
+      unavailableReason: expect.stringMatching(/profile 7/),
     });
     expect(
-      resolveTierSourceURL(MASTER, "original", P8, "android-tv", SHIELD),
+      resolveTierSourceURL(MASTER, "directplay", P7, "android-tv", SHIELD),
+    ).toBe(`${MASTER}?direct=1`);
+    expect(
+      resolveInitialTier("directplay", P7, false, "android-tv", SHIELD),
+    ).toBe("auto");
+    // And a served, supported file still opens as before.
+    expect(resolveAvailableTiers(P8, "android-tv", SHIELD)[2]).toEqual({
+      id: "directplay",
+      label: "Direct Play",
+      description: expect.stringMatching(/untouched file/),
+    });
+    expect(
+      resolveTierSourceURL(MASTER, "directplay", P8, "android-tv", SHIELD),
     ).toBe("https://t.example/stream/abc/file");
     expect(
-      resolveInitialTier("original", P8, false, "android-tv", SHIELD),
-    ).toBe("original");
+      resolveInitialTier("directplay", P8, false, "android-tv", SHIELD),
+    ).toBe("directplay");
   });
 });
 
@@ -408,41 +542,40 @@ describe("describeActiveQuality (the chrome badge)", () => {
     bitrate: 4_000_000,
     averageBitrate: 3_500_000,
   };
+  const onOriginalRung = {
+    ...uhdHdr,
+    bitrate: 72_500_000,
+    averageBitrate: 48_200_000,
+  };
 
-  it("says Original only when original bytes are playing (Android raw file)", () => {
+  it("names the pinned tiers by what they play", () => {
+    expect(
+      describeActiveQuality({
+        tier: "directplay",
+        info: dvOffered,
+        platformClass: "android-tv",
+        videoTrack: uhdHdr,
+      }),
+    ).toBe("Direct Play (Dolby Vision)");
     expect(
       describeActiveQuality({
         tier: "original",
         info: dvOffered,
-        platformClass: "android-tv",
+        platformClass: "apple-tv",
         videoTrack: uhdHdr,
       }),
     ).toBe("Original (Dolby Vision)");
-    // The title offering Original does not make Auto read as Original.
     expect(
       describeActiveQuality({
-        tier: "auto",
+        tier: "transcode",
         info: dvOffered,
-        platformClass: "android-tv",
-        videoTrack: uhdHdr,
-      }),
-    ).toBe("Auto · 4K · HDR");
-    expect(
-      describeActiveQuality({
-        tier: "auto",
-        info: dvOffered,
-        platformClass: "android-tv",
+        platformClass: "apple-tv",
         videoTrack: fhdSdr,
       }),
-    ).toBe("Auto · 1080p");
+    ).toBe("Transcode · 1080p");
   });
 
-  it("recognises the Original rung on Apple by its declared bandwidth", () => {
-    const onOriginalRung = {
-      ...uhdHdr,
-      bitrate: 72_500_000,
-      averageBitrate: 48_200_000,
-    };
+  it("on Auto says Original only when ABR is on the copy rung, on either platform", () => {
     expect(
       describeActiveQuality({
         tier: "auto",
@@ -455,18 +588,26 @@ describe("describeActiveQuality (the chrome badge)", () => {
       describeActiveQuality({
         tier: "auto",
         info: dvOffered,
-        platformClass: "apple-tv",
+        platformClass: "android-tv",
+        videoTrack: onOriginalRung,
+      }),
+    ).toBe("Original (Dolby Vision)");
+    expect(
+      describeActiveQuality({
+        tier: "auto",
+        info: dvOffered,
+        platformClass: "android-tv",
         videoTrack: uhdHdr,
       }),
     ).toBe("Auto · 4K · HDR");
     expect(
       describeActiveQuality({
-        tier: "transcode",
+        tier: "auto",
         info: dvOffered,
         platformClass: "apple-tv",
         videoTrack: fhdSdr,
       }),
-    ).toBe("Transcode · 1080p");
+    ).toBe("Auto · 1080p");
   });
 
   it("degrades gracefully without a track or verdict, and while switching", () => {
@@ -480,9 +621,17 @@ describe("describeActiveQuality (the chrome badge)", () => {
     ).toBe("Auto");
     expect(
       describeActiveQuality({
-        tier: "original",
+        tier: "directplay",
         info: null,
         platformClass: "android-tv",
+        videoTrack: null,
+      }),
+    ).toBe("Direct Play");
+    expect(
+      describeActiveQuality({
+        tier: "original",
+        info: null,
+        platformClass: "ios",
         videoTrack: null,
       }),
     ).toBe("Original");
@@ -497,7 +646,7 @@ describe("describeActiveQuality (the chrome badge)", () => {
     ).toBe("Switching…");
     expect(
       describeActiveQuality({
-        tier: "auto",
+        tier: "original",
         info: dvOffered,
         platformClass: "web",
         videoTrack: { size: { width: 1280, height: 720 }, videoRange: "sdr" },

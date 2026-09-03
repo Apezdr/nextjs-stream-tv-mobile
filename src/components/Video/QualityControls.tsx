@@ -182,9 +182,11 @@ const QualityControls = memo(
                             >
                               {tier.label}
                             </Text>
-                            {unavailable && (
+                            {(unavailable || tier.description) && (
                               <Text style={styles.optionSubtext}>
-                                {tier.unavailableReason}
+                                {unavailable
+                                  ? tier.unavailableReason
+                                  : tier.description}
                               </Text>
                             )}
                           </View>

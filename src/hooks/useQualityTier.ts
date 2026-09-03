@@ -26,6 +26,7 @@ import {
   resolveAvailableTiers,
   resolveInitialTier,
   resolveTierSourceURL,
+  tierUsable,
 } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { canonicalVideoId } from "@/src/utils/streamUrls";
@@ -139,10 +140,13 @@ export function useQualityTier({
   // Android + stored "original": worth a short wait for the verdict, since
   // honoring the preference needs file.available. Everything else resolves
   // from the preference alone.
+  // A pinned preference (Original, Direct Play) can only be honored against
+  // the verdict, so wait for it (bounded); Auto and Transcoded only open
+  // immediately.
   const needsVerdict =
-    (platformClass === "android" || platformClass === "android-tv") &&
+    platformClass !== "web" &&
     !dataSaverActive &&
-    storedTier === "original";
+    (storedTier === "original" || storedTier === "directplay");
   const [verdictWaitExpired, setVerdictWaitExpired] = useState(false);
   useEffect(() => {
     if (!hasHydrated || !needsVerdict || directPlayInfo !== undefined) return;
@@ -229,7 +233,7 @@ export function useQualityTier({
       // the new item until re-picked (or the next mount, where the
       // remembered preference re-resolves against that item's verdict).
       let tier = activeTierRef.current;
-      if (tier === "original") {
+      if (tier === "original" || tier === "directplay") {
         tier = "auto";
         setSelectedTier("auto");
       }
@@ -353,7 +357,11 @@ export function useQualityTier({
   );
 
   const descendTierInternal = useCallback(async (): Promise<boolean> => {
-    const next = descentTierFor(activeTierRef.current, platformClass);
+    const next = descentTierFor(
+      activeTierRef.current,
+      platformClass,
+      infoRef.current,
+    );
     if (!next) return false;
     await selectTierInternal(next, { remember: false });
     setHasDescended(true);
@@ -361,18 +369,19 @@ export function useQualityTier({
   }, [platformClass, selectTierInternal]);
   descendRef.current = descendTierInternal;
 
-  // A verdict that later withdraws the file tier (poisoned, or a server
-  // rollback surfacing as the 404 sentinel) demotes through the normal
-  // switch choreography — position-preserving — instead of letting a
-  // re-derived URL restart playback from zero.
+  // A verdict that later withdraws a pinned tier (poisoned, a server rollback
+  // surfacing as the 404 sentinel, a device veto once the probe answers)
+  // demotes through the normal switch choreography — position-preserving —
+  // instead of letting a re-derived URL restart playback from zero.
   useEffect(() => {
-    if (activeTier !== "original") return;
-    if (!directPlayInfo || directPlayInfo.file?.available) return;
+    if (activeTier !== "original" && activeTier !== "directplay") return;
+    if (!directPlayInfo) return;
+    if (tierUsable(activeTier, directPlayInfo, platformClass, caps)) return;
     console.warn(
-      "[useQualityTier] Verdict withdrew the file tier — demoting to auto",
+      `[useQualityTier] Verdict withdrew the "${activeTier}" tier — demoting to auto`,
     );
     selectTierInternal("auto", { remember: false });
-  }, [activeTier, directPlayInfo, selectTierInternal]);
+  }, [activeTier, directPlayInfo, platformClass, caps, selectTierInternal]);
 
   useEffect(() => clearWatchdog, [clearWatchdog]);
 
@@ -394,7 +403,7 @@ export function useQualityTier({
     activeTier,
     selectTier: selectTierInternal,
     descendTier: descendTierInternal,
-    descentTarget: descentTierFor(activeTier, platformClass),
+    descentTarget: descentTierFor(activeTier, platformClass, directPlayInfo),
     isSwitching,
     hasDescended,
   };

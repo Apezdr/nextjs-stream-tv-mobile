@@ -70,6 +70,30 @@ export function withDirectParam(url: string): string {
   });
 }
 
+/**
+ * The `?direct=only` master: the Original copy rung and nothing transcoded,
+ * one variant per audio group, so a player that cannot pin a variant plays
+ * Original anyway. Idempotent; non-master URLs come back unchanged.
+ */
+export function withDirectOnlyParam(url: string): string {
+  const parts = splitURL(url);
+  const match = parts.path.match(STREAM_TAIL_RE);
+  if (match?.[2] !== "master.m3u8") return url;
+  const query = stripDirectFromQuery(parts.query);
+  return joinURL({
+    ...parts,
+    query: query ? `${query}&direct=only` : "direct=only",
+  });
+}
+
+/** True when the URL is the pinned-Original master (`?direct=only`). */
+export function isDirectOnlyURL(url: string | null | undefined): boolean {
+  if (!url) return false;
+  const parts = splitURL(url);
+  if (parts.path.match(STREAM_TAIL_RE)?.[2] !== "master.m3u8") return false;
+  return parts.query.split("&").includes("direct=only");
+}
+
 /** The same URL without any `direct` param. Idempotent. */
 export function stripDirectParam(url: string): string {
   const parts = splitURL(url);

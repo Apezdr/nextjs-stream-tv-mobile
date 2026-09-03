@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { QualityTierController } from "@/src/hooks/useQualityTier";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
+import { isDirectOnlyURL, isFileTierURL } from "@/src/utils/streamUrls";
 import { logPlaybackError } from "@/src/utils/videoDiagnostics";
 
 // Matches useAudioFallback's trigger exactly — those errors are its job.
@@ -25,6 +26,29 @@ const AUDIO_ERROR_RE =
 // Generous against normal startup (seconds) but far short of a big-MKV
 // keyframe derivation stall.
 const LOAD_STALL_MS = 20000;
+
+// A pinned tier (the ?direct=only master, the raw file) has no ABR: a weak
+// link rebuffers instead of stepping down, so a mid-playback stall this long
+// descends. ABR tiers are left to the player.
+const REBUFFER_STALL_MS = 20000;
+
+// Errors that a same-source retry cannot fix, so the retry only costs a
+// second failure (and, for a decoder wedge, a second multi-second teardown):
+//   - OutOfMemoryError: deterministic for this file on this heap;
+//   - "stuck playing": the decoder wedged, and rebuilding it re-wedges;
+//   - a ?direct=only refusal (HTTP 404): the server says "no copy rung right
+//     now" with the reason in the body, and never falls back to the ladder.
+const NO_RETRY_RE = /OutOfMemoryError|stuck playing/i;
+const HTTP_404_RE = /Response code: 404|ERROR_CODE_IO_BAD_HTTP_STATUS/;
+
+function isNoRetryError(sourceURL: string, message: string): boolean {
+  if (NO_RETRY_RE.test(message)) return true;
+  return isDirectOnlyURL(sourceURL) && HTTP_404_RE.test(message);
+}
+
+function isPinnedTierURL(url: string | null): boolean {
+  return isDirectOnlyURL(url) || isFileTierURL(url);
+}
 
 interface Options {
   player: VideoPlayer | null;
@@ -88,6 +112,46 @@ export function useVideoTierFallback({
     [],
   );
 
+  const rebufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearRebufferWatchdog = useCallback(() => {
+    if (rebufferTimerRef.current) {
+      clearTimeout(rebufferTimerRef.current);
+      rebufferTimerRef.current = null;
+    }
+  }, []);
+
+  // (Re)arm the initial-load watchdog for a source: descends if it never
+  // reaches readyToPlay within LOAD_STALL_MS.
+  const armStallWatchdog = useCallback(
+    (src: string) => {
+      const p = player;
+      if (!p) return;
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = setTimeout(() => {
+        stallTimerRef.current = null;
+        const q = qualityRef.current;
+        if (
+          everReadyForSourceRef.current === src ||
+          videoURLRef.current !== src ||
+          p.status === "readyToPlay"
+        ) {
+          return;
+        }
+        if (!q.descentTarget) return;
+        console.warn(
+          `[useVideoTierFallback] Source never became playable after ${LOAD_STALL_MS}ms — descending`,
+        );
+        reportDescent(
+          "Initial load stall",
+          p.status,
+          q.positionHintRef.current,
+        );
+        q.descendTier();
+      }, LOAD_STALL_MS);
+    },
+    [player, reportDescent],
+  );
+
   useEffect(() => {
     if (!player) return;
 
@@ -101,6 +165,7 @@ export function useVideoTierFallback({
           clearTimeout(stallTimerRef.current);
           stallTimerRef.current = null;
         }
+        clearRebufferWatchdog();
         // Deliberately do NOT clear retriedForSourceRef here: a deterministic
         // mid-file decode error plays fine, errors, and reads readyToPlay
         // again after the retry — clearing on ready would loop
@@ -109,7 +174,41 @@ export function useVideoTierFallback({
         // retry per source per mount; the second error descends.
         return;
       }
-      if (!e) return;
+      if (!e) {
+        // A rebuffer on a pinned tier: nothing steps down for us, so a stall
+        // this long descends at position. Cleared by the next readyToPlay.
+        const src = videoURLRef.current;
+        if (
+          status === "loading" &&
+          src &&
+          everReadyForSourceRef.current === src &&
+          isPinnedTierURL(src) &&
+          !rebufferTimerRef.current
+        ) {
+          rebufferTimerRef.current = setTimeout(() => {
+            rebufferTimerRef.current = null;
+            const q = qualityRef.current;
+            if (
+              videoURLRef.current !== src ||
+              player.status !== "loading" ||
+              !q.descentTarget ||
+              handlingRef.current
+            ) {
+              return;
+            }
+            console.warn(
+              `[useVideoTierFallback] Pinned source rebuffering for ${REBUFFER_STALL_MS}ms — descending`,
+            );
+            reportDescent(
+              "Rebuffer stall",
+              player.status,
+              q.positionHintRef.current,
+            );
+            q.descendTier();
+          }, REBUFFER_STALL_MS);
+        }
+        return;
+      }
       if (AUDIO_ERROR_RE.test(e.message)) return;
 
       const q = qualityRef.current;
@@ -126,7 +225,14 @@ export function useVideoTierFallback({
       const position = observed > 0 ? observed : q.positionHintRef.current;
       if (position > 0) q.positionHintRef.current = position;
       try {
-        if (retriedForSourceRef.current !== src) {
+        if (isNoRetryError(src, e.message)) {
+          console.warn(
+            "[useVideoTierFallback] Unrecoverable on this source — descending a tier:",
+            e.message,
+          );
+          reportDescent(e.message, status, position);
+          await q.descendTier();
+        } else if (retriedForSourceRef.current !== src) {
           // §8 step 1: one plain recovery attempt on the same source.
           retriedForSourceRef.current = src;
           console.warn(
@@ -138,6 +244,9 @@ export function useVideoTierFallback({
             applyResumePosition(player, position, "useVideoTierFallback");
           }
           player.play();
+          // The retry is a fresh load: give it the full stall window instead
+          // of letting the watchdog armed at the original open overrule it.
+          armStallWatchdog(src);
         } else {
           // §8 step 2: recurrence — descend a tier at the same position.
           console.warn(
@@ -170,37 +279,24 @@ export function useVideoTierFallback({
     return () => {
       sub.remove();
       timeSub.remove();
+      clearRebufferWatchdog();
     };
-  }, [player, reportDescent]);
+  }, [player, reportDescent, clearRebufferWatchdog, armStallWatchdog]);
 
-  // Initial-load stall watchdog, armed once per source. Only descends when
-  // the source never reached readyToPlay — a later rebuffer never triggers.
+  // Initial-load stall watchdog, armed on every open of a source (a switch,
+  // an episode, a retry re-arms it explicitly). Only descends when the source
+  // never reached readyToPlay — a later rebuffer is the rebuffer watchdog's.
   useEffect(() => {
     if (!player || !videoURL) return;
     if (everReadyForSourceRef.current === videoURL) return;
-    const timer = setTimeout(() => {
-      const q = qualityRef.current;
-      // The source became playable at some point — this is not a load stall.
-      if (
-        everReadyForSourceRef.current === videoURL ||
-        player.status === "readyToPlay"
-      ) {
-        return;
+    armStallWatchdog(videoURL);
+    return () => {
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
       }
-      if (!q.descentTarget) return;
-      console.warn(
-        `[useVideoTierFallback] Source never became playable after ${LOAD_STALL_MS}ms — descending`,
-      );
-      reportDescent(
-        "Initial load stall",
-        player.status,
-        q.positionHintRef.current,
-      );
-      q.descendTier();
-    }, LOAD_STALL_MS);
-    stallTimerRef.current = timer;
-    return () => clearTimeout(timer);
-  }, [player, videoURL, reportDescent]);
+    };
+  }, [player, videoURL, armStallWatchdog]);
 
   return { isHandling };
 }
