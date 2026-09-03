@@ -223,8 +223,77 @@ index 0000000..ca60998
 +    const val FALLBACK_MAX_INPUT_SIZE = 1024 * 1024
 +  }
 +}
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/HlsFormatIds.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/HlsFormatIds.kt
+new file mode 100644
+index 0000000..cd61c2e
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/HlsFormatIds.kt
+@@ -0,0 +1,63 @@
++package expo.modules.video.player
++
++import androidx.media3.common.Format
++import androidx.media3.common.Tracks
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.exoplayer.hls.HlsManifest
++
++/**
++ * Track ids for formats that reach the app without one.
++ *
++ * media3 1.11 prepares HLS track groups from HlsRedundantGroup.GroupKey
++ * formats, which are built with setId(null).setMetadata(null): every HLS
++ * variant, audio rendition and subtitle rendition arrives with a null id, and
++ * ids are how tracks are listed and selected here (each fromFormat returns
++ * null without one, so every HLS track list came back empty). Recover the
++ * playlist id — the variant index, the "GROUP-ID:NAME" rendition id — by
++ * matching the multivariant playlist's formats after the same normalisation
++ * the group key applies, then by a looser identity when the exposed format
++ * was enriched by sample data; fall back to "<track group id>:<index>".
++ */
++@OptIn(UnstableApi::class)
++object HlsFormatIds {
++  private fun keyOf(format: Format): Format =
++    format.buildUpon().setId(null).setMetadata(null).build()
++
++  private fun looseKey(format: Format): List<Any?> = listOf(
++    format.sampleMimeType ?: format.codecs,
++    format.codecs,
++    format.language,
++    format.label,
++    format.channelCount,
++    format.width,
++    format.height,
++    format.peakBitrate,
++    format.averageBitrate
++  )
++
++  private fun playlistFormats(manifest: HlsManifest?): List<Format> {
++    val playlist = manifest?.multivariantPlaylist ?: return emptyList()
++    return buildList {
++      playlist.variants.forEach { add(it.format) }
++      playlist.audios.forEach { add(it.format) }
++      playlist.subtitles.forEach { add(it.format) }
++      playlist.closedCaptions.forEach { add(it.format) }
++    }
++  }
++
++  /** The playlist format id this exposed format corresponds to, or null. */
++  fun playlistId(format: Format, manifest: HlsManifest?): String? {
++    format.id?.let { return it }
++    val candidates = playlistFormats(manifest).filter { it.id != null }
++    if (candidates.isEmpty()) return null
++    val key = keyOf(format)
++    val exact = candidates.filter { keyOf(it) == key }.mapNotNull { it.id }.distinct()
++    if (exact.size == 1) return exact[0]
++    val loose = looseKey(format)
++    val relaxed = candidates.filter { looseKey(it) == loose }.mapNotNull { it.id }.distinct()
++    return if (relaxed.size == 1) relaxed[0] else null
++  }
++
++  fun resolve(format: Format, manifest: HlsManifest?, group: Tracks.Group, index: Int): String =
++    playlistId(format, manifest) ?: "${group.mediaTrackGroup.id}:$index"
++}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-index 8bae522..d4754a6 100644
+index 8bae522..30cbdcb 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 @@ -60,7 +60,7 @@ import kotlin.time.DurationUnit
@@ -271,20 +340,106 @@ index 8bae522..d4754a6 100644
          this@VideoPlayer.volume = volume
        }
      }
+@@ -343,7 +359,17 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+ 
+   private val analyticsListener = object : AnalyticsListener {
+     override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
+-      currentVideoTrack = availableVideoTracks.firstOrNull { it.format?.id == format.id }
++      // The decoder input format carries no id on HLS (media3 1.11), so match
++      // the listed track by id when both sides have one, else by the playlist
++      // id recovered for it, else by shape.
++      val manifest = player.currentManifest as? HlsManifest
++      val recoveredId = HlsFormatIds.playlistId(format, manifest)
++      currentVideoTrack = availableVideoTracks.firstOrNull { track ->
++        (format.id != null && track.id == format.id) ||
++          (recoveredId != null && track.id == recoveredId)
++      } ?: availableVideoTracks.firstOrNull { track ->
++        track.format?.let { f -> f.width == format.width && f.height == format.height && f.codecs == format.codecs } == true
++      }
+       super.onVideoInputFormatChanged(eventTime, format, decoderReuseEvaluation)
+     }
+   }
+@@ -578,21 +604,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
+     for (i in 0 until group.length) {
+       val format = group.getTrackFormat(i)
+       val isSupported = group.isTrackSupported(i)
++      if (!MimeTypes.isVideo(format.sampleMimeType)) {
++        continue
++      }
++      // media3 1.11 strips the id from HLS formats; recover it from the
++      // playlist so the variant (and its url) can still be identified.
++      val id = HlsFormatIds.resolve(format, sourceManifest, group, i)
+       val hlsVariant = sourceManifest?.multivariantPlaylist?.variants?.firstOrNull {
+-        it.format.id == format.id
++        it.format.id == id
+       }
+ 
+       // We provide the variant url only for HLS sources
+       val variantUrl = hlsVariant?.url
+-
+-      if (!MimeTypes.isVideo(format.sampleMimeType)) {
+-        continue
+-      }
+-      videoTracks.add(VideoTrack.fromFormat(format, isSupported, variantUrl))
++      videoTracks.add(VideoTrack.fromFormat(format, isSupported, variantUrl, id))
+     }
+   }
+   // For HLS sources with multiple audio renditions, ExoPlayer creates a separate video
+   // track group for each audio variant, which results in the same video formats being
+   // reported multiple times. Deduplicate by format id to expose each variant only once.
+-  return videoTracks.filterNotNull().distinctBy { it.format?.id }
++  return videoTracks.filterNotNull().distinctBy { it.id }
+ }
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt
-index fbccab6..98d3215 100644
+index fbccab6..d1093ef 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerAudioTracks.kt
-@@ -61,7 +61,7 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+@@ -3,6 +3,7 @@ package expo.modules.video.player
+ import androidx.annotation.OptIn
+ import androidx.media3.common.C
+ import androidx.media3.common.Format
++import androidx.media3.exoplayer.hls.HlsManifest
+ import androidx.media3.common.MimeTypes
+ import androidx.media3.common.TrackGroup
+ import androidx.media3.common.TrackSelectionOverride
+@@ -21,12 +22,15 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+       return owner.get()
+     }
+   private val formatsToGroups = mutableMapOf<Format, Pair<TrackGroup, Int>>()
++  // Recovered ids for the exposed formats (see HlsFormatIds).
++  private val formatIds = mutableMapOf<Format, String>()
+   private var currentAudioTrackFormat: Format? = null
+   private var currentOverride: TrackSelectionOverride? = null
+ 
+   var currentAudioTrack: AudioTrack?
+     get() {
+-      return AudioTrack.fromFormat(currentAudioTrackFormat)
++      val format = currentAudioTrackFormat ?: return null
++      return AudioTrack.fromFormat(format, true, formatIds[format])
+     }
+     set(value) {
+       applyAudioTrack(value)
+@@ -54,14 +58,18 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+ 
+   override fun onTracksChanged(player: VideoPlayer, tracks: Tracks) {
+     formatsToGroups.clear()
++    formatIds.clear()
+     availableAudioTracks.clear()
++    val manifest = videoPlayer?.player?.currentManifest as? HlsManifest
+     for (group in tracks.groups) {
+       for (i in 0..<group.length) {
+         val format: Format = group.getTrackFormat(i)
  
          if (MimeTypes.isAudio(format.sampleMimeType)) {
++          val id = HlsFormatIds.resolve(format, manifest, group, i)
            formatsToGroups[format] = group.mediaTrackGroup to i
 -          val track = AudioTrack.fromFormat(format) ?: continue
-+          val track = AudioTrack.fromFormat(format, group.isTrackSupported(i)) ?: continue
++          formatIds[format] = id
++          val track = AudioTrack.fromFormat(format, group.isTrackSupported(i), id) ?: continue
            availableAudioTracks.add(track)
          }
        }
-@@ -78,8 +78,11 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+@@ -78,14 +86,16 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
        newParameters = newParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
      }
      if (audioTrack == null) {
@@ -297,7 +452,15 @@ index fbccab6..98d3215 100644
        currentOverride = null
        return
      }
-@@ -121,6 +124,27 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
+-    val format = formatsToGroups.keys.firstOrNull {
+-      it.id == audioTrack.id
+-    }
++    val format = formatIds.entries.firstOrNull { it.value == audioTrack.id }?.key
++      ?: formatsToGroups.keys.firstOrNull { it.id == audioTrack.id }
+     format?.let {
+       formatsToGroups[it]?.let { subtitlePair ->
+         val trackSelectionOverride = TrackSelectionOverride(subtitlePair.first, subtitlePair.second)
+@@ -121,6 +131,27 @@ class VideoPlayerAudioTracks(owner: VideoPlayer) : VideoPlayerListener {
        return@let null
      }
  
@@ -326,6 +489,67 @@ index fbccab6..98d3215 100644
 +  val isAutomaticSelection: Boolean
 +    get() = currentOverride == null
  }
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerSubtitles.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerSubtitles.kt
+index cbe1e59..e413b85 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerSubtitles.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayerSubtitles.kt
+@@ -3,6 +3,7 @@ package expo.modules.video.player
+ import androidx.annotation.OptIn
+ import androidx.media3.common.C
+ import androidx.media3.common.Format
++import androidx.media3.exoplayer.hls.HlsManifest
+ import androidx.media3.common.MimeTypes
+ import androidx.media3.common.TrackGroup
+ import androidx.media3.common.TrackSelectionOverride
+@@ -21,12 +22,15 @@ class VideoPlayerSubtitles(owner: VideoPlayer) : VideoPlayerListener {
+       return owner.get()
+     }
+   private val formatsToGroups = mutableMapOf<Format, Pair<TrackGroup, Int>>()
++  // Recovered ids for the exposed formats (see HlsFormatIds).
++  private val formatIds = mutableMapOf<Format, String>()
+   private var currentSubtitleFormat: Format? = null
+   private var currentOverride: TrackSelectionOverride? = null
+ 
+   var currentSubtitleTrack: SubtitleTrack?
+     get() {
+-      return SubtitleTrack.fromFormat(currentSubtitleFormat)
++      val format = currentSubtitleFormat ?: return null
++      return SubtitleTrack.fromFormat(format, formatIds[format])
+     }
+     set(value) {
+       applySubtitleTrack(value)
+@@ -54,14 +58,18 @@ class VideoPlayerSubtitles(owner: VideoPlayer) : VideoPlayerListener {
+ 
+   override fun onTracksChanged(player: VideoPlayer, tracks: Tracks) {
+     formatsToGroups.clear()
++    formatIds.clear()
+     availableSubtitleTracks.clear()
++    val manifest = videoPlayer?.player?.currentManifest as? HlsManifest
+     for (group in tracks.groups) {
+       for (i in 0..<group.length) {
+         val format: Format = group.getTrackFormat(i)
+ 
+         if (MimeTypes.isText(format.sampleMimeType)) {
++          val id = HlsFormatIds.resolve(format, manifest, group, i)
+           formatsToGroups[format] = Pair(group.mediaTrackGroup, i)
+-          val track = SubtitleTrack.fromFormat(format) ?: continue
++          formatIds[format] = id
++          val track = SubtitleTrack.fromFormat(format, id) ?: continue
+           availableSubtitleTracks.add(track)
+         }
+       }
+@@ -83,9 +91,8 @@ class VideoPlayerSubtitles(owner: VideoPlayer) : VideoPlayerListener {
+       currentOverride = null
+       return
+     }
+-    val format = formatsToGroups.keys.firstOrNull {
+-      it.id == subtitleTrack.id
+-    }
++    val format = formatIds.entries.firstOrNull { it.value == subtitleTrack.id }?.key
++      ?: formatsToGroups.keys.firstOrNull { it.id == subtitleTrack.id }
+     format?.let {
+       formatsToGroups[it]?.let { subtitlePair ->
+         val override = TrackSelectionOverride(subtitlePair.first, subtitlePair.second)
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/PlaybackError.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/PlaybackError.kt
 index 005844f..c6add5b 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/PlaybackError.kt
@@ -354,10 +578,22 @@ index 005844f..c6add5b 100644
      }
    }
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt
-index 28afe31..3e49ca2 100644
+index 28afe31..aa5c8e9 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/Tracks.kt
-@@ -48,10 +48,13 @@ class AudioTrack(
+@@ -20,9 +20,9 @@ class SubtitleTrack(
+   @Field val autoSelect: Boolean
+ ) : Record, Serializable {
+   companion object {
+-    fun fromFormat(format: Format?): SubtitleTrack? {
++    fun fromFormat(format: Format?, idOverride: String? = null): SubtitleTrack? {
+       format ?: return null
+-      val id = format.id ?: return null
++      val id = idOverride ?: format.id ?: return null
+       val language = format.language ?: return null
+       val label = Locale(language).displayLanguage
+       val name = format.label
+@@ -48,12 +48,15 @@ class AudioTrack(
    @Field val label: String?,
    @Field val name: String?,
    @Field val isDefault: Boolean,
@@ -369,10 +605,13 @@ index 28afe31..3e49ca2 100644
  ) : Record, Serializable {
    companion object {
 -    fun fromFormat(format: Format?): AudioTrack? {
-+    fun fromFormat(format: Format?, isSupported: Boolean = true): AudioTrack? {
++    fun fromFormat(format: Format?, isSupported: Boolean = true, idOverride: String? = null): AudioTrack? {
        format ?: return null
-       val id = format.id ?: return null
+-      val id = format.id ?: return null
++      val id = idOverride ?: format.id ?: return null
        val language = format.language
+       val label = language?.let { Locale(it).displayLanguage } ?: "Unknown"
+       val name = format.label
 @@ -66,7 +69,10 @@ class AudioTrack(
          label = label,
          name = name,
@@ -385,6 +624,18 @@ index 28afe31..3e49ca2 100644
        )
      }
    }
+@@ -88,8 +94,9 @@ class VideoTrack(
+   var format: Format? = null
+ ) : Record, Serializable {
+   companion object {
+-    fun fromFormat(format: Format?, isSupported: Boolean, variantUrl: Uri?): VideoTrack? {
+-      val id = format?.id ?: return null
++    fun fromFormat(format: Format?, isSupported: Boolean, variantUrl: Uri?, idOverride: String? = null): VideoTrack? {
++      format ?: return null
++      val id = idOverride ?: format.id ?: return null
+       val size = VideoSize(format)
+       val mimeType = format.sampleMimeType
+       val averageBitrate = format.averageBitrate.takeIf { it != Format.NO_VALUE }
 diff --git a/node_modules/expo-video/build/VideoPlayer.types.d.ts b/node_modules/expo-video/build/VideoPlayer.types.d.ts
 index 8acf5e5..60e3c86 100644
 --- a/node_modules/expo-video/build/VideoPlayer.types.d.ts
