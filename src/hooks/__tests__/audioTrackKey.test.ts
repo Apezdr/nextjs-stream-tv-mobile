@@ -471,21 +471,29 @@ describe("preferredMainTrack", () => {
   });
 });
 
+describe("normalizeLanguageTag treats undetermined as no language", () => {
+  it("maps und / zxx / mis to empty, keeps real tags", () => {
+    expect(normalizeLanguageTag("und")).toBe("");
+    expect(normalizeLanguageTag("zxx")).toBe("");
+    expect(normalizeLanguageTag("en-US")).toBe("en");
+  });
+});
+
 describe("untagged container tracks (direct play)", () => {
   // Hardcore Henry: a DTS 5.1 main and two AC-3 stereo tracks, none with a
   // language or a title. ExoPlayer ids are the plain track numbers.
   const dts = {
     id: "1",
-    language: null,
-    label: null,
+    language: "und",
+    label: "und",
     name: null,
     channelCount: 6,
-    sampleMimeType: "audio/vnd.dts",
+    sampleMimeType: "audio/vnd.dts.hd",
   };
   const ac3a = {
     id: "2",
-    language: null,
-    label: null,
+    language: "und",
+    label: "und",
     name: null,
     channelCount: 2,
     sampleMimeType: "audio/ac3",
@@ -507,7 +515,7 @@ describe("untagged container tracks (direct play)", () => {
       "track:3",
     ]);
     expect(options.map((o) => o.label)).toEqual([
-      "Track 1 · DTS 5.1",
+      "Track 1 · DTS-HD 5.1",
       "Track 2 · Dolby Digital Stereo",
       "Track 3 · Dolby Digital Stereo",
     ]);

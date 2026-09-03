@@ -21,10 +21,15 @@ export function audioTracksEqual(
 // "en-US" / "en_US" / "EN" / "en" all describe the same selectable language.
 // Apple's language comes from `option.locale?.identifier`, which Foundation
 // canonicalizes with an underscore, so both separators must be handled.
+// ISO 639 tags that mean "no language": ExoPlayer reports a container track
+// without a language tag as "und" (undetermined) rather than null.
+const NO_LANGUAGE_TAGS = new Set(["und", "zxx", "mis"]);
+
 export function normalizeLanguageTag(
   language: string | null | undefined,
 ): string {
-  return (language ?? "").toLowerCase().split(/[-_]/)[0];
+  const primary = (language ?? "").toLowerCase().split(/[-_]/)[0];
+  return NO_LANGUAGE_TAGS.has(primary) ? "" : primary;
 }
 
 // The language the player is actually rendering. `player.audioTrack` is null
@@ -240,7 +245,7 @@ const CONTAINER_CODEC_NAMES: [RegExp, string][] = [
   [/true-?hd|mlp/i, "TrueHD"],
   [/eac3|ec-3/i, "Dolby Digital+"],
   [/\bac3\b|ac-3/i, "Dolby Digital"],
-  [/dts-?hd|dts_hd/i, "DTS-HD"],
+  [/dts[-._]?hd/i, "DTS-HD"],
   [/dts/i, "DTS"],
   [/flac/i, "FLAC"],
   [/opus/i, "Opus"],
