@@ -1,6 +1,6 @@
 import * as Crypto from "expo-crypto";
 import { VideoPlayer } from "expo-video";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
 import {
@@ -13,6 +13,11 @@ import { isResumePending } from "@/src/utils/resumeGuard";
 
 const PLAYING_HEARTBEAT_INTERVAL_MS = 30_000;
 const PAUSED_HEARTBEAT_INTERVAL_MS = 180_000;
+// timeUpdate fires about once a second; a jump larger than this between two
+// consecutive events is a seek, not playback. (The old rule compared against
+// the last SENT position, so it tripped by itself after 11s of playback and
+// the "30s" cadence was really 11s.)
+const SEEK_JUMP_S = 5;
 // A source swap (tier switch, retry, descent) can briefly report a position
 // near zero before its resume seek lands. Persisting that would overwrite the
 // saved position within seconds, so a sharp regression right after a swap is
@@ -62,8 +67,8 @@ function buildMediaMetadata(
  * mobile watch screens.
  *
  * Writes, by `kind`:
- * - `progress`: every 30s of media time while playing, on a seek of more than
- *   10s, and immediately on pause. Carries the position and the session id.
+ * - `progress`: every 30s (wall-clock) while playing, immediately on a seek,
+ *   and immediately on pause. Carries the position and the session id.
  * - `keepalive`: every 180s while paused (the presence "still here" ping).
  *   Carries NO position — a paused device must never drag the row back over
  *   progress made on another device meanwhile.
@@ -85,11 +90,30 @@ export function usePlaybackPresenceTracking(
   player: VideoPlayer,
   videoData: MediaDetailsResponse | null,
   videoURL: string | null,
-  params: WatchParams,
+  routeParams: WatchParams,
 ) {
-  // Last position SENT (or accepted for sending) — the cadence baseline and
-  // the regression guard's reference point.
+  // useLocalSearchParams() returns a NEW object every render. Depending on
+  // it directly would re-create every callback each render, which re-runs
+  // the listener effect each render — and every re-run leaves a 100 ms gap
+  // with no listeners, long enough to lose the pause event that follows the
+  // remote press that re-rendered the page. Key on the primitives instead.
+  const params = useMemo<WatchParams>(
+    () => ({
+      id: routeParams.id,
+      type: routeParams.type,
+      season: routeParams.season,
+      episode: routeParams.episode,
+    }),
+    [routeParams.id, routeParams.type, routeParams.season, routeParams.episode],
+  );
+
+  // Last position SENT (or accepted for sending) — the regression guard's
+  // reference point.
   const lastUpdateTimeRef = useRef<number>(0);
+  // Wall-clock of the last progress send while playing (the 30s cadence),
+  // and the position seen on the previous timeUpdate (seek detection).
+  const lastPlayingSendAtRef = useRef<number>(0);
+  const lastObservedTimeRef = useRef<number | null>(null);
   // Wall-clock of the last successful position write, for callers that need
   // to know whether a server row is newer than anything this session sent.
   const lastSentAtRef = useRef<number>(0);
@@ -300,6 +324,7 @@ export function usePlaybackPresenceTracking(
         // Recorded before the request goes out so the cadence baseline and
         // the regression guard see it even if the request is slow.
         lastUpdateTimeRef.current = currentTime;
+        lastPlayingSendAtRef.current = Date.now();
         await postUpdate(playbackData, { recordSentPosition: currentTime });
 
         if (isMountedRef.current) {
@@ -429,9 +454,22 @@ export function usePlaybackPresenceTracking(
     setupTrackingRef.current?.();
   }, [isSuspended, cleanupListeners, cleanupInterval]);
 
+  // The listener effect reads the senders through a ref: their identity
+  // changes whenever videoData/params change, and re-running the effect for
+  // that would tear the listeners down and re-attach them 100 ms later —
+  // a gap wide enough to lose a pause event. Only an identity change
+  // (`videoURL`) or the player itself should re-arm the listeners.
+  const handlersRef = useRef({
+    sendPlaybackUpdate,
+    sendKeepalive,
+    ensureSession,
+  });
+  handlersRef.current = { sendPlaybackUpdate, sendKeepalive, ensureSession };
+  const hasVideoData = !!videoData;
+
   // Main effect for setting up tracking
   useEffect(() => {
-    if (!player || !videoURL || !videoData || !isPlayerValid(player)) return;
+    if (!player || !videoURL || !hasVideoData || !isPlayerValid(player)) return;
 
     isMountedRef.current = true;
 
@@ -447,9 +485,11 @@ export function usePlaybackPresenceTracking(
     if (trackedVideoIdRef.current !== videoURL) {
       trackedVideoIdRef.current = videoURL;
       lastUpdateTimeRef.current = 0;
+      lastPlayingSendAtRef.current = 0;
+      lastObservedTimeRef.current = null;
     }
 
-    ensureSession();
+    handlersRef.current.ensureSession();
 
     // Clear any existing listeners and intervals
     cleanupListeners();
@@ -476,16 +516,25 @@ export function usePlaybackPresenceTracking(
             const currentTime = player.currentTime;
             if (typeof currentTime !== "number") return;
 
-            const timeSinceLastUpdate = currentTime - lastUpdateTimeRef.current;
+            const previous = lastObservedTimeRef.current;
+            lastObservedTimeRef.current = currentTime;
+            const isSeek =
+              previous !== null &&
+              Math.abs(currentTime - previous) > SEEK_JUMP_S;
+            const now = Date.now();
+            const cadenceDue =
+              now - lastPlayingSendAtRef.current >=
+              PLAYING_HEARTBEAT_INTERVAL_MS;
 
-            // Update if 30 seconds have passed or if there's a significant
-            // jump (seeking). sendPlaybackUpdate records the position itself
-            // once it has passed the guards.
-            if (
-              timeSinceLastUpdate >= 30 ||
-              Math.abs(timeSinceLastUpdate) > 10
-            ) {
-              sendPlaybackUpdate(currentTime, !player.playing);
+            // Send every 30s of wall-clock while playing, or immediately on
+            // a seek. sendPlaybackUpdate records the position and the send
+            // time itself once it has passed the guards, so a held write
+            // (resume seek pending) is retried on the next tick.
+            if (isSeek || cadenceDue) {
+              handlersRef.current.sendPlaybackUpdate(
+                currentTime,
+                !player.playing,
+              );
             }
           } catch (error) {
             console.error(
@@ -506,7 +555,7 @@ export function usePlaybackPresenceTracking(
             if (!isPlaying) {
               const currentTime = player.currentTime;
               if (typeof currentTime === "number" && currentTime > 0) {
-                sendPlaybackUpdate(currentTime, true);
+                handlersRef.current.sendPlaybackUpdate(currentTime, true);
               }
 
               // Just paused — start the presence "still here" ping. The
@@ -521,14 +570,14 @@ export function usePlaybackPresenceTracking(
                   stopPausedHeartbeat();
                   return;
                 }
-                sendKeepalive();
+                handlersRef.current.sendKeepalive();
               }, PAUSED_HEARTBEAT_INTERVAL_MS);
             } else {
               // Resumed — stop the paused heartbeat. If presence was ended
               // meanwhile (background while paused), this mints a new
               // session for the next progress write.
               stopPausedHeartbeat();
-              ensureSession();
+              handlersRef.current.ensureSession();
             }
           } catch (error) {
             console.error(
@@ -617,10 +666,7 @@ export function usePlaybackPresenceTracking(
   }, [
     player,
     videoURL,
-    videoData,
-    sendPlaybackUpdate,
-    sendKeepalive,
-    ensureSession,
+    hasVideoData,
     isSuspended,
     cleanupListeners,
     cleanupInterval,
