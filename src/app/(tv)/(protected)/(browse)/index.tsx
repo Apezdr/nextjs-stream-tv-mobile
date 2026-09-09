@@ -341,6 +341,8 @@ export default function TVHomePage() {
         hdr: item.hdr,
         logo: item.logo,
         isTrailer: item.isTrailer,
+        duration: item.duration,
+        watchHistory: item.watchHistory,
       };
     });
   }, []);

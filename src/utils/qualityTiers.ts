@@ -233,10 +233,18 @@ export function tierUsable(
  * lands (the controls use sticky gating for exactly this) — and stay visible
  * with the reason when this title or this device rules them out.
  */
+/**
+ * The media payload's `playbackSource` value that means the server is
+ * serving the raw file because the transcoder cannot take this title. Older
+ * servers omit the field; any other value is treated as a JIT master.
+ */
+export const RAW_PLAYBACK_SOURCE = "raw";
+
 export function resolveAvailableTiers(
   info: DirectPlayInfo | null | undefined,
   platformClass: PlatformClass,
   caps?: DeviceDecodeCapabilities | null,
+  playbackSource?: string | null,
 ): QualityTierOption[] {
   // Web builds only ever get the ladder: raw /file in a browser <video> is
   // exactly what §6 forbids, and nothing pins a variant there.
@@ -262,6 +270,15 @@ export function resolveAvailableTiers(
           resolveReasonCopy(info) ?? "Original isn't available for this title.",
         ),
       );
+    } else if (
+      !info.hls?.offered &&
+      info.hls?.reason === undefined &&
+      playbackSource === RAW_PLAYBACK_SOURCE
+    ) {
+      // direct-info answered 404 for a title the server is serving raw:
+      // there is no verdict to fetch because there is no transcoder output.
+      // Say so rather than showing a menu that silently lacks Original.
+      tiers.push(row("original", "Original unavailable — raw file served."));
     }
 
     if (isAndroid(platformClass) && info.file?.available) {

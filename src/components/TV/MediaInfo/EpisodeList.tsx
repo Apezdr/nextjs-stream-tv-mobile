@@ -5,6 +5,7 @@ import EpisodeProgressBar from "./EpisodeProgressBar";
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import { isWatchCompleted } from "@/src/utils/watchProgress";
 
 interface EpisodeListProps {
   episodes: TVDeviceEpisode[];
@@ -114,14 +115,9 @@ export default function EpisodeList({
                 <Text style={styles.episodeDuration}>
                   ({formatDuration(episode.duration)})
                 </Text>
-                {Boolean(
-                  episode.watchHistory?.playbackTime &&
-                  episode.duration > 0 &&
-                  (episode.watchHistory.playbackTime /
-                    (episode.duration / 1000)) *
-                    100 >=
-                    95,
-                ) && <Text style={styles.watchedLabel}>Watched</Text>}
+                {isWatchCompleted(episode.watchHistory, episode.duration) && (
+                  <Text style={styles.watchedLabel}>Watched</Text>
+                )}
               </View>
             </View>
           </View>

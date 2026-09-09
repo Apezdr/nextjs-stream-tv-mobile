@@ -1,6 +1,6 @@
 import type { VideoPlayer } from "expo-video";
 
-import { applyResumePosition } from "./resumeGuard";
+import { applyResumePosition, isResumePending } from "./resumeGuard";
 
 type Listener = (payload: any) => void;
 
@@ -106,5 +106,31 @@ describe("applyResumePosition", () => {
     dispose2();
     expect(second.listenerCount("sourceChange")).toBe(0);
     dispose(); // idempotent
+  });
+});
+
+describe("isResumePending", () => {
+  it("reports a pending seek from arm until the guard disposes", () => {
+    const { player, emit } = fakePlayer(0);
+    expect(isResumePending(player as any)).toBe(false);
+
+    const dispose = applyResumePosition(player as any, 100, "test");
+    expect(isResumePending(player as any)).toBe(true);
+
+    // A second guard on the same player keeps it pending until BOTH clear.
+    const disposeSecond = applyResumePosition(player as any, 100, "test");
+    dispose();
+    expect(isResumePending(player as any)).toBe(true);
+
+    emit("statusChange", { status: "readyToPlay" });
+    expect(isResumePending(player as any)).toBe(false);
+    disposeSecond(); // idempotent
+    expect(isResumePending(player as any)).toBe(false);
+  });
+
+  it("is never pending for a zero target (no guard is armed)", () => {
+    const { player } = fakePlayer(0);
+    applyResumePosition(player as any, 0, "test");
+    expect(isResumePending(player as any)).toBe(false);
   });
 });

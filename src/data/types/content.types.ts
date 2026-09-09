@@ -4,10 +4,18 @@
 
 // Watch history data structure
 export interface WatchHistory {
-  playbackTime: number;
-  lastWatched: string;
+  playbackTime: number; // seconds from start
+  lastWatched: string; // ISO-8601
+  // True for ANY stored row (the server sets it whenever a row exists), so it
+  // is "has history", not "finished". Read `completed` / `progressPercent`
+  // (server-computed at join time from the catalog duration) via
+  // `src/utils/watchProgress.ts`, which falls back to the local rule on
+  // servers that predate those fields.
   isWatched: boolean;
-  normalizedVideoId: string;
+  completed?: boolean;
+  progressPercent?: number; // 0-100
+  normalizedVideoId: string | null;
+  mediaId?: string | null;
 }
 
 // Core media item as returned by the API
@@ -46,6 +54,7 @@ export interface MediaItem {
   episodeNumber?: number; // For TV shows
   seasonNumber?: number; // For TV shows
   isTrailer?: boolean; // Whether this item is a trailer
+  duration?: number; // Milliseconds, when the list row carries it
   watchHistory?: WatchHistory; // Optional watch history data
 }
 
@@ -145,7 +154,7 @@ export interface TVDeviceMediaResponse {
   episodes: TVDeviceEpisode[];
   navigation: TVDeviceNavigation;
   airDate?: string; // Air date for TV shows
-  duration?: number; // Duration in seconds (for movies or episodes)
+  duration?: number; // Duration in MILLISECONDS (movies and episodes alike)
   watchHistory?: WatchHistory; // Optional watch history data
 }
 
@@ -160,8 +169,12 @@ export interface MediaDetailsResponse {
   hdr?: string; // HDR format (e.g., "HDR10", "10-bit SDR (BT.709)")
   logo?: string; // Logo URL (typically for TV shows)
   type?: "movie" | "tv"; // Content type
-  duration?: number; // Duration in seconds
+  duration?: number; // Duration in MILLISECONDS — every consumer divides by 1000
   releaseDate?: string; // Release date
+  // How the server is delivering `videoURL`: a JIT-transcoded master, or the
+  // raw file because the transcoder cannot take this title. Emitted by the
+  // server's sanitizeTVData; older servers omit it.
+  playbackSource?: string;
   description?: string; // Content description
   episodeNumber?: number; // For TV shows
   seasonNumber?: number; // For TV shows
@@ -327,6 +340,11 @@ export interface ScreensaverResponse {
   _id: string; // Always available unique identifier
   type: "movie" | "tv"; // Always available content type
   title: string;
+  // Not sent today. If the server ever hoists the viewer's in-progress
+  // episode onto the payload, the screensaver's Watch button uses it directly
+  // instead of resolving it from the Continue Watching list.
+  seasonNumber?: number;
+  episodeNumber?: number;
   logo?: string;
   backdrop: string;
   backdropBlurhash?: string; // Optional blurhash for backdrop

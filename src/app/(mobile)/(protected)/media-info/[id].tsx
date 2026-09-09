@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import YoutubeSvg from "@/src/assets/third-party/youtube.svg";
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
+import WatchProgressBar from "@/src/components/TV/MediaInfo/WatchProgressBar";
 import { Colors } from "@/src/constants/Colors";
 import {
   useTVMediaDetails,
@@ -30,6 +31,11 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
 import { navigationHelper } from "@/src/utils/navigationHelper";
+import {
+  hasResumableProgress,
+  isWatchCompleted,
+  watchProgressPercent,
+} from "@/src/utils/watchProgress";
 import {
   extractYouTubeVideoId,
   getYouTubeThumbnailUrls,
@@ -361,6 +367,13 @@ export default function MobileMediaInfoPage() {
       showBackdrop,
     ],
   );
+
+  // A movie with a saved position that is not finished resumes; the label
+  // says so instead of Play silently jumping mid-film.
+  const movieIsResumable =
+    params.type === "movie" &&
+    hasResumableProgress(mediaInfo?.watchHistory, 10) &&
+    !isWatchCompleted(mediaInfo?.watchHistory, mediaInfo?.duration);
 
   // Handle movie play
   const handlePlayMovie = useCallback(() => {
@@ -770,6 +783,14 @@ export default function MobileMediaInfoPage() {
                             )}
                         </View>
 
+                        {/* Resume bar: same component and threshold as the
+                            TV media-info page, so a half-watched movie reads
+                            the same on both. */}
+                        <WatchProgressBar
+                          watchHistory={mediaInfo.watchHistory}
+                          duration={mediaInfo.duration}
+                        />
+
                         {/* Play button with options for movies */}
                         <View style={styles.movieButtonContainer}>
                           <TouchableOpacity
@@ -777,12 +798,14 @@ export default function MobileMediaInfoPage() {
                             onPress={handlePlayMovie}
                           >
                             <Ionicons
-                              name="play"
+                              name={movieIsResumable ? "play-forward" : "play"}
                               size={20}
                               color={Colors.dark.whiteText}
                             />
                             <Text style={styles.playButtonText}>
-                              Play Movie
+                              {movieIsResumable
+                                ? "Continue Watching"
+                                : "Play Movie"}
                             </Text>
                           </TouchableOpacity>
                         </View>
@@ -1100,23 +1123,27 @@ export default function MobileMediaInfoPage() {
                               )}
 
                             {/* Watch progress if available */}
-                            {episode.watchHistory &&
-                              episode.watchHistory.playbackTime > 0 && (
+                            {(() => {
+                              const percent = watchProgressPercent(
+                                episode.watchHistory,
+                                episode.duration,
+                              );
+                              if (percent === null || percent < 1) return null;
+                              return (
                                 <View style={styles.episodeProgressContainer}>
                                   <View
                                     style={[
                                       styles.episodeProgressBar,
-                                      {
-                                        width: `${
-                                          (episode.watchHistory.playbackTime /
-                                            (episode.duration / 1000)) *
-                                          100
-                                        }%`,
-                                      },
+                                      { width: `${percent}%` },
+                                      isWatchCompleted(
+                                        episode.watchHistory,
+                                        episode.duration,
+                                      ) && styles.episodeProgressBarComplete,
                                     ]}
                                   />
                                 </View>
-                              )}
+                              );
+                            })()}
                           </View>
 
                           <View style={styles.episodeInfo}>
@@ -1535,6 +1562,9 @@ const styles = StyleSheet.create({
   episodeProgressBar: {
     backgroundColor: Colors.dark.brandPrimary,
     height: "100%",
+  },
+  episodeProgressBarComplete: {
+    backgroundColor: "#46D369",
   },
   episodeInfo: {
     flex: 1,

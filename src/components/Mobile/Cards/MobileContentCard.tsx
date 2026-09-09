@@ -10,7 +10,12 @@ import {
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
+import { WatchHistory } from "@/src/data/types/content.types";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import {
+  isWatchCompleted,
+  watchProgressPercent,
+} from "@/src/utils/watchProgress";
 
 export interface MobileContentCardData {
   id: string;
@@ -34,6 +39,34 @@ export interface MobileContentCardData {
   releaseDate?: string;
   rating?: number;
   isTrailer?: boolean;
+  /** Milliseconds, when the row carries it (for the resume bar). */
+  duration?: number;
+  /** Set on Continue Watching rows; drives the resume bar. */
+  watchHistory?: WatchHistory;
+}
+
+/** Thin resume bar for a card's image edge; null without usable progress. */
+function CardProgressBar({
+  item,
+  style,
+}: {
+  item: MobileContentCardData;
+  style: object;
+}) {
+  const percent = watchProgressPercent(item.watchHistory, item.duration);
+  if (percent === null || percent < 1) return null;
+  const completed = isWatchCompleted(item.watchHistory, item.duration);
+  return (
+    <View style={[styles.progressTrack, style]} pointerEvents="none">
+      <View
+        style={[
+          styles.progressFill,
+          { width: `${percent}%` },
+          completed && styles.progressFillComplete,
+        ]}
+      />
+    </View>
+  );
 }
 
 interface MobileContentCardProps {
@@ -120,6 +153,15 @@ const MobileContentCard = ({
           placeholderContentFit="cover"
           contentFit="cover"
           transition={200}
+        />
+
+        <CardProgressBar
+          item={item}
+          style={{
+            left: 0,
+            width: dimensions.imageWidth,
+            bottom: (dimensions.height - dimensions.imageHeight) / 2,
+          }}
         />
 
         {/* Trailer badge */}
@@ -219,6 +261,15 @@ const MobileContentCard = ({
           )}
         </View>
       )}
+
+      <CardProgressBar
+        item={item}
+        style={{
+          left: 0,
+          right: 0,
+          top: dimensions.imageHeight * 0.75 - 4,
+        }}
+      />
 
       {/* HDR badge */}
       {item.hdr && (
@@ -370,6 +421,19 @@ const styles = StyleSheet.create({
   },
 
   // Common badge styles
+  progressFill: {
+    backgroundColor: Colors.dark.brandPrimary,
+    height: "100%",
+  },
+  progressFillComplete: {
+    backgroundColor: "#46D369",
+  },
+  progressTrack: {
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    height: 4,
+    position: "absolute",
+    zIndex: 2,
+  },
   hdrBadge: {
     backgroundColor: Colors.dark.brandPrimary,
     borderRadius: 3,

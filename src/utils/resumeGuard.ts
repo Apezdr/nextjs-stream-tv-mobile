@@ -7,6 +7,23 @@ const TOLERANCE_S = 15;
 // The guard disarms itself if the source never becomes playable.
 const GUARD_TTL_MS = 30_000;
 
+// Players with a resume seek still in flight. While a guard is armed the
+// player's reported position is not trustworthy (the new source starts at 0
+// until the seek lands), so the presence tracker holds its heartbeats — a
+// position written in that window would overwrite the saved one.
+const pendingGuards = new WeakMap<object, number>();
+
+function trackPending(player: VideoPlayer, delta: 1 | -1): void {
+  const next = (pendingGuards.get(player) ?? 0) + delta;
+  if (next <= 0) pendingGuards.delete(player);
+  else pendingGuards.set(player, next);
+}
+
+/** Whether a resume seek is still pending on this player. */
+export function isResumePending(player: VideoPlayer | null): boolean {
+  return !!player && (pendingGuards.get(player) ?? 0) > 0;
+}
+
 /**
  * Seek to `targetSeconds` and make sure the seek survives the source commit.
  *
@@ -44,9 +61,11 @@ export function applyResumePosition(
   let sourceSub: { remove: () => void } | null = null;
   let statusSub: { remove: () => void } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  trackPending(player, 1);
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    trackPending(player, -1);
     sourceSub?.remove();
     statusSub?.remove();
     if (timer) clearTimeout(timer);

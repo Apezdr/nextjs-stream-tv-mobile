@@ -78,9 +78,21 @@ function logHorizontalListRequest(
 }
 
 // Types for playback tracking
+/**
+ * What a playback update means, so the server can tell them apart:
+ * - `progress` (default when omitted): a real position write.
+ * - `keepalive`: the paused "still here" ping. Carries NO `playbackTime` —
+ *   a paused device must never drag the row back over progress another
+ *   device made in the meantime. Presence liveness only.
+ * - `final`: the exit flush. Sent without a `sessionId` (see below).
+ */
+export type PlaybackUpdateKind = "progress" | "keepalive" | "final";
+
 export interface PlaybackUpdateRequest {
   videoId: string;
-  playbackTime: number;
+  // Seconds. Required for `progress` and `final`; omitted on `keepalive`.
+  playbackTime?: number;
+  kind?: PlaybackUpdateKind;
   // Optional: omitting this skips the presence write for this call (WatchHistory
   // still updates normally). Deliberately omitted on any "final position" update
   // that's paired with an endPlaybackPresence() call for the same session, since
@@ -221,7 +233,12 @@ export const contentService = {
 
     return enhancedApiClient.get<DirectPlayInfo>(
       `${API_ENDPOINTS.CONTENT.DIRECT_INFO}${queryParams}`,
-      { headers: NO_CACHE_HEADERS },
+      {
+        headers: NO_CACHE_HEADERS,
+        // 504 = "derivation pending, Retry-After: N". The hook polls on that
+        // schedule; the transport must not retry it or trip the breaker.
+        expectedStatuses: [504],
+      },
     );
   },
 

@@ -2,6 +2,11 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 
 import { WatchHistory } from "@/src/data/types/content.types";
+import {
+  durationMsToSeconds,
+  isWatchCompleted,
+  watchProgressPercent,
+} from "@/src/utils/watchProgress";
 
 interface EpisodeProgressBarProps {
   watchHistory?: WatchHistory;
@@ -29,24 +34,17 @@ export default function EpisodeProgressBar({
   compact = false,
 }: EpisodeProgressBarProps) {
   // Convert duration from milliseconds to seconds (API returns duration in milliseconds)
-  const durationInSeconds = duration / 1000;
+  const durationInSeconds = durationMsToSeconds(duration);
+  const progressPercentage = watchProgressPercent(watchHistory, duration);
 
-  if (!watchHistory || !watchHistory.playbackTime || durationInSeconds <= 0) {
+  // Don't show progress bar without history, or if progress is minimal
+  // (less than 1%)
+  if (!watchHistory || progressPercentage === null || progressPercentage < 1) {
     return null;
   }
 
-  const progressPercentage = Math.min(
-    (watchHistory.playbackTime / durationInSeconds) * 100,
-    100,
-  );
-
-  // Don't show progress bar if progress is minimal (less than 1%)
-  if (progressPercentage < 1) {
-    return null;
-  }
-
-  // Show "Watched" for 95%+ completion
-  const isWatched = progressPercentage >= 95;
+  // Server verdict when present, else the shared local threshold.
+  const isWatched = isWatchCompleted(watchHistory, duration);
   const playbackTime = watchHistory.playbackTime;
 
   return (

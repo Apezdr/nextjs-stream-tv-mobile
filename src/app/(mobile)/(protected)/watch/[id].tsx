@@ -2,14 +2,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { NetworkStateType, useNetworkState } from "expo-network";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
-import {
-  useEffect,
-  useState,
-  useMemo,
-  useCallback,
-  useRef,
-  useTransition,
-} from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   View,
   StyleSheet,
@@ -29,10 +22,7 @@ import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
 import { useVideoTierFallback } from "@/src/data/hooks/useVideoTierFallback";
 import { contentService } from "@/src/data/services/contentService";
-import {
-  MediaDetailsResponse,
-  TVDeviceEpisode,
-} from "@/src/data/types/content.types";
+import { MediaDetailsResponse } from "@/src/data/types/content.types";
 import { useActiveVideoTrack } from "@/src/hooks/useActiveVideoTrack";
 import { setVerdictAudioTracks } from "@/src/hooks/useAudioTracks";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
@@ -54,15 +44,12 @@ function parseNumericParam(value: string | undefined): number | undefined {
 }
 
 // Custom hook to handle content loading logic
-function useContentLoader(
-  params: {
-    id: string;
-    type: "tv" | "movie";
-    season?: string;
-    episode?: string;
-  },
-  skipLoading = false,
-) {
+function useContentLoader(params: {
+  id: string;
+  type: "tv" | "movie";
+  season?: string;
+  episode?: string;
+}) {
   const [videoURL, setVideoURL] = useState<string | null>(null);
   const [videoData, setVideoData] = useState<MediaDetailsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,7 +59,7 @@ function useContentLoader(
     let cancelled = false;
 
     (async () => {
-      if (!params.id || !params.type || skipLoading) return;
+      if (!params.id || !params.type) return;
 
       setLoading(true);
       setContentError(null);
@@ -106,7 +93,7 @@ function useContentLoader(
     return () => {
       cancelled = true;
     };
-  }, [params.id, params.type, params.season, params.episode, skipLoading]);
+  }, [params.id, params.type, params.season, params.episode]);
 
   return {
     videoURL,
@@ -128,8 +115,12 @@ export default function MobileWatchPage() {
   }>();
   const router = useRouter();
 
-  const [isEpisodeSwitching, setIsEpisodeSwitching] = useState(false);
-  const isEpisodeSwitchingRef = useRef(false);
+  // "Restart From Beginning" applies to THIS mount only. Tracked in a ref
+  // rather than by clearing the route param: expo-router's setParams goes
+  // through React Navigation's SET_PARAMS, which shallow-merges, so a
+  // deleted key never actually leaves the params and the flag stuck for the
+  // life of the screen — disabling the focus-refresh sync entirely.
+  const restartedThisMountRef = useRef(params.restart === "true");
 
   // Track PiP state
   const pipActiveRef = useRef(false);
@@ -145,27 +136,9 @@ export default function MobileWatchPage() {
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
-  // Content loading (abstracted) - skip loading during episode switching
-  const { videoURL, videoData, loading, contentError } = useContentLoader(
-    params,
-    isEpisodeSwitching || isEpisodeSwitchingRef.current,
-  );
-
-  // Enhanced episode switching state
-  const [currentEpisodeData, setCurrentEpisodeData] =
-    useState<MediaDetailsResponse | null>(null);
-  const [episodeSwitchError, setEpisodeSwitchError] = useState<string | null>(
-    null,
-  );
-
-  // Episode carousel state and management
-  const [episodes, setEpisodes] = useState<TVDeviceEpisode[]>([]);
-  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
-  const [hasLoadedEpisodesOnce, setHasLoadedEpisodesOnce] = useState(false);
-  const [isPending, startTransition] = useTransition();
-  const episodeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
+  // Content loading (abstracted)
+  const { videoURL, videoData, loading, contentError } =
+    useContentLoader(params);
 
   // Current episode and season from params
   const currentEpisodeNumber = params.episode
@@ -173,15 +146,16 @@ export default function MobileWatchPage() {
     : undefined;
   const currentSeasonNumber = params.season ? parseInt(params.season, 10) : 1;
 
-  // Hybrid data resolution - use episode switching data when available
-  const effectiveVideoData = currentEpisodeData || videoData;
-  const effectiveVideoURL = currentEpisodeData?.videoURL || videoURL;
-  const effectiveEpisodeNumber =
-    currentEpisodeData?.episodeNumber || currentEpisodeNumber;
+  // Mobile has no in-player episode switching (the controls expose no
+  // episode picker; an episode change is a fresh navigation), so the loaded
+  // content is the effective content.
+  const effectiveVideoData = videoData;
+  const effectiveVideoURL = videoURL;
+  const effectiveEpisodeNumber = currentEpisodeNumber;
 
-  // Watch-history/presence identity must stay the canonical master URL no
-  // matter which tier is playing — a `?direct=1` or `/file` videoId would
-  // split resume history and restart the presence session mid-viewing.
+  // Watch-history/presence identity is the canonical master URL no matter
+  // which tier is playing, so stored videoId strings stay stable. (The
+  // server folds tier variants itself; this keeps the wire tidy.)
   const presenceVideoId = useMemo(
     () => (effectiveVideoURL ? canonicalVideoId(effectiveVideoURL) : null),
     [effectiveVideoURL],
@@ -241,20 +215,19 @@ export default function MobileWatchPage() {
     isCellular,
     playerRef,
     notifySourceReplacedRef,
+    playbackSource: effectiveVideoData?.playbackSource ?? null,
   });
 
   const playbackSourceURL = quality.activeSourceURL;
 
-  // Backdrop URL resolution - prioritize route param, then current data, then loaded data
+  // Backdrop URL resolution - prioritize route param, then loaded data
   const effectiveBackdropURL =
     params.backdrop || // From route navigation
-    currentEpisodeData?.backdrop || // From episode switching
     videoData?.backdrop; // From initial data load
 
-  // Backdrop blurhash resolution - prioritize route param, then current data, then loaded data
+  // Backdrop blurhash resolution - prioritize route param, then loaded data
   const effectiveBackdropBlurhash =
     params.backdropBlurhash || // From route navigation
-    currentEpisodeData?.backdropBlurhash || // From episode switching
     videoData?.backdropBlurhash; // From initial data load
 
   // Buffer Options (mobile-optimized). NOTE: with
@@ -305,7 +278,7 @@ export default function MobileWatchPage() {
       p.bufferOptions = activeBufferOptionsRef.current;
 
       // Check if we should restart from beginning or resume from watch history
-      const shouldRestart = params.restart === "true";
+      const shouldRestart = restartedThisMountRef.current;
       const watchHistory = effectiveVideoData?.watchHistory;
 
       if (!shouldRestart && watchHistory && watchHistory.playbackTime > 0) {
@@ -349,14 +322,19 @@ export default function MobileWatchPage() {
     player.bufferOptions = activeBufferOptions;
   }, [player, activeBufferOptions]);
 
-  // Clear restart parameter after player is configured (prevent setState during render)
-  useEffect(() => {
-    if (params.restart === "true") {
-      const cleanParams = { ...params };
-      delete cleanParams.restart;
-      router.setParams(cleanParams);
-    }
-  }, [params.restart, router]);
+  // Enable playback + presence tracking, keyed by the canonical identity URL
+  const {
+    flushCurrentProgress,
+    endSession,
+    suspendTracking,
+    getSessionId,
+    getLastSentAt,
+  } = usePlaybackPresenceTracking(
+    player,
+    effectiveVideoData,
+    presenceVideoId,
+    params,
+  );
 
   // Refresh watch history when screen gets focus to sync with other instances
   useFocusEffect(
@@ -364,10 +342,13 @@ export default function MobileWatchPage() {
       const refreshWatchHistory = async () => {
         if (!player || !params.id || !params.type || !effectiveVideoURL) return;
 
-        // Don't refresh/override if we're in a restart scenario
-        if (params.restart === "true") {
+        // After a Restart the server row is the OLD position until this
+        // session's first write lands; applying it would undo the restart.
+        // Once something has been sent, the newer-than check below is the
+        // gate instead, so cross-device sync works again mid-session.
+        if (restartedThisMountRef.current && getLastSentAt() === 0) {
           console.log(
-            "[MobileWatchPage] Skipping watch history refresh due to restart parameter",
+            "[MobileWatchPage] Skipping watch history refresh — restarted and nothing sent yet",
           );
           return;
         }
@@ -392,18 +373,25 @@ export default function MobileWatchPage() {
           ) {
             const currentPlayerTime = player.currentTime || 0;
             const savedTime = freshData.watchHistory.playbackTime;
+            // Only a row written AFTER this session's last write can be
+            // another device's progress (a rewind on the web or the TV
+            // counts as much as a fast-forward). An older row is just this
+            // device's own history echoed back.
+            const rowWrittenAt = Date.parse(freshData.watchHistory.lastWatched);
+            const isNewerThanOurs =
+              Number.isNaN(rowWrittenAt) || rowWrittenAt > getLastSentAt();
 
-            // Only update if the saved time is significantly different (more than 30 seconds)
-            // and the saved time is newer than current player time
+            // Only update if the saved time is significantly different
+            // (more than 30 seconds), in either direction.
             if (
-              Math.abs(savedTime - currentPlayerTime) > 30 &&
-              savedTime > currentPlayerTime
+              isNewerThanOurs &&
+              Math.abs(savedTime - currentPlayerTime) > 30
             ) {
               const resumeTime = Math.max(0, savedTime - 2);
               console.log(
                 `[MobileWatchPage] Updating player time from focus refresh: ${currentPlayerTime}s -> ${resumeTime}s`,
               );
-              player.currentTime = resumeTime;
+              applyResumePosition(player, resumeTime, "MobileWatchPage:focus");
             }
           }
         } catch (error) {
@@ -415,7 +403,7 @@ export default function MobileWatchPage() {
       };
 
       // Only refresh if we have essential data and player is ready
-      if (effectiveVideoData && !loading && !isEpisodeSwitching) {
+      if (effectiveVideoData && !loading) {
         refreshWatchHistory();
       }
     }, [
@@ -427,8 +415,7 @@ export default function MobileWatchPage() {
       effectiveVideoURL,
       effectiveVideoData,
       loading,
-      isEpisodeSwitching,
-      params.restart,
+      getLastSentAt,
     ]),
   );
 
@@ -509,15 +496,6 @@ export default function MobileWatchPage() {
     fallbackTimeoutMs: 5000,
   });
 
-  // Enable playback + presence tracking, keyed by the canonical identity URL
-  const { flushCurrentProgress, endSession, getSessionId } =
-    usePlaybackPresenceTracking(
-      player,
-      effectiveVideoData,
-      presenceVideoId,
-      params,
-    );
-
   // §8 decode-error descent: retry once, then drop a tier at position.
   // Declared BEFORE useVideoErrorHandling so its statusChange listener
   // registers first and claims errors the descent can recover from.
@@ -540,249 +518,12 @@ export default function MobileWatchPage() {
     suppressWhile: tierFallback.isHandling,
   });
 
-  // Function to fetch episode data for TV shows
-  const fetchEpisodeData = useCallback(async () => {
-    if (params.type !== "tv" || !params.id) return;
+  // Combine content, audio and video errors
+  const finalError = contentError || audioError || videoError;
 
-    // Don't fetch episode data during episode switching
-    if (isEpisodeSwitching || isEpisodeSwitchingRef.current) {
-      console.log(
-        "[MobileWatchPage] Skipping episode data fetch during episode switching",
-      );
-      return;
-    }
-
-    // Smart loading state: Only show skeleton for first load when no episodes exist
-    const isFirstLoad = !hasLoadedEpisodesOnce && episodes.length === 0;
-
-    try {
-      if (isFirstLoad) {
-        setIsLoadingEpisodes(true);
-        console.log("[MobileWatchPage] First load - fetching episode data");
-      } else {
-        console.log(
-          "[MobileWatchPage] Background refresh - updating episodes silently",
-        );
-      }
-
-      console.log(
-        "[MobileWatchPage] Fetching episode data for season",
-        currentSeasonNumber,
-      );
-      const result = await contentService.getTVMediaDetails({
-        mediaType: params.type,
-        mediaId: params.id,
-        season: currentSeasonNumber,
-        includeWatchHistory: true,
-      });
-
-      if (result && result.episodes) {
-        console.log(
-          "[MobileWatchPage] Loaded",
-          result.episodes.length,
-          "episodes",
-        );
-        setEpisodes(result.episodes);
-        setHasLoadedEpisodesOnce(true);
-      }
-    } catch (error) {
-      console.error("[MobileWatchPage] Error fetching episode data:", error);
-    } finally {
-      if (isFirstLoad) {
-        setIsLoadingEpisodes(false);
-      }
-    }
-  }, [
-    params.type,
-    params.id,
-    currentSeasonNumber,
-    isEpisodeSwitching,
-    hasLoadedEpisodesOnce,
-    episodes.length,
-  ]);
-
-  // Reset episode loading state when season changes
-  useEffect(() => {
-    if (params.type === "tv") {
-      setHasLoadedEpisodesOnce(false);
-      setEpisodes([]);
-    }
-  }, [currentSeasonNumber, params.type]);
-
-  // Lazily fetch episode data after the video starts playing (for TV shows)
-  useEffect(() => {
-    if (videoURL && player && params.type === "tv") {
-      // Start a transition to avoid blocking the main thread
-      startTransition(() => {
-        console.log("[MobileWatchPage] Lazily fetching episode data");
-        fetchEpisodeData();
-      });
-    }
-  }, [videoURL, player, params.type, fetchEpisodeData]);
-
-  // Enhanced episode selection with seamless switching
-  const handleEpisodeSelect = useCallback(
-    async (episode: TVDeviceEpisode) => {
-      if (!params.id || !params.type || params.type !== "tv") return;
-
-      try {
-        setIsEpisodeSwitching(true);
-        isEpisodeSwitchingRef.current = true;
-        setEpisodeSwitchError(null);
-
-        console.log(
-          "[MobileWatchPage] Switching to episode",
-          episode.episodeNumber,
-        );
-
-        // Phase 1: Send final playback update for current episode, and end
-        // its presence session. sessionId is deliberately omitted from this
-        // update — it's paired with endSession() below for the same session,
-        // and the two must never share a sessionId on the wire (see the
-        // resurrection footgun note on PlaybackUpdateRequest).
-        if (player && effectiveVideoData && effectiveVideoURL) {
-          const currentTime = player.currentTime;
-          const outgoingSessionId = getSessionId();
-          console.log(
-            "[MobileWatchPage] Ending presence session for outgoing episode",
-            outgoingSessionId,
-          );
-          endSession();
-
-          if (currentTime > 0) {
-            console.log(
-              "[MobileWatchPage] Sending final playback update for current episode",
-            );
-            await contentService.updatePlaybackProgress({
-              videoId: canonicalVideoId(effectiveVideoURL),
-              playbackTime: currentTime,
-              isPaused: !player.playing,
-              mediaMetadata: {
-                mediaType: effectiveVideoData.type || params.type,
-                mediaId: effectiveVideoData.id || params.id,
-                showId: params.id,
-                seasonNumber:
-                  effectiveVideoData.seasonNumber || currentSeasonNumber,
-                episodeNumber:
-                  effectiveVideoData.episodeNumber || effectiveEpisodeNumber,
-              },
-            });
-          }
-        }
-
-        // Phase 2: Fetch new episode data with watch history
-        console.log("[MobileWatchPage] Fetching new episode data");
-        const newEpisodeData = await contentService.getMediaDetails({
-          mediaType: params.type,
-          mediaId: params.id,
-          season: currentSeasonNumber,
-          episode: episode.episodeNumber,
-          includeWatchHistory: true,
-        });
-
-        if (!newEpisodeData?.videoURL) {
-          throw new Error("No video URL available for selected episode");
-        }
-
-        // Phase 3: Replace video source seamlessly. applyEpisodeSource pins
-        // the engine's source for the new item (Android "original" demotes to
-        // auto — the old file's verdict cannot authorize the new file).
-        if (player) {
-          console.log("[MobileWatchPage] Replacing video source");
-          const nextSourceURL = quality.applyEpisodeSource(
-            newEpisodeData.videoURL,
-          );
-          await player.replaceAsync({ uri: nextSourceURL });
-          // Tell the hook we swapped the source ourselves, so its drift effect
-          // does not issue a second redundant replaceAsync when
-          // effectiveVideoURL catches up — that reload would discard both the
-          // resume seek below and the selected audio track.
-          notifySourceReplaced(nextSourceURL);
-
-          // Apply resume position from watch history
-          const watchHistory = newEpisodeData.watchHistory;
-          if (watchHistory && watchHistory.playbackTime > 0) {
-            const resumeTime = Math.max(0, watchHistory.playbackTime - 2);
-            console.log(
-              `[MobileWatchPage] Resuming new episode from ${resumeTime}s`,
-            );
-            player.currentTime = resumeTime;
-          }
-
-          player.play();
-        }
-
-        // Phase 4: Update state and URL parameters
-        setCurrentEpisodeData(newEpisodeData);
-
-        // Update URL parameters without navigation using setParams
-        // Clear restart parameter to prevent accidental re-restarts
-        router.setParams({
-          season: currentSeasonNumber.toString(),
-          episode: episode.episodeNumber.toString(),
-          // Explicitly omit restart parameter
-        });
-
-        // Phase 5: Update episode list to reflect any watch history changes
-        if (newEpisodeData.episodeNumber) {
-          setEpisodes((prevEpisodes) =>
-            prevEpisodes.map((ep) =>
-              ep.episodeNumber === newEpisodeData.episodeNumber
-                ? {
-                    ...ep,
-                    watchHistory: newEpisodeData.watchHistory,
-                  }
-                : ep,
-            ),
-          );
-        }
-
-        console.log("[MobileWatchPage] Episode switch completed successfully");
-      } catch (error) {
-        console.error("[MobileWatchPage] Episode switch failed:", error);
-        setEpisodeSwitchError(
-          error instanceof Error ? error.message : "Failed to switch episode",
-        );
-
-        // Fallback: try updating params for critical failures
-        if (error instanceof Error && error.message.includes("No video URL")) {
-          console.log("[MobileWatchPage] Falling back to param update");
-          router.setParams({
-            season: currentSeasonNumber.toString(),
-            episode: episode.episodeNumber.toString(),
-          });
-        }
-      } finally {
-        // Add a small delay before clearing the switching flags
-        setTimeout(() => {
-          setIsEpisodeSwitching(false);
-          isEpisodeSwitchingRef.current = false;
-        }, 150);
-      }
-    },
-    [
-      params,
-      player,
-      effectiveVideoData,
-      effectiveVideoURL,
-      effectiveEpisodeNumber,
-      currentSeasonNumber,
-      router,
-      endSession,
-      getSessionId,
-      quality.applyEpisodeSource,
-    ],
-  );
-
-  // Combine content, audio, video, and episode switch errors
-  const finalError =
-    contentError || audioError || videoError || episodeSwitchError;
-
-  // Separate initial loading from episode switching. Quality-source
-  // resolution (preference hydration + bounded verdict wait) is part of
-  // initial loading.
-  const showFullLoading =
-    (loading || !quality.sourceReady) && !currentEpisodeData;
+  // Quality-source resolution (preference hydration + bounded verdict wait)
+  // is part of initial loading.
+  const showFullLoading = loading || !quality.sourceReady;
 
   // Keep screen awake during video playback and handle PiP state changes
   useEffect(() => {
@@ -892,11 +633,15 @@ export default function MobileWatchPage() {
         error,
       );
     }
+    // Detach the tracker before navigating: the screen blurs while still
+    // mounted and the player hook's blur cleanup pauses the player — that
+    // pause event must not turn into a write for the session just ended.
+    suspendTracking();
 
     // Restore system bars
     SystemBars.setHidden(false);
     router.back();
-  }, [flushCurrentProgress, endSession, router]);
+  }, [flushCurrentProgress, endSession, suspendTracking, router]);
 
   // Mobile-optimized info navigation
   const handleInfoPress = useCallback(async () => {
@@ -910,6 +655,7 @@ export default function MobileWatchPage() {
         error,
       );
     }
+    suspendTracking(); // see handleExit
 
     // Restore system bars
     SystemBars.setHidden(false);
@@ -927,6 +673,7 @@ export default function MobileWatchPage() {
   }, [
     flushCurrentProgress,
     endSession,
+    suspendTracking,
     router,
     params.id,
     params.type,
@@ -1025,30 +772,23 @@ export default function MobileWatchPage() {
 
   // Optimized backdrop management for mobile
   useEffect(() => {
-    // Only show backdrop during initial loading or episode switching
-    const shouldShowBackdrop = showFullLoading || isEpisodeSwitching;
-
-    if (shouldShowBackdrop && effectiveBackdropURL) {
+    // Only show backdrop during initial loading
+    if (showFullLoading && effectiveBackdropURL) {
       console.log(
         "[MobileWatchPage] Showing backdrop for loading state:",
         effectiveBackdropURL,
       );
 
-      // Determine loading message
-      let message: string | undefined;
-      if (showFullLoading) message = "Loading video...";
-      else if (isEpisodeSwitching) message = "Switching episode...";
-
       showBackdrop(effectiveBackdropURL, {
         fade: true,
         duration: 300,
         blurhash: effectiveBackdropBlurhash as string | undefined,
-        message,
+        message: "Loading video...",
       });
     }
 
-    // Hide backdrop when we're done with initial loading or episode switching
-    if (!shouldShowBackdrop && !showFullLoading && !isEpisodeSwitching) {
+    // Hide backdrop when we're done with initial loading
+    if (!showFullLoading) {
       console.log("[MobileWatchPage] Hiding backdrop - video interface ready");
       hideBackdrop({ fade: true, duration: 500 });
     }
@@ -1062,7 +802,6 @@ export default function MobileWatchPage() {
     effectiveBackdropURL,
     effectiveBackdropBlurhash,
     showFullLoading,
-    isEpisodeSwitching,
     showBackdrop,
     hideBackdrop,
   ]);
@@ -1118,12 +857,6 @@ export default function MobileWatchPage() {
           videoInfo={videoInfo}
           onExitWatchMode={handleExit}
           onInfoPress={handleInfoPress}
-          episodes={params.type === "tv" ? episodes : undefined}
-          currentEpisodeNumber={effectiveEpisodeNumber}
-          onEpisodeSelect={handleEpisodeSelect}
-          isLoadingEpisodes={isLoadingEpisodes}
-          isEpisodeSwitching={isEpisodeSwitching}
-          episodeSwitchError={episodeSwitchError}
           showCaptionControls={!!videoInfo?.captionURLs}
           showAudioControls={
             isAdaptiveStreamURL(playbackSourceURL) ||

@@ -5,9 +5,11 @@ import { AppState, AppStateStatus } from "react-native";
 
 import {
   contentService,
+  PlaybackUpdateKind,
   PlaybackUpdateRequest,
 } from "@/src/data/services/contentService";
 import { MediaDetailsResponse } from "@/src/data/types/content.types";
+import { isResumePending } from "@/src/utils/resumeGuard";
 
 const PLAYING_HEARTBEAT_INTERVAL_MS = 30_000;
 const PAUSED_HEARTBEAT_INTERVAL_MS = 180_000;
@@ -15,7 +17,9 @@ const PAUSED_HEARTBEAT_INTERVAL_MS = 180_000;
 // near zero before its resume seek lands. Persisting that would overwrite the
 // saved position within seconds, so a sharp regression right after a swap is
 // treated as transient; a genuine restart shows up again once the grace
-// period is over.
+// period is over. (The primary defence is `isResumePending`, which holds
+// every write while a resume guard is armed; this catches swaps that re-seek
+// without one.)
 const SOURCE_SWAP_GRACE_MS = 20_000;
 // Only a drop to the opening seconds counts: a backward seek into the middle
 // of the title right after a swap is a real position and persists normally.
@@ -34,12 +38,48 @@ interface WatchParams {
   episode?: string;
 }
 
+function buildMediaMetadata(
+  videoData: MediaDetailsResponse | null,
+  params: WatchParams,
+): PlaybackUpdateRequest["mediaMetadata"] | null {
+  if (!videoData) return null;
+
+  return {
+    mediaType: videoData.type || params.type,
+    mediaId: videoData.id || params.id,
+    ...(params.type === "tv" && {
+      showId: params.id,
+      // `??`, not `||`: season 0 (specials) is a real season number.
+      seasonNumber: videoData.seasonNumber ?? parseNumericParam(params.season),
+      episodeNumber:
+        videoData.episodeNumber ?? parseNumericParam(params.episode),
+    }),
+  };
+}
+
 /**
  * Shared playback + presence heartbeat tracking, used by both the TV and
- * mobile watch screens. Sends `updatePlayback` on a 30s interval while
- * playing, immediately on pause/seek, and on a 180s interval while paused
- * (the presence "still here" ping) — plus ends the presence session via
- * `presence/end` on explicit exit or on backgrounding while paused.
+ * mobile watch screens.
+ *
+ * Writes, by `kind`:
+ * - `progress`: every 30s of media time while playing, on a seek of more than
+ *   10s, and immediately on pause. Carries the position and the session id.
+ * - `keepalive`: every 180s while paused (the presence "still here" ping).
+ *   Carries NO position — a paused device must never drag the row back over
+ *   progress made on another device meanwhile.
+ * - `final`: the exit flush (`flushCurrentProgress({ includeSessionId:
+ *   false })`, the unmount cleanup, backgrounding while paused). Carries the
+ *   position and no session id, and is paired with `presence/end`.
+ *
+ * No position is written while a resume seek is pending on the player (see
+ * `isResumePending`): right after any `replaceAsync` the new source reports
+ * near-zero until the seek lands, and the server accepts anything ≥ 2s.
+ *
+ * The session id is minted per identity (`videoURL`) and cleared by
+ * `endSession()`; a later resume mints a fresh one, so a paused-then-
+ * backgrounded session that comes back gets a new presence row instead of
+ * resurrecting the one it ended. `suspendTracking()` detaches everything for
+ * the rest of a mount (exit) or until the identity changes (episode switch).
  */
 export function usePlaybackPresenceTracking(
   player: VideoPlayer,
@@ -47,7 +87,12 @@ export function usePlaybackPresenceTracking(
   videoURL: string | null,
   params: WatchParams,
 ) {
+  // Last position SENT (or accepted for sending) — the cadence baseline and
+  // the regression guard's reference point.
   const lastUpdateTimeRef = useRef<number>(0);
+  // Wall-clock of the last successful position write, for callers that need
+  // to know whether a server row is newer than anything this session sent.
+  const lastSentAtRef = useRef<number>(0);
   const sourceChangedAtRef = useRef<number>(0);
   const updateIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pausedHeartbeatIntervalRef = useRef<ReturnType<
@@ -57,6 +102,19 @@ export function usePlaybackPresenceTracking(
   const isMountedRef = useRef(true);
   const pendingUpdateRef = useRef<Promise<void> | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  // The identity the current session id was minted for.
+  const sessionVideoIdRef = useRef<string | null>(null);
+  // The identity the listeners are attached for; a change resets the cadence
+  // baseline so the old episode's position never feeds the new one's guard.
+  const trackedVideoIdRef = useRef<string | null>(null);
+  // Set by suspendTracking(): nothing is sent until the identity changes or
+  // resumeTracking() is called. Holds the identity it was suspended for.
+  const suspendedForRef = useRef<string | null | undefined>(undefined);
+  const setupTrackingRef = useRef<(() => void) | null>(null);
+
+  // Latest inputs for the cleanup-time flush (effect closures would be stale).
+  const latestRef = useRef({ player, videoData, videoURL, params });
+  latestRef.current = { player, videoData, videoURL, params };
 
   const isPlayerValid = useCallback((player: VideoPlayer | null): boolean => {
     if (!player) return false;
@@ -71,22 +129,10 @@ export function usePlaybackPresenceTracking(
     }
   }, []);
 
-  const buildMediaMetadata = useCallback(():
-    PlaybackUpdateRequest["mediaMetadata"] | null => {
-    if (!videoData) return null;
-
-    return {
-      mediaType: videoData.type || params.type,
-      mediaId: videoData.id || params.id,
-      ...(params.type === "tv" && {
-        showId: params.id,
-        seasonNumber:
-          videoData.seasonNumber || parseNumericParam(params.season),
-        episodeNumber:
-          videoData.episodeNumber || parseNumericParam(params.episode),
-      }),
-    };
-  }, [videoData, params.type, params.id, params.season, params.episode]);
+  const isSuspended = useCallback(
+    () => suspendedForRef.current !== undefined,
+    [],
+  );
 
   const stopPausedHeartbeat = useCallback(() => {
     if (pausedHeartbeatIntervalRef.current) {
@@ -95,21 +141,72 @@ export function usePlaybackPresenceTracking(
     }
   }, []);
 
-  const isTransientRegression = useCallback((currentTime: number) => {
-    const sinceSwap = Date.now() - sourceChangedAtRef.current;
-    const lastSent = lastUpdateTimeRef.current;
-    if (sinceSwap > SOURCE_SWAP_GRACE_MS) return false;
-    if (lastSent <= NEAR_START_S || currentTime >= NEAR_START_S) return false;
-    console.log(
-      `[PlaybackPresenceTracking] Skipping ${currentTime.toFixed(1)}s update ${Math.round(sinceSwap / 1000)}s after a source swap (last sent ${lastSent.toFixed(1)}s)`,
-    );
-    return true;
+  // `lastSent` is passed explicitly and must be read BEFORE the caller
+  // records the new position — comparing against a value that was just
+  // overwritten with `currentTime` made this guard a no-op.
+  const isTransientRegression = useCallback(
+    (currentTime: number, lastSent: number) => {
+      const sinceSwap = Date.now() - sourceChangedAtRef.current;
+      if (sinceSwap > SOURCE_SWAP_GRACE_MS) return false;
+      if (lastSent <= NEAR_START_S || currentTime >= NEAR_START_S) return false;
+      console.log(
+        `[PlaybackPresenceTracking] Skipping ${currentTime.toFixed(1)}s update ${Math.round(sinceSwap / 1000)}s after a source swap (last sent ${lastSent.toFixed(1)}s)`,
+      );
+      return true;
+    },
+    [],
+  );
+
+  // A position read while a resume seek is in flight is the NEW source's
+  // pre-seek zero, not where the viewer is.
+  const isPositionTrustworthy = useCallback(
+    (p: VideoPlayer | null, currentTime: number) => {
+      if (isResumePending(p)) {
+        console.log(
+          `[PlaybackPresenceTracking] Holding ${currentTime.toFixed(1)}s update — resume seek pending`,
+        );
+        return false;
+      }
+      return !isTransientRegression(currentTime, lastUpdateTimeRef.current);
+    },
+    [isTransientRegression],
+  );
+
+  // Mint a session id for the current identity if there is none (first
+  // mount, a new episode, or playback resuming after endSession()).
+  const ensureSession = useCallback((): string | null => {
+    const id = latestRef.current.videoURL;
+    if (!id) return null;
+    if (!sessionIdRef.current || sessionVideoIdRef.current !== id) {
+      sessionIdRef.current = Crypto.randomUUID();
+      sessionVideoIdRef.current = id;
+    }
+    return sessionIdRef.current;
   }, []);
+
+  const postUpdate = useCallback(
+    async (
+      body: PlaybackUpdateRequest,
+      opts: { recordSentPosition?: number },
+    ) => {
+      const updatePromise = contentService.updatePlaybackProgress(body);
+      pendingUpdateRef.current = updatePromise;
+      await updatePromise;
+      if (pendingUpdateRef.current === updatePromise) {
+        pendingUpdateRef.current = null;
+      }
+      if (opts.recordSentPosition !== undefined) {
+        lastSentAtRef.current = Date.now();
+      }
+    },
+    [],
+  );
 
   // Expose function to flush current progress immediately (for navigation
   // events and PiP transitions). `includeSessionId` defaults to true; pass
   // `false` when this flush is paired with an `endSession()` call for the
-  // same session — see the resurrection footgun note on `PlaybackUpdateRequest`.
+  // same session — the write then goes out as `kind: 'final'`. See the
+  // resurrection footgun note on `PlaybackUpdateRequest`.
   const flushCurrentProgress = useCallback(
     async (opts?: { includeSessionId?: boolean }): Promise<void> => {
       const includeSessionId = opts?.includeSessionId ?? true;
@@ -121,17 +218,21 @@ export function usePlaybackPresenceTracking(
       try {
         const currentTime = player.currentTime;
         if (typeof currentTime === "number" && currentTime > 0) {
-          if (isTransientRegression(currentTime)) return;
-          const mediaMetadata = buildMediaMetadata();
+          if (!isPositionTrustworthy(player, currentTime)) return;
+          const mediaMetadata = buildMediaMetadata(videoData, params);
           if (!mediaMetadata) return;
 
+          const kind: PlaybackUpdateKind = includeSessionId
+            ? "progress"
+            : "final";
           console.log(
-            "[PlaybackPresenceTracking] Force flushing current progress",
+            `[PlaybackPresenceTracking] Force flushing current progress (${kind})`,
           );
 
           const playbackData: PlaybackUpdateRequest = {
             videoId: videoURL,
             playbackTime: currentTime,
+            kind,
             isPaused: !player.playing,
             ...(includeSessionId && sessionIdRef.current
               ? { sessionId: sessionIdRef.current }
@@ -139,8 +240,8 @@ export function usePlaybackPresenceTracking(
             mediaMetadata,
           };
 
-          await contentService.updatePlaybackProgress(playbackData);
           lastUpdateTimeRef.current = currentTime;
+          await postUpdate(playbackData, { recordSentPosition: currentTime });
 
           console.log(
             `[PlaybackPresenceTracking] Updated progress: ${currentTime}s`,
@@ -153,13 +254,23 @@ export function usePlaybackPresenceTracking(
         );
       }
     },
-    [player, videoData, videoURL, isPlayerValid, buildMediaMetadata],
+    [
+      player,
+      videoData,
+      videoURL,
+      params,
+      isPlayerValid,
+      isPositionTrustworthy,
+      postUpdate,
+    ],
   );
 
+  // A real position write (`kind: 'progress'`) with the session id.
   const sendPlaybackUpdate = useCallback(
     async (currentTime: number, isPaused: boolean) => {
       if (
         !isMountedRef.current ||
+        isSuspended() ||
         !videoData ||
         !videoURL ||
         currentTime <= 0
@@ -168,15 +279,17 @@ export function usePlaybackPresenceTracking(
       }
 
       try {
-        if (isTransientRegression(currentTime)) return;
-        const mediaMetadata = buildMediaMetadata();
+        if (!isPositionTrustworthy(player, currentTime)) return;
+        const mediaMetadata = buildMediaMetadata(videoData, params);
         if (!mediaMetadata) return;
 
+        const sessionId = ensureSession();
         const playbackData: PlaybackUpdateRequest = {
           videoId: videoURL,
           playbackTime: currentTime,
+          kind: "progress",
           isPaused,
-          ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+          ...(sessionId ? { sessionId } : {}),
           mediaMetadata,
         };
 
@@ -184,17 +297,10 @@ export function usePlaybackPresenceTracking(
           `[PlaybackPresenceTracking] Sending update for ${playbackData.mediaMetadata.mediaType} ${playbackData.mediaMetadata.mediaId} at ${currentTime}s (paused=${isPaused})`,
         );
 
-        // Store the promise to handle cleanup
-        const updatePromise =
-          contentService.updatePlaybackProgress(playbackData);
-        pendingUpdateRef.current = updatePromise;
-
-        await updatePromise;
-
-        // Clear the pending update if it's still the same one
-        if (pendingUpdateRef.current === updatePromise) {
-          pendingUpdateRef.current = null;
-        }
+        // Recorded before the request goes out so the cadence baseline and
+        // the regression guard see it even if the request is slow.
+        lastUpdateTimeRef.current = currentTime;
+        await postUpdate(playbackData, { recordSentPosition: currentTime });
 
         if (isMountedRef.current) {
           console.log(
@@ -210,8 +316,52 @@ export function usePlaybackPresenceTracking(
         }
       }
     },
-    [videoData, videoURL, buildMediaMetadata],
+    [
+      player,
+      videoData,
+      videoURL,
+      params,
+      isSuspended,
+      isPositionTrustworthy,
+      ensureSession,
+      postUpdate,
+    ],
   );
+
+  // The paused "still here" ping: liveness only, no position.
+  const sendKeepalive = useCallback(async () => {
+    if (!isMountedRef.current || isSuspended() || !videoData || !videoURL) {
+      return;
+    }
+    const sessionId = sessionIdRef.current;
+    // No session means presence was ended (background while paused); there
+    // is nothing to keep alive until playback resumes and mints a new one.
+    if (!sessionId) return;
+
+    try {
+      const mediaMetadata = buildMediaMetadata(videoData, params);
+      if (!mediaMetadata) return;
+
+      console.log("[PlaybackPresenceTracking] Sending paused keepalive");
+      await postUpdate(
+        {
+          videoId: videoURL,
+          kind: "keepalive",
+          isPaused: true,
+          sessionId,
+          mediaMetadata,
+        },
+        {},
+      );
+    } catch (error) {
+      if (isMountedRef.current) {
+        console.error(
+          "[PlaybackPresenceTracking] Failed to send keepalive:",
+          error,
+        );
+      }
+    }
+  }, [videoData, videoURL, params, isSuspended, postUpdate]);
 
   // Cleanup function to remove all listeners
   const cleanupListeners = useCallback(() => {
@@ -238,10 +388,12 @@ export function usePlaybackPresenceTracking(
   }, [stopPausedHeartbeat]);
 
   // Ends the presence session for the current sessionId (idempotent on the
-  // server). Also stops the paused heartbeat — otherwise the next tick would
-  // resurrect the very session this just deleted.
+  // server). Clears the id first, so a pause event or paused tick that lands
+  // while the request is in flight cannot re-upsert the row for the session
+  // this just deleted; playback resuming later mints a fresh id.
   const endSession = useCallback(async (): Promise<void> => {
     const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
     stopPausedHeartbeat();
 
     if (!sessionId) return;
@@ -256,15 +408,48 @@ export function usePlaybackPresenceTracking(
     }
   }, [stopPausedHeartbeat]);
 
+  // Detach listeners and timers so nothing is written for the current
+  // identity: on exit (before navigating away — the blur cleanup pauses the
+  // player, and that pause must not turn into a write), and for the length
+  // of an episode switch (the old listeners would otherwise report the new
+  // episode's position under the old videoId for a turn). Lifted
+  // automatically when the identity changes; call resumeTracking() if the
+  // switch fails and the identity stays.
+  const suspendTracking = useCallback(() => {
+    suspendedForRef.current = latestRef.current.videoURL;
+    cleanupListeners();
+    cleanupInterval();
+  }, [cleanupListeners, cleanupInterval]);
+
+  const resumeTracking = useCallback(() => {
+    if (!isSuspended()) return;
+    suspendedForRef.current = undefined;
+    cleanupListeners();
+    cleanupInterval();
+    setupTrackingRef.current?.();
+  }, [isSuspended, cleanupListeners, cleanupInterval]);
+
   // Main effect for setting up tracking
   useEffect(() => {
     if (!player || !videoURL || !videoData || !isPlayerValid(player)) return;
 
     isMountedRef.current = true;
 
-    if (!sessionIdRef.current) {
-      sessionIdRef.current = Crypto.randomUUID();
+    // A suspension is tied to the identity it was requested for; a new
+    // identity (episode switch landed) lifts it.
+    if (
+      suspendedForRef.current !== undefined &&
+      suspendedForRef.current !== videoURL
+    ) {
+      suspendedForRef.current = undefined;
     }
+
+    if (trackedVideoIdRef.current !== videoURL) {
+      trackedVideoIdRef.current = videoURL;
+      lastUpdateTimeRef.current = 0;
+    }
+
+    ensureSession();
 
     // Clear any existing listeners and intervals
     cleanupListeners();
@@ -273,7 +458,14 @@ export function usePlaybackPresenceTracking(
     let initTimeoutId: ReturnType<typeof setTimeout>;
 
     const setupTracking = () => {
-      if (!isMountedRef.current || !player || !isPlayerValid(player)) return;
+      if (
+        !isMountedRef.current ||
+        isSuspended() ||
+        !player ||
+        !isPlayerValid(player)
+      ) {
+        return;
+      }
 
       try {
         const handleTimeUpdate = () => {
@@ -286,12 +478,13 @@ export function usePlaybackPresenceTracking(
 
             const timeSinceLastUpdate = currentTime - lastUpdateTimeRef.current;
 
-            // Update if 30 seconds have passed or if there's a significant jump (seeking)
+            // Update if 30 seconds have passed or if there's a significant
+            // jump (seeking). sendPlaybackUpdate records the position itself
+            // once it has passed the guards.
             if (
               timeSinceLastUpdate >= 30 ||
               Math.abs(timeSinceLastUpdate) > 10
             ) {
-              lastUpdateTimeRef.current = currentTime;
               sendPlaybackUpdate(currentTime, !player.playing);
             }
           } catch (error) {
@@ -313,7 +506,6 @@ export function usePlaybackPresenceTracking(
             if (!isPlaying) {
               const currentTime = player.currentTime;
               if (typeof currentTime === "number" && currentTime > 0) {
-                lastUpdateTimeRef.current = currentTime;
                 sendPlaybackUpdate(currentTime, true);
               }
 
@@ -329,23 +521,14 @@ export function usePlaybackPresenceTracking(
                   stopPausedHeartbeat();
                   return;
                 }
-
-                try {
-                  const time = player.currentTime;
-                  if (typeof time === "number" && time > 0) {
-                    sendPlaybackUpdate(time, true);
-                  }
-                } catch (error) {
-                  console.error(
-                    "[PlaybackPresenceTracking] Player released during paused heartbeat:",
-                    error,
-                  );
-                  stopPausedHeartbeat();
-                }
+                sendKeepalive();
               }, PAUSED_HEARTBEAT_INTERVAL_MS);
             } else {
-              // Resumed — stop the paused heartbeat.
+              // Resumed — stop the paused heartbeat. If presence was ended
+              // meanwhile (background while paused), this mints a new
+              // session for the next progress write.
               stopPausedHeartbeat();
+              ensureSession();
             }
           } catch (error) {
             console.error(
@@ -417,6 +600,7 @@ export function usePlaybackPresenceTracking(
         );
       }
     };
+    setupTrackingRef.current = setupTracking;
 
     // Small delay to ensure player is fully initialized
     initTimeoutId = setTimeout(setupTracking, 100);
@@ -425,46 +609,116 @@ export function usePlaybackPresenceTracking(
       clearTimeout(initTimeoutId);
       cleanupListeners();
       cleanupInterval();
-      sessionIdRef.current = null;
+      // The session id is NOT cleared here: it belongs to the identity, not
+      // to this effect run, so a re-run for the same title (a loader
+      // refetch, a params change) keeps the same presence row instead of
+      // abandoning it and minting another.
     };
   }, [
     player,
     videoURL,
     videoData,
     sendPlaybackUpdate,
+    sendKeepalive,
+    ensureSession,
+    isSuspended,
     cleanupListeners,
     cleanupInterval,
     isPlayerValid,
     stopPausedHeartbeat,
   ]);
 
-  // Cleanup effect when component unmounts
+  // Cleanup effect when component unmounts. An unclean unmount (iOS
+  // swipe-back, a deep link, the screen being replaced) gets a final flush
+  // and a presence end here; a clean exit has already done both and
+  // suspended tracking, so this is a no-op for it.
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
 
-      // Clean up everything
       cleanupListeners();
       cleanupInterval();
 
-      // Note: We don't flush progress here — that's handled by navigation
-      // event handlers before unmount occurs.
-    };
-  }, [cleanupListeners, cleanupInterval]);
+      if (suspendedForRef.current !== undefined) return;
 
-  // AppState backstop: end presence immediately if the app backgrounds while
-  // paused. Deliberately does NOT fire while playing — PiP / background
-  // audio is a legitimate reason for a playing session to stay alive while
-  // backgrounded, unlike a paused one (no legitimate "still consuming media
-  // while paused in the background" case exists).
+      const {
+        player: p,
+        videoData: data,
+        videoURL: id,
+        params: latestParams,
+      } = latestRef.current;
+      const sessionId = sessionIdRef.current;
+      sessionIdRef.current = null;
+
+      try {
+        if (p && data && id && isPlayerValid(p)) {
+          const currentTime = p.currentTime;
+          const mediaMetadata = buildMediaMetadata(data, latestParams);
+          if (
+            typeof currentTime === "number" &&
+            currentTime > 0 &&
+            mediaMetadata &&
+            !isResumePending(p) &&
+            !isTransientRegression(currentTime, lastUpdateTimeRef.current)
+          ) {
+            console.log(
+              `[PlaybackPresenceTracking] Unmount — final flush at ${currentTime.toFixed(1)}s`,
+            );
+            contentService
+              .updatePlaybackProgress({
+                videoId: id,
+                playbackTime: currentTime,
+                kind: "final",
+                isPaused: true,
+                mediaMetadata,
+              })
+              .catch((error) =>
+                console.error(
+                  "[PlaybackPresenceTracking] Unmount flush failed:",
+                  error,
+                ),
+              );
+          }
+        }
+      } catch (error) {
+        console.error(
+          "[PlaybackPresenceTracking] Error reading player on unmount:",
+          error,
+        );
+      }
+
+      if (sessionId) {
+        contentService
+          .endPlaybackPresence(sessionId)
+          .catch((error) =>
+            console.error(
+              "[PlaybackPresenceTracking] Unmount presence end failed:",
+              error,
+            ),
+          );
+      }
+    };
+  }, [cleanupListeners, cleanupInterval, isPlayerValid, isTransientRegression]);
+
+  // AppState backstop. Backgrounding always flushes the position (an app
+  // kill from the switcher would otherwise lose up to 30s). While paused the
+  // presence session is ended too — no legitimate "still consuming media
+  // while paused in the background" case exists. While playing it stays
+  // alive: PiP / background audio is a legitimate reason for a playing
+  // session to keep going.
   useEffect(() => {
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       if (nextAppState === "active") return;
       if (!player || !isPlayerValid(player)) return;
+      if (isSuspended()) return;
 
       try {
         if (!player.playing) {
-          endSession();
+          flushCurrentProgress({ includeSessionId: false }).finally(() => {
+            endSession();
+          });
+        } else {
+          flushCurrentProgress();
         }
       } catch (error) {
         console.error(
@@ -482,11 +736,15 @@ export function usePlaybackPresenceTracking(
     return () => {
       subscription?.remove();
     };
-  }, [player, isPlayerValid, endSession]);
+  }, [player, isPlayerValid, isSuspended, flushCurrentProgress, endSession]);
 
   return {
     flushCurrentProgress,
     endSession,
+    suspendTracking,
+    resumeTracking,
     getSessionId: () => sessionIdRef.current,
+    /** Wall-clock ms of the last successful position write, 0 if none yet. */
+    getLastSentAt: () => lastSentAtRef.current,
   };
 }

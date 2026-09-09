@@ -154,6 +154,8 @@ export default function MobileHomePage() {
         hdr: item.hdr,
         logo: item.logo,
         isTrailer: item.isTrailer,
+        duration: item.duration,
+        watchHistory: item.watchHistory,
       }));
     },
     [],

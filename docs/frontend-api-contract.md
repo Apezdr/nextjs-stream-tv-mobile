@@ -109,18 +109,22 @@ Returned on list items, media detail, and episodes when `includeWatchHistory=tru
 interface WatchHistory {
   playbackTime: number;      // seconds from start
   lastWatched: string;       // ISO-8601 datetime
-  isWatched: boolean;
-  normalizedVideoId: string;
+  isWatched: boolean;        // true for ANY stored row — "has history", not "finished"
+  completed?: boolean;       // server-computed at join time from the catalog duration
+  progressPercent?: number;  // 0–100, same source
+  normalizedVideoId: string | null;
+  mediaId?: string | null;   // the server's resolved catalog id
 }
 ```
 
-**How the client uses it**
+**How the client uses it** (see `src/utils/watchProgress.ts`)
 
 | Field | Usage |
 |---|---|
-| `playbackTime` | Resume seek: `Math.max(0, playbackTime - 2)`. Progress bars: `playbackTime / duration`. |
-| `isWatched` | Episode “watched” badge |
-| `lastWatched` | Typed; not heavily used in UI chrome |
+| `playbackTime` | Resume seek: `Math.max(0, playbackTime - 2)`. Progress bars: `playbackTime / (duration / 1000)` when `progressPercent` is absent. |
+| `completed` / `progressPercent` | Bars, the carousel check badge and the Watched / Continue Watching labels read these first; without them the client falls back to a local 95% rule. |
+| `isWatched` | No longer drives any badge (it is true for every row). |
+| `lastWatched` | Mobile focus refresh: a row newer than this session's last write is another device's progress and is applied in both directions. |
 | `normalizedVideoId` | Typed; identity / sync |
 
 **Critical:** If `playbackTime > 0`, watch screens seek before showing controls. Omitting `watchHistory` is fine (start from 0).
@@ -713,12 +717,11 @@ When `isTVdevice` is omitted/false:
 
 #### Duration units (important)
 
-UI is inconsistent:
+`duration` is **milliseconds** everywhere the server sends it — movies, episodes and list rows alike. Every consumer in this client divides by 1000 before comparing with `playbackTime` (seconds); `src/utils/watchProgress.ts` is the one place that conversion lives. Only the server's `metadata.runtime` mixes minutes and milliseconds, and no code here reads it. Do not "fix" a bar by treating movie duration as seconds — that is what breaks movie progress.
 
-- Some episode progress bars treat `duration` as **milliseconds** (`duration / 1000` before dividing into `playbackTime` seconds).
-- Movie progress often treats `duration` as **seconds**.
+#### Delivery semantics (server-emitted, optional)
 
-Document the server unit clearly. Today the client largely assumes **episode `duration` is ms** and **movie `duration` is seconds**. Prefer documenting both and keeping them stable.
+`sanitizeTVData` also emits `playbackSource` (how `videoURL` is being delivered: a JIT master, or the raw file because the transcoder cannot take the title), the `mid:` resolved catalog id stamped on presence rows, and `rawVideoURL`. The client reads `playbackSource === "raw"` to label the quality menu when `direct-info` answers 404 for a raw-served title. The web repository's copy of this contract is the tracked source for those fields; this file carries only what the client consumes.
 
 ---
 
@@ -996,27 +999,33 @@ backdropUrl: item.backdrop
 ```ts
 {
   videoId: string;           // typically the full video URL string
-  playbackTime: number;      // seconds
+  playbackTime?: number;     // seconds; present on progress/final, ABSENT on keepalive
+  kind?: "progress" | "keepalive" | "final";  // default progress
   sessionId?: string;        // presence session; OMIT on final flush paired with presence/end
   isPaused: boolean;
   mediaMetadata: {
     mediaType: "tv" | "movie";
-    mediaId: string;
+    mediaId: string;         // the client's best guess; the server discards it and stamps its own resolved id
     showId?: string;         // TV
-    seasonNumber?: number;   // TV
+    seasonNumber?: number;   // TV; 0 is a real season (specials)
     episodeNumber?: number;  // TV
   };
 }
 ```
 
+**Write kinds.** `keepalive` is liveness only: the server MUST NOT write a position or `lastWriter` for it (a paused device would otherwise drag the row back over progress made on another device). `final` marks the exit flush so a mid-session beat and an exit can be told apart. Older builds send neither field; the server treats a paused write whose position equals the session's last presence position as liveness only, which covers them.
+
 #### Client cadence
 
 | State | Behavior |
 |---|---|
-| Playing | Heartbeat ~**30s** |
-| Paused | Heartbeat ~**180s** (“still here”) |
-| Pause / seek | Immediate update |
-| Exit / background while paused | Final progress flush **without** `sessionId`, then `presence/end` |
+| Playing | `progress` every ~**30s** of media time, or on a seek of more than 10s |
+| Pause | Immediate `progress` with the paused position |
+| Paused | `keepalive` every ~**180s**, no position |
+| Exit, info, episode switch | `final` flush **without** `sessionId`, then `presence/end`; tracking detached before navigating |
+| Background | `progress` (playing — PiP stays alive) or `final` + `presence/end` (paused) |
+| Unclean unmount | `final` + `presence/end`, fire-and-forget |
+| Resume seek pending | No writes until the seek lands (`isResumePending`) |
 
 **Resurrection footgun:** If a final `updatePlayback` includes `sessionId` while a concurrent `presence/end` runs, whichever lands last wins. Client deliberately omits `sessionId` on that final pair.
 
@@ -1096,11 +1105,17 @@ Client behavior (both watch screens, `useDirectPlayInfo`):
   with the transcoder's memoization, and send `Cache-Control: no-store` like
   the media routes.
 
-Related client source policy (app-local, not server contract): Apple players
-load `videoURL` with `?direct=1` appended by default; Android "Original" plays
-`/stream/{key}/file` (derived from `videoURL` by string surgery) when
-`file.available`. Heartbeat `videoId` stays the canonical un-suffixed
-`videoURL` (quirk #8).
+Related client source policy (app-local, not server contract; the
+authoritative statement is `FRONTEND_PLAYBACK_REQUIREMENTS.md` §11.1 and
+`src/utils/qualityTiers.ts`): on every native platform **Auto** (default) is
+the `?direct=1` master, **Original** is the `?direct=only` master, **Direct
+Play** (Android only) is `/stream/{key}/file` when `file.available` and the
+device does not veto it, and **Transcoded only** is the bare master.
+Heartbeat `videoId` stays the canonical un-suffixed `videoURL` (quirk #8).
+
+A **504** with `Retry-After` means the verdict is still being derived, never
+"nothing offered": the client keeps polling on that interval for as long as
+the watch screen is open, without counting it as a failure.
 
 ---
 
@@ -1295,7 +1310,7 @@ Defined in `API_ENDPOINTS` for completeness; not primary browse UI:
 
 Document these so backend changes don’t “fix” the app unexpectedly.
 
-1. **`useInfiniteContentList` always sends `isTVdevice=true`** and **does not forward `includeWatchHistory`**, even when home screens pass `includeWatchHistory: true` in the hook args. Watch history on home carousels may be absent unless the server includes it by default for TV device requests.
+1. **`useInfiniteContentList` always sends `isTVdevice=true`** and forwards `includeWatchHistory` (defaulting to true for `recentlyWatched`). Continue Watching cards draw a resume bar from `watchHistory` when the row also carries `duration` (ms) or `progressPercent`.
 
 2. **`contentService.getContentList` / non-infinite `useContentList`** only send `type, sort, sortOrder, page, limit` — no device/history flags.
 
@@ -1307,9 +1322,9 @@ Document these so backend changes don’t “fix” the app unexpectedly.
 
 6. **Banner `clipVideoURL`** only requested via `isTVdevice=true`.
 
-7. **Duration units** differ between movie and episode UI math (seconds vs ms). Keep server units stable.
+7. **Duration is milliseconds** for movies and episodes alike; the client divides by 1000 everywhere. Keep server units stable.
 
-8. **`videoId` in playback updates is the stream URL string**, not necessarily the media document id. `mediaMetadata.mediaId` carries the catalog id. **Delivery-tiers amendment:** the client always sends the *canonical* master URL — `videoURL` exactly as the media payload delivered it, with any tier surgery reversed (`?direct=1` stripped, a `/file` path mapped back to `master.m3u8`; see `src/utils/streamUrls.ts` `canonicalVideoId()`). A tier-mutated `videoId` would split resume history across tiers, so the server SHOULD also normalize defensively by stripping the query string.
+8. **`videoId` in playback updates is the stream URL string**, not necessarily the media document id. `mediaMetadata.mediaId` is the client's guess at the catalog id; the server discards it and stamps its own resolved `mid:`. **Delivery-tiers amendment:** the client always sends the *canonical* master URL — `videoURL` exactly as the media payload delivered it, with any tier surgery reversed (`?direct=1` stripped, a `/file` path mapped back to `master.m3u8`; see `src/utils/streamUrls.ts` `canonicalVideoId()`). The server hashes the pathname and folds every `/stream/<key>/…` tail itself, so this keeps stored ids tidy rather than preventing a split.
 
 9. **Presence finalization** omits `sessionId` on the last progress write when paired with `presence/end`.
 

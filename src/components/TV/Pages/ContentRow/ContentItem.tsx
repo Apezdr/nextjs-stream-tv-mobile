@@ -11,8 +11,13 @@ import {
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { Colors } from "@/src/constants/Colors";
+import { WatchHistory } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import {
+  isWatchCompleted,
+  watchProgressPercent,
+} from "@/src/utils/watchProgress";
 
 // Create a TV-compatible TouchableOpacity component
 interface TVTouchableProps extends React.ComponentProps<
@@ -47,6 +52,10 @@ export interface ContentItemData {
   year?: string;
   isAvailable?: boolean;
   isTrailer?: boolean;
+  /** Milliseconds, when the row carries it (for the resume bar). */
+  duration?: number;
+  /** Set on Continue Watching rows; drives the resume bar. */
+  watchHistory?: WatchHistory;
 }
 
 interface ContentItemProps {
@@ -255,6 +264,26 @@ const ContentItem = ({
         </View>
       )}
 
+      {/* Resume bar along the bottom edge (Continue Watching rows). Null
+          progress — no history, or a row without duration on a server that
+          does not send progressPercent — renders nothing. */}
+      {(() => {
+        const percent = watchProgressPercent(item.watchHistory, item.duration);
+        if (percent === null || percent < 1) return null;
+        const completed = isWatchCompleted(item.watchHistory, item.duration);
+        return (
+          <View style={styles.progressTrack} pointerEvents="none">
+            <View
+              style={[
+                styles.progressFill,
+                { width: `${percent}%` },
+                completed && styles.progressFillComplete,
+              ]}
+            />
+          </View>
+        );
+      })()}
+
       <View style={styles.overlay}>
         <Text style={styles.title} numberOfLines={1}>
           {item.title}
@@ -325,6 +354,22 @@ const styles = StyleSheet.create({
     textShadowColor: Colors.dark.videoTextShadow,
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
+  },
+  progressFill: {
+    backgroundColor: "#E50914",
+    height: "100%",
+  },
+  progressFillComplete: {
+    backgroundColor: "#46D369",
+  },
+  progressTrack: {
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    bottom: 0,
+    height: 4,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    zIndex: 2,
   },
   thumbnail: {
     height: "100%",

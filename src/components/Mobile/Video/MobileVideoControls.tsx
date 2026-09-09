@@ -23,7 +23,6 @@ import MobileCaptionControls, {
 } from "./MobileCaptionControls";
 import MobileQualityControls from "./MobileQualityControls";
 
-import { TVDeviceEpisode } from "@/src/data/types/content.types";
 import {
   useAudioFormats,
   useStickyForSource,
@@ -58,12 +57,6 @@ interface MobileVideoControlsProps {
   };
   onExitWatchMode?: () => void;
   onInfoPress?: () => void;
-  episodes?: TVDeviceEpisode[];
-  currentEpisodeNumber?: number;
-  onEpisodeSelect?: (episode: TVDeviceEpisode) => void;
-  isLoadingEpisodes?: boolean;
-  isEpisodeSwitching?: boolean;
-  episodeSwitchError?: string | null;
   showCaptionControls?: boolean; // New prop to control caption visibility
   // HLS/DASH gate computed by the watch page from the source URL. The other
   // half of the visibility rule (>= 2 languages or formats) is player-derived
@@ -102,12 +95,6 @@ const MobileVideoControls = memo(
     videoInfo,
     onExitWatchMode,
     onInfoPress,
-    episodes: _episodes,
-    currentEpisodeNumber: _currentEpisodeNumber,
-    onEpisodeSelect: _onEpisodeSelect,
-    isLoadingEpisodes: _isLoadingEpisodes = false,
-    isEpisodeSwitching = false,
-    episodeSwitchError = null,
     showCaptionControls = false,
     showAudioControls = false,
     videoURL = null,
@@ -891,24 +878,6 @@ const MobileVideoControls = memo(
               )}
             </View>
           </View>
-
-          {/* Episode switching indicator */}
-          {isEpisodeSwitching && (
-            <View style={styles.episodeSwitchingIndicator}>
-              <Text style={styles.episodeSwitchingText}>
-                Switching episode...
-              </Text>
-            </View>
-          )}
-
-          {/* Episode switch error */}
-          {episodeSwitchError && (
-            <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>
-                Episode switch failed: {episodeSwitchError}
-              </Text>
-            </View>
-          )}
         </Animated.View>
 
         {/* Skip feedback overlay */}
@@ -1172,38 +1141,6 @@ const styles = StyleSheet.create({
   },
 
   // Status indicators
-  episodeSwitchingIndicator: {
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-    borderRadius: 8,
-    left: 20,
-    paddingVertical: 16,
-    position: "absolute",
-    right: 20,
-    top: "50%",
-  },
-  episodeSwitchingText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  errorContainer: {
-    alignItems: "center",
-    backgroundColor: "rgba(255, 0, 0, 0.1)",
-    borderColor: "rgba(255, 0, 0, 0.3)",
-    borderRadius: 8,
-    borderWidth: 1,
-    bottom: 100,
-    left: 20,
-    padding: 15,
-    position: "absolute",
-    right: 20,
-  },
-  errorText: {
-    color: "#FF6B6B",
-    fontSize: 14,
-    textAlign: "center",
-  },
 });
 
 export default MobileVideoControls;

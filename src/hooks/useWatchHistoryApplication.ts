@@ -20,7 +20,31 @@ interface UseWatchHistoryApplicationParams {
 interface UseWatchHistoryApplicationReturn {
   status: WatchHistoryStatus;
   applyWatchHistory: () => Promise<void>;
+  /**
+   * Tell the hook the caller has already seeked the player for this content
+   * (the seamless episode switch applies its own resume position). The hook
+   * then treats the identity as applied: no second seek when the content
+   * loader refetches the same episode moments later, and the controls stay
+   * up through that refetch.
+   */
+  markApplied: (videoData: MediaDetailsResponse) => void;
   isControlsReady: boolean;
+}
+
+/**
+ * What "the same content" means for resume purposes. The stream URL is
+ * unique per episode / movie; the tuple is the fallback for a payload
+ * without one.
+ */
+function identityOf(videoData: MediaDetailsResponse | null): string | null {
+  if (!videoData) return null;
+  if (videoData.videoURL) return videoData.videoURL;
+  return [
+    videoData.type,
+    videoData.id,
+    videoData.seasonNumber,
+    videoData.episodeNumber,
+  ].join(":");
 }
 
 export function useWatchHistoryApplication({
@@ -29,21 +53,40 @@ export function useWatchHistoryApplication({
   contentLoading,
 }: UseWatchHistoryApplicationParams): UseWatchHistoryApplicationReturn {
   const [status, setStatus] = useState<WatchHistoryStatus>("loading");
-  const hasAppliedRef = useRef(false);
+  // The identity the resume position was last applied for, and how it went.
+  // Keyed by identity rather than a boolean so a loader refetch of the SAME
+  // episode (the 150 ms post-switch refetch, a focus refresh) does not reset
+  // and re-seek — that was the visible jump-back after every episode switch.
+  const appliedRef = useRef<{
+    key: string;
+    status: "success" | "failed";
+  } | null>(null);
   const resumeGuardRef = useRef<(() => void) | null>(null);
 
-  // Reset when content changes
+  // Track content changes
   useEffect(() => {
+    const key = identityOf(videoData);
+    const applied = appliedRef.current;
+
+    if (key && applied?.key === key) {
+      // Already applied for exactly this content: keep the controls up even
+      // while the loader refetches it.
+      setStatus((current) =>
+        current === applied.status ? current : applied.status,
+      );
+      return;
+    }
+
     if (contentLoading) {
       setStatus("loading");
-      hasAppliedRef.current = false;
-    } else if (videoData && !hasAppliedRef.current) {
+    } else if (videoData) {
       setStatus("ready");
     }
   }, [contentLoading, videoData]);
 
   const applyWatchHistory = useCallback(async () => {
-    if (!player || !videoData || hasAppliedRef.current) {
+    const key = identityOf(videoData);
+    if (!player || !videoData || !key || appliedRef.current?.key === key) {
       return;
     }
 
@@ -82,7 +125,7 @@ export function useWatchHistoryApplication({
         );
       }
 
-      hasAppliedRef.current = true;
+      appliedRef.current = { key, status: "success" };
       setStatus("success");
 
       console.log(
@@ -93,10 +136,17 @@ export function useWatchHistoryApplication({
         "[useWatchHistoryApplication] Error applying watch history:",
         error,
       );
-      hasAppliedRef.current = true; // Don't retry
+      appliedRef.current = { key, status: "failed" }; // Don't retry
       setStatus("failed");
     }
   }, [player, videoData]);
+
+  const markApplied = useCallback((data: MediaDetailsResponse) => {
+    const key = identityOf(data);
+    if (!key) return;
+    appliedRef.current = { key, status: "success" };
+    setStatus("success");
+  }, []);
 
   // Auto-apply when ready
   useEffect(() => {
@@ -112,6 +162,7 @@ export function useWatchHistoryApplication({
   return {
     status,
     applyWatchHistory,
+    markApplied,
     isControlsReady,
   };
 }

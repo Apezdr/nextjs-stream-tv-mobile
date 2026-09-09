@@ -312,7 +312,9 @@ the decisions made where the doc left them open, and the work items that now sit
    (20 s without ready, armed on every open) and a 20 s rebuffer on a pinned tier also descend.
 5. **Watch-history/presence identity is the canonical master URL**: heartbeat `videoId` is
    always `videoURL` exactly as delivered, with tier surgery reversed (`direct` param
-   stripped, `/file` mapped back to `master.m3u8`).
+   stripped, `/file` mapped back to `master.m3u8`). This keeps the stored videoId strings
+   stable; it is not load-bearing — the server hashes the pathname and folds every
+   `/stream/<key>/…` tail itself, so a tier-mutated id would not split history.
 6. **Quality preferences are device-local** (global default + implicit remember-last-choice
    per title + cellular data-saver on phones). No server preferences API is required for v1;
    the store shape can sync later if cross-device preferences become a goal.

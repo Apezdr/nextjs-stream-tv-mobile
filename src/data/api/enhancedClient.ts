@@ -22,6 +22,10 @@ export interface RequestOptions {
   headers?: HeadersInit;
   skipAuth?: boolean;
   signal?: AbortSignal; // For request cancellation
+  // Statuses the caller treats as a normal outcome: not retried by the
+  // transport and not counted against the endpoint's circuit breaker. The
+  // request still rejects with an ApiError carrying the status.
+  expectedStatuses?: number[];
 }
 
 export interface CacheOptions {
@@ -121,6 +125,7 @@ export class EnhancedApiClient {
       data,
       headers: options.headers as Record<string, string>,
       signal: options.signal,
+      expectedStatuses: options.expectedStatuses,
     };
 
     // Handle skipAuth option

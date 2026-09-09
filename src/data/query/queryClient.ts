@@ -187,6 +187,21 @@ export function invalidateQueries(pattern: string | RegExp) {
   });
 }
 
+// Keys come from the `queryKeys` factory: ["api", "content", <kind>, ...].
+// Matching on `queryKey[0]` alone (the old "infiniteContentList" /
+// "contentList" strings) never matched anything the factory produces, so
+// these helpers were silent no-ops for the whole life of the watch screen.
+const BROWSE_LIST_KINDS = new Set(["list", "infiniteList"]);
+const BACKGROUND_KINDS = new Set(["list", "infiniteList", "banner"]);
+
+function contentKind(queryKey: readonly unknown[]): string | null {
+  return queryKey[0] === "api" &&
+    queryKey[1] === "content" &&
+    typeof queryKey[2] === "string"
+    ? queryKey[2]
+    : null;
+}
+
 // TV-specific helpers
 export const tvQueryHelpers = {
   // Suspend background queries during watch mode
@@ -195,28 +210,13 @@ export const tvQueryHelpers = {
       console.log("[QueryClient] Suspending background queries for watch mode");
     }
 
-    // Cancel all infinite content queries
+    // Cancel in-flight browse-list and banner queries
     queryClient.cancelQueries({
       predicate: (query) => {
-        const key = query.queryKey[0];
-        return key === "infiniteContentList" || key === "contentList";
+        const kind = contentKind(query.queryKey);
+        return kind !== null && BACKGROUND_KINDS.has(kind);
       },
     });
-
-    // Pause all non-essential queries
-    queryClient
-      .getQueryCache()
-      .getAll()
-      .forEach((query) => {
-        const key = query.queryKey[0];
-        if (
-          key === "infiniteContentList" ||
-          key === "contentList" ||
-          key === "banner"
-        ) {
-          query.cancel();
-        }
-      });
   },
 
   // Resume background queries when leaving watch mode
@@ -232,15 +232,20 @@ export const tvQueryHelpers = {
     });
   },
 
-  // Clear old browse cache to free memory for video
+  // Clear old browse cache to free memory for video. Only INACTIVE list
+  // queries are dropped: the browse screen underneath the watch route still
+  // observes its rows, and removing an observed query makes React Query
+  // refetch it immediately — the opposite of freeing memory.
   clearBrowseCache: () => {
     if (QUERY_DEBUG_ENABLED) {
       console.log("[QueryClient] Clearing browse cache for watch mode");
     }
     queryClient.removeQueries({
       predicate: (query) => {
-        const key = query.queryKey[0];
-        return key === "infiniteContentList" || key === "contentList";
+        const kind = contentKind(query.queryKey);
+        return (
+          kind !== null && BROWSE_LIST_KINDS.has(kind) && !query.isActive()
+        );
       },
     });
   },

@@ -27,6 +27,7 @@ import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { ScreensaverResponse } from "@/src/data/types/content.types";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import { resolveShowWatchTarget } from "@/src/utils/nextUpEpisode";
 
 // Fixed timing constants that don't depend on dimensions
 const VISIBLE_DURATION = 15_000; // 15 seconds
@@ -1029,7 +1030,7 @@ export const Screensaver: React.FC = () => {
       return;
     }
 
-    const { _id, type } = displayedContent;
+    const { _id, type, seasonNumber, episodeNumber } = displayedContent;
     console.log(`[Screensaver] Using content: ID=${_id}, type=${type}`);
 
     switch (action) {
@@ -1041,14 +1042,40 @@ export const Screensaver: React.FC = () => {
           ? router.replace
           : router.push;
 
-        // For TV shows, route to first season first episode
         if (type === "tv") {
-          navigationMethod(
-            `/(tv)/(protected)/watch/${_id}?type=${type}&season=1&episode=1` as Href,
-            {
-              dangerouslySingular: true,
-            },
-          );
+          // Never guess S01E01: for a show in progress that opens the pilot
+          // in its credits, and the exit flush then makes S01E01 the show's
+          // newest row — reordering Continue Watching on every device. Use
+          // the episode the payload names, else the one the server's
+          // Continue Watching list hoists for this show, else let the
+          // viewer pick on media-info.
+          const openShow = (
+            target: { season: number; episode: number } | null,
+          ) => {
+            if (target) {
+              navigationMethod(
+                `/(tv)/(protected)/watch/${_id}?type=tv&season=${target.season}&episode=${target.episode}` as Href,
+                { dangerouslySingular: true },
+              );
+            } else {
+              console.log(
+                "[Screensaver] No episode in progress — opening media-info",
+              );
+              navigationMethod(
+                `/(tv)/(protected)/media-info/${_id}?type=tv` as Href,
+                { dangerouslySingular: true },
+              );
+            }
+          };
+
+          if (
+            typeof seasonNumber === "number" &&
+            typeof episodeNumber === "number"
+          ) {
+            openShow({ season: seasonNumber, episode: episodeNumber });
+          } else {
+            resolveShowWatchTarget(_id).then(openShow);
+          }
         } else {
           navigationMethod(
             `/(tv)/(protected)/watch/${_id}?type=${type}` as Href,

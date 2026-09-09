@@ -41,6 +41,7 @@ import { describeActiveQuality } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
+import { patchWatchHistoryPosition } from "@/src/utils/watchProgress";
 
 function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
@@ -175,9 +176,9 @@ export default function WatchPage() {
   const effectiveEpisodeNumber =
     currentEpisodeData?.episodeNumber || currentEpisodeNumber;
 
-  // Watch-history/presence identity must stay the canonical master URL no
-  // matter which tier is playing — a `?direct=1` or `/file` videoId would
-  // split resume history and restart the presence session mid-viewing.
+  // Watch-history/presence identity is the canonical master URL no matter
+  // which tier is playing, so stored videoId strings stay stable. (The
+  // server folds tier variants itself; this keeps the wire tidy.)
   const presenceVideoId = useMemo(
     () => (effectiveVideoURL ? canonicalVideoId(effectiveVideoURL) : null),
     [effectiveVideoURL],
@@ -231,6 +232,7 @@ export default function WatchPage() {
     isCellular: false, // TVs are never on metered cellular
     playerRef,
     notifySourceReplacedRef,
+    playbackSource: effectiveVideoData?.playbackSource ?? null,
   });
 
   const playbackSourceURL = quality.activeSourceURL;
@@ -326,12 +328,15 @@ export default function WatchPage() {
   }, []);
 
   // Step 2: Use watch history application hook to manage the stepped process
-  const { status: watchHistoryStatus, isControlsReady } =
-    useWatchHistoryApplication({
-      player,
-      videoData: effectiveVideoData,
-      contentLoading: loading,
-    });
+  const {
+    status: watchHistoryStatus,
+    isControlsReady,
+    markApplied: markWatchHistoryApplied,
+  } = useWatchHistoryApplication({
+    player,
+    videoData: effectiveVideoData,
+    contentLoading: loading,
+  });
 
   // Step 3: Setup player once watch history application is complete
   useEffect(() => {
@@ -428,13 +433,18 @@ export default function WatchPage() {
   });
 
   // Enable playback + presence tracking, keyed by the canonical identity URL
-  const { flushCurrentProgress, endSession, getSessionId } =
-    usePlaybackPresenceTracking(
-      player,
-      effectiveVideoData,
-      presenceVideoId,
-      params,
-    );
+  const {
+    flushCurrentProgress,
+    endSession,
+    suspendTracking,
+    resumeTracking,
+    getSessionId,
+  } = usePlaybackPresenceTracking(
+    player,
+    effectiveVideoData,
+    presenceVideoId,
+    params,
+  );
 
   // §8 decode-error descent: retry once, then drop a tier at position.
   // Declared BEFORE useVideoErrorHandling so its statusChange listener
@@ -586,13 +596,22 @@ export default function WatchPage() {
         // update — it's paired with endSession() below for the same session,
         // and the two must never share a sessionId on the wire (see the
         // resurrection footgun note on PlaybackUpdateRequest).
+        //
+        // Tracking is suspended FIRST: the tracker's listeners stay bound to
+        // the outgoing identity until the new episode data commits, and a
+        // timeUpdate or 30s tick in between would report the new episode's
+        // position under the old videoId. The tracker re-attaches itself
+        // when the identity changes in Phase 4.
         if (player && effectiveVideoData && effectiveVideoURL) {
           const currentTime = player.currentTime;
           const outgoingSessionId = getSessionId();
+          const outgoingEpisodeNumber =
+            effectiveVideoData.episodeNumber ?? effectiveEpisodeNumber;
           console.log(
             "[WatchPage] Ending presence session for outgoing episode",
             outgoingSessionId,
           );
+          suspendTracking();
           endSession();
 
           if (currentTime > 0) {
@@ -602,17 +621,35 @@ export default function WatchPage() {
             await contentService.updatePlaybackProgress({
               videoId: canonicalVideoId(effectiveVideoURL),
               playbackTime: currentTime,
+              kind: "final",
               isPaused: !player.playing,
               mediaMetadata: {
                 mediaType: effectiveVideoData.type || params.type,
                 mediaId: effectiveVideoData.id || params.id,
                 showId: params.id,
                 seasonNumber:
-                  effectiveVideoData.seasonNumber || currentSeasonNumber,
-                episodeNumber:
-                  effectiveVideoData.episodeNumber || effectiveEpisodeNumber,
+                  effectiveVideoData.seasonNumber ?? currentSeasonNumber,
+                episodeNumber: outgoingEpisodeNumber,
               },
             });
+
+            // The carousel would otherwise show the outgoing episode's bar
+            // as it was when the list loaded (up to 5 minutes stale).
+            if (outgoingEpisodeNumber !== undefined) {
+              setEpisodes((prevEpisodes) =>
+                prevEpisodes.map((ep) =>
+                  ep.episodeNumber === outgoingEpisodeNumber
+                    ? {
+                        ...ep,
+                        watchHistory: patchWatchHistoryPosition(
+                          ep.watchHistory,
+                          currentTime,
+                        ),
+                      }
+                    : ep,
+                ),
+              );
+            }
           }
         }
 
@@ -653,6 +690,9 @@ export default function WatchPage() {
             // Survives the async source commit (see resumeGuard).
             applyResumePosition(player, resumeTime, "WatchPage");
           }
+          // The seek above IS the resume application for this episode; the
+          // hook must not seek again when the loader refetches it in 150 ms.
+          markWatchHistoryApplied(newEpisodeData);
 
           player.play();
         }
@@ -687,6 +727,8 @@ export default function WatchPage() {
         setEpisodeSwitchError(
           error instanceof Error ? error.message : "Failed to switch episode",
         );
+        // Still on the outgoing episode: re-attach the tracker for it.
+        resumeTracking();
 
         // Fallback: try updating params for critical failures
         if (error instanceof Error && error.message.includes("No video URL")) {
@@ -715,6 +757,9 @@ export default function WatchPage() {
       router,
       endSession,
       getSessionId,
+      suspendTracking,
+      resumeTracking,
+      markWatchHistoryApplied,
       quality.applyEpisodeSource,
     ],
   );
@@ -805,6 +850,10 @@ export default function WatchPage() {
     } catch (error) {
       console.error("[WatchPage] Error flushing progress on exit:", error);
     }
+    // Detach the tracker before navigating: the screen blurs while still
+    // mounted and the player hook's blur cleanup pauses the player — that
+    // pause event must not turn into a write for the session just ended.
+    suspendTracking();
 
     setVideoPlayingState(false);
     resetActivityTimer();
@@ -813,6 +862,7 @@ export default function WatchPage() {
   }, [
     flushCurrentProgress,
     endSession,
+    suspendTracking,
     setVideoPlayingState,
     resetActivityTimer,
     setMode,
@@ -830,6 +880,7 @@ export default function WatchPage() {
         error,
       );
     }
+    suspendTracking(); // see handleExit
 
     setVideoPlayingState(false);
     resetActivityTimer();
@@ -847,6 +898,7 @@ export default function WatchPage() {
   }, [
     flushCurrentProgress,
     endSession,
+    suspendTracking,
     resetActivityTimer,
     router,
     params.id,

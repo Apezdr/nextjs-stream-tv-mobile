@@ -119,8 +119,10 @@ export function fileURL(url: string): string | null {
 /**
  * The watch-history / presence identity for whatever is playing: the master
  * URL as the server delivered it, with all tier surgery reversed. Heartbeats
- * must always send this — a `?direct=1` or `/file` videoId would split resume
- * history across tiers and restart presence sessions mid-viewing.
+ * send this so the stored videoId strings stay stable across tiers. The
+ * server hashes the pathname and folds every `/stream/<key>/…` tail itself,
+ * so a tier-mutated id would NOT split history — this is belt-and-braces,
+ * not load-bearing.
  */
 export function canonicalVideoId(url: string): string {
   const parts = splitURL(url);

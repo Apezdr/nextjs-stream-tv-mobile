@@ -22,6 +22,7 @@ import OptimizedImage from "../common/OptimizedImage";
 import EpisodeProgressBar from "@/src/components/TV/MediaInfo/EpisodeProgressBar";
 import { Colors } from "@/src/constants/Colors";
 import { TVDeviceEpisode } from "@/src/data/types/content.types";
+import { isWatchCompleted } from "@/src/utils/watchProgress";
 
 // Container height when only the "View Available Episodes" label is visible.
 const COLLAPSED_HEIGHT = 30;
@@ -516,7 +517,12 @@ const EpisodeCarousel = React.memo(
                           <Text style={styles.hdrText}>HDR</Text>
                         </View>
                       )}
-                      {episode.watchHistory?.isWatched && (
+                      {/* `isWatched` is true for ANY row, so the badge
+                          follows the completion rule the bar below uses. */}
+                      {isWatchCompleted(
+                        episode.watchHistory,
+                        episode.duration,
+                      ) && (
                         <View style={styles.watchedBadge}>
                           <Text style={styles.watchedText}>✓</Text>
                         </View>

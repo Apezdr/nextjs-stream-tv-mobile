@@ -50,7 +50,15 @@ function logHorizontalListRequest(
  * Hook for infinite content loading with pagination and predictive prefetching
  */
 export function useInfiniteContentList(params: HorizontalListParams = {}) {
-  const { type = "all", sort = "id", sortOrder = "desc", limit = 30 } = params;
+  const {
+    type = "all",
+    sort = "id",
+    sortOrder = "desc",
+    limit = 30,
+    // Continue Watching rows draw a resume bar from it; the flag used to be
+    // accepted here and silently dropped from the request.
+    includeWatchHistory = type === "recentlyWatched",
+  } = params;
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
@@ -60,6 +68,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       sortOrder,
       limit,
       isTVdevice: true,
+      includeWatchHistory,
     }),
     queryFn: async ({ pageParam = 0, signal }) => {
       const requestParams = {
@@ -69,6 +78,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
         page: pageParam,
         limit,
         isTVdevice: true,
+        includeWatchHistory,
       };
       const queryParams = buildQueryParams(requestParams);
 
@@ -114,7 +124,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     // Warm one page beyond what's currently loaded
     infiniteContentPrefetch.prefetchPages(
       queryClient,
-      { type, sort, sortOrder, limit },
+      { type, sort, sortOrder, limit, includeWatchHistory },
       currentPageCount + 1,
     );
   }, [
@@ -126,6 +136,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     sort,
     sortOrder,
     limit,
+    includeWatchHistory,
   ]);
 
   // Ultra-aggressive multi-page prefetching
@@ -138,7 +149,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       // Warm `distance` pages ahead in a single sequential prefetch
       infiniteContentPrefetch.prefetchPages(
         queryClient,
-        { type, sort, sortOrder, limit },
+        { type, sort, sortOrder, limit, includeWatchHistory },
         currentPageCount + distance,
       );
     },
@@ -151,6 +162,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       sort,
       sortOrder,
       limit,
+      includeWatchHistory,
     ],
   );
 
@@ -166,7 +178,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       try {
         await infiniteContentPrefetch.prefetchPages(
           queryClient,
-          { type, sort, sortOrder, limit },
+          { type, sort, sortOrder, limit, includeWatchHistory },
           currentPageCount + actualMaxPages,
         );
       } catch (error) {
@@ -181,6 +193,7 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
       sort,
       sortOrder,
       limit,
+      includeWatchHistory,
     ],
   );
 
@@ -398,6 +411,7 @@ export const infiniteContentPrefetch = {
       sortOrder = "desc",
       limit = 30,
       isTVdevice = true,
+      includeWatchHistory = type === "recentlyWatched",
     } = params;
 
     return queryClient.prefetchInfiniteQuery({
@@ -407,6 +421,7 @@ export const infiniteContentPrefetch = {
         sortOrder,
         limit,
         isTVdevice,
+        includeWatchHistory,
       }),
       queryFn: async ({ pageParam = 0, signal }) => {
         const requestParams = {
@@ -416,6 +431,7 @@ export const infiniteContentPrefetch = {
           page: pageParam,
           limit,
           isTVdevice,
+          includeWatchHistory,
         };
         const queryParams = buildQueryParams(requestParams);
 

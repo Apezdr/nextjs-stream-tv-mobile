@@ -33,6 +33,7 @@ export const queryKeys = {
     sortOrder?: string;
     limit?: number;
     isTVdevice?: boolean; // Optional parameter to specify if the request is from a TV device
+    includeWatchHistory?: boolean;
   }) => [...queryKeys.content(), "infiniteList", params] as const,
 
   // Episode picker queries

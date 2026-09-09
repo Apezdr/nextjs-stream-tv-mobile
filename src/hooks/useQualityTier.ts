@@ -55,6 +55,8 @@ interface Options {
   notifySourceReplacedRef: React.RefObject<
     ((url: string | null) => void) | null
   >;
+  /** The media payload's `playbackSource` (raw-served titles have no verdict). */
+  playbackSource?: string | null;
 }
 
 export interface QualityTierController {
@@ -111,6 +113,7 @@ export function useQualityTier({
   isCellular = false,
   playerRef,
   notifySourceReplacedRef,
+  playbackSource = null,
 }: Options): QualityTierController {
   const platformClass = useMemo(() => getPlatformClass(), []);
   // What the device's decoders advertise — the tier policy's device-side veto
@@ -390,8 +393,14 @@ export function useQualityTier({
   // watch-page render (remote presses, activity ticks), re-rendering the
   // whole controls tree — carousel, seek bar, focus guides — each time.
   const tiers = useMemo(
-    () => resolveAvailableTiers(directPlayInfo, platformClass, caps),
-    [directPlayInfo, platformClass, caps],
+    () =>
+      resolveAvailableTiers(
+        directPlayInfo,
+        platformClass,
+        caps,
+        playbackSource,
+      ),
+    [directPlayInfo, platformClass, caps, playbackSource],
   );
 
   return {

@@ -3,10 +3,15 @@ import { View, Text, StyleSheet } from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
 import { WatchHistory } from "@/src/data/types/content.types";
+import {
+  durationMsToSeconds,
+  isWatchCompleted,
+  watchProgressPercent,
+} from "@/src/utils/watchProgress";
 
 interface WatchProgressBarProps {
   watchHistory?: WatchHistory;
-  duration?: number; // Duration in seconds
+  duration?: number; // Duration in MILLISECONDS (the server's unit)
   style?: any;
 }
 
@@ -28,31 +33,23 @@ export default function WatchProgressBar({
   style,
 }: WatchProgressBarProps) {
   // Convert duration from milliseconds to seconds (API returns duration in milliseconds)
-  const adjustedDuration = duration ? duration / 1000 : 0;
+  const adjustedDuration = durationMsToSeconds(duration);
 
   // Nothing to show if we don't have a valid duration
   if (!adjustedDuration) {
     return null;
   }
 
-  // Determine if we have useful watch history
-  const hasWatchHistory =
-    !!watchHistory &&
-    !!watchHistory.playbackTime &&
-    watchHistory.playbackTime > 0;
-
   const playbackTime = watchHistory?.playbackTime ?? 0;
-
-  const progressPercentage = hasWatchHistory
-    ? Math.min((playbackTime / adjustedDuration) * 100, 100)
-    : 0;
+  const progressPercentage = watchProgressPercent(watchHistory, duration) ?? 0;
 
   // Only render the progress bar component when user has watched 10+ seconds
-  if (!hasWatchHistory || playbackTime < 10) {
+  if (playbackTime < 10) {
     return null;
   }
 
-  const isCompleted = progressPercentage >= 95; // Consider 95%+ as completed
+  // Server verdict when present, else the shared local threshold.
+  const isCompleted = isWatchCompleted(watchHistory, duration);
 
   return (
     <View style={[styles.container, style]}>

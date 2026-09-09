@@ -24,6 +24,7 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
 import { navigationHelper } from "@/src/utils/navigationHelper";
+import { watchProgressPercent } from "@/src/utils/watchProgress";
 
 /**
  * Format duration from seconds to readable time
@@ -256,10 +257,9 @@ export default function EpisodeInfoPage() {
   }
 
   const showData = episode;
-  const watchProgress = (episode?.watchHistory?.playbackTime || 0) * 1000;
-  const totalDuration = episode?.duration || 0;
+  // Shared rule with every other progress surface (server figure first).
   const progressPercentage =
-    totalDuration > 0 ? watchProgress / totalDuration : 0;
+    (watchProgressPercent(episode?.watchHistory, episode?.duration) ?? 0) / 100;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>

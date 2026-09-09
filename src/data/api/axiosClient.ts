@@ -85,25 +85,57 @@ function debouncedServerStatusCheck(): void {
 
 // Extend Axios types to include our custom metadata and retry properties
 declare module "axios" {
+  export interface AxiosRequestConfig {
+    // Statuses the CALLER handles as a normal outcome (e.g. direct-info's 504
+    // "still deriving, Retry-After: 30"). They are neither retried here nor
+    // counted against the endpoint's circuit breaker — a caller polling on
+    // its own schedule must not be locked out for doing so.
+    expectedStatuses?: number[];
+  }
   export interface InternalAxiosRequestConfig {
     metadata?: {
       startTime: number;
     };
     _retry?: boolean;
     _retryCount?: number;
+    expectedStatuses?: number[];
   }
+}
+
+/**
+ * The server's `Retry-After` header in milliseconds (delta-seconds or an
+ * HTTP-date), or undefined when absent or unparseable.
+ */
+export function parseRetryAfterMs(
+  value: string | number | undefined | null,
+  now: number = Date.now(),
+): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) return parseInt(text, 10) * 1000;
+  const at = Date.parse(text);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, at - now);
 }
 
 // Custom error class for API errors
 export class ApiError extends Error {
   status: number;
   data: unknown;
+  /** From the response's `Retry-After` header, when the server sent one. */
+  retryAfterMs?: number;
 
-  constructor(status: number, data: unknown, message?: string) {
+  constructor(
+    status: number,
+    data: unknown,
+    message?: string,
+    retryAfterMs?: number,
+  ) {
     super(message || `API Error: ${status}`);
     this.name = "ApiError";
     this.status = status;
     this.data = data;
+    if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -280,9 +312,16 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
 
       const originalRequest = error.config;
       const endpoint = originalRequest?.url || "";
+      const isExpectedStatus =
+        error.response?.status !== undefined &&
+        !!originalRequest?.expectedStatuses?.includes(error.response.status);
 
       // Record failure for circuit breaker
-      if (error.response?.status && error.response.status >= 500) {
+      if (
+        error.response?.status &&
+        error.response.status >= 500 &&
+        !isExpectedStatus
+      ) {
         circuitBreaker.recordFailure(endpoint);
 
         // Check server status for 5xx errors (debounced)
@@ -388,6 +427,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
 
       // Implement retry logic
       if (
+        !isExpectedStatus &&
         RETRY_CONFIG.retryCondition(error) &&
         originalRequest &&
         !originalRequest._retry
@@ -430,6 +470,7 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
           error.response.status,
           error.response.data,
           errorMessage,
+          parseRetryAfterMs(error.response.headers?.["retry-after"]),
         );
       }
 
