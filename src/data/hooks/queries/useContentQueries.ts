@@ -18,7 +18,6 @@ import type {
   SubtitlesParams,
   ThumbnailsParams,
   ChapterParams,
-  BannerResponse,
   ScreensaverResponse,
   SyncValidationUpdateRequest,
   GenresListResponse,
@@ -159,17 +158,6 @@ export function useContentCount(type?: "recentlyWatched") {
         `${API_ENDPOINTS.CONTENT.COUNT}${queryParams}`,
       );
     },
-  });
-}
-
-/**
- * Hook to fetch banner media
- */
-export function useBanner() {
-  return useQuery({
-    queryKey: queryKeys.banner(),
-    queryFn: () =>
-      enhancedApiClient.get<BannerResponse>(API_ENDPOINTS.CONTENT.BANNER),
   });
 }
 

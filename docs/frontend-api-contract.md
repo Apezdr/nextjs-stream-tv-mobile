@@ -97,6 +97,38 @@ Better Auth client uses:
 - `credentials: "omit"` (Bearer tokens, not cookies)
 - Explicit `Origin: <server-origin>` header (RN fetch does not send Origin; better-auth CSRF requires it)
 
+### Caching and revalidation (ETags)
+
+Since the 27 September 2026 server release, these GETs return a **weak** ETag
+(`ETag: W/"<md5 of body>"`) with `Cache-Control: no-cache`:
+
+| Endpoint | Notes |
+| --- | --- |
+| `/banner` | ETag changes only when the banner list changes |
+| `/horizontal-list` | With `includeWatchHistory=true` the ETag changes whenever progress changes |
+| `/notifications`, `HEAD /notifications?count=true` | Not called by the app yet |
+| `/sync/pullPlayback` | Not called by the app yet |
+| `/watchlist?action=status` | Rate-limited: `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After` on 429 |
+| `/system-status` | 304 carries `private, must-revalidate, max-age=30` |
+
+Everything else is `no-store, private` (including `/media` and
+`/media/direct-info`, whose playback URLs rotate). `/screensaver` is never cached.
+
+The app does **not** handle ETags itself. The OS HTTP cache does (NSURLCache on
+iOS/tvOS, OkHttp's 10 MB disk cache on Android): it stores `no-cache` responses
+and sends `If-None-Match` on the next request, and the server answers 304 when
+the body is unchanged. To keep that working:
+
+- Never add `Cache-Control` or `Pragma` request headers, `cache: "no-store"`,
+  or cache-busting parameters to the ETag endpoints above. The only request-side
+  `Cache-Control: no-cache` in the app goes to `/media` and
+  `/media/direct-info`, which are `no-store` routes anyway.
+- Build query strings the same way every time (`buildQueryParams`, fixed key
+  order). Each distinct URL has its own ETag.
+- Weak vs strong makes no difference to the app: the OS sends the value back
+  verbatim, and the server also tolerates the `-gzip`/`-br`/`-zstd` suffixes
+  proxies append.
+
 ---
 
 ## 2. Shared types
@@ -730,29 +762,49 @@ When `isTVdevice` is omitted/false:
 ### `GET /api/authenticated/banner?isTVdevice=true`
 
 Client **always** sends `isTVdevice=true` so the server exposes `clipVideoURL`.
+Returns up to 8 movies, newest `metadata.release_date` first. Every user gets
+the same list; the server caches it and drops the cache when a sync or an
+admin edit changes movies (other changes show within 30 s).
 
 #### Response (`BannerItem[]`)
 
-```ts
-Array<{
-  title: string;
-  type: string;
-  backdrop: string;
-  backdropBlurhash: string;
-  logo: string;
-  id: string;
-  clipVideoURL?: string;         // short promo clip for TV banner
-  metadata: {
-    trailer_url: string;
-    overview: string;
-    genres: Array<{ id: number; name: string }>;
-    vote_average: number;
-    release_date: string;
-  };
-}>
-```
+Since 27 September 2026 the server sends a **fixed field list**
+(`BANNER_FIELDS` on the server) instead of the whole movie record. Nothing
+outside this table is sent; a new field has to be added on the server first.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id` | string | Database id |
+| `title` | string | Display title. **Show this one.** |
+| `originalTitle` | string | Library key (folder name). For lookups and links; don't display |
+| `type` | string | `"movie"` |
+| `backdrop` | string (URL) | Falls back to TMDB's original-size backdrop |
+| `backdropBlurhash` | string | Placeholder while the backdrop loads |
+| `backdropFocal`, `backdropFocalSuggested` | string, optional | `left`, `left-center`, `center`, `right-center`, `right`. `backdropFocal` is an admin override and wins |
+| `logo` | string (URL), optional | Title logo |
+| `videoURL`, `duration`, `videoSource`, `videoInfoSource` | string, number (ms), string, string | Sent so the server can build `clipVideoURL`. **Don't play from these**; get playback URLs from `/media` |
+| `metadata.id` | number | TMDB id |
+| `metadata.overview` | string | Synopsis |
+| `metadata.genres` | `Array<{ id, name }>` | |
+| `metadata.vote_average` | number | TMDB rating, 0–10 |
+| `metadata.release_date` | string | `YYYY-MM-DD`, the sort key |
+| `metadata.trailer_url` | string, optional | |
+| `metadata.logo_path`, `metadata.backdrop_path` | string, optional | TMDB image paths (relative) |
+| `clipVideoURL` | string, optional | Only with `isTVdevice=true`, and only for movies with a video and a duration. Up to 50 s clip for the background preview |
+
+The app's `BannerItem` type declares the subset it reads: `id`, `title`,
+`type`, `backdrop`, `backdropBlurhash`, `logo`, `clipVideoURL`, and
+`metadata.overview` / `genres` / `vote_average` / `release_date` / `trailer_url`.
+
+#### Empty library and errors
+
+- No movies: **200** with an object, not an array:
+  `{ "error": "No media found for banner", "status": 404 }`.
+  `contentService.getBanner` normalises any non-array body to `[]`.
+- Server failure: **500** with `{ "error": "Failed to fetch banner media", "details": "…" }`.
 
 **UI usage:** rotating hero; optional video clip when `clipVideoURL` present; logo + backdrop + overview/genres/rating.
+Fetched on mount and on app foreground only (no interval polling).
 
 ---
 

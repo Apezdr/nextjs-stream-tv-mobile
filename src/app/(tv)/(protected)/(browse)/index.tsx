@@ -234,9 +234,11 @@ export default function TVHomePage() {
     ]),
   );
 
-  // Periodic refresh every 10 seconds when screen is focused
+  // Periodic refresh every 60 seconds when screen is focused. The server
+  // suggests 60 s for list rows: a 304 saves bandwidth, not server work (it
+  // still builds the full response to hash it).
   useEffect(() => {
-    const PERIODIC_REFRESH_INTERVAL = 10000; // 10 seconds
+    const PERIODIC_REFRESH_INTERVAL = 60000; // 60 seconds
     let intervalId: ReturnType<typeof setTimeout>;
 
     const startPeriodicRefresh = () => {

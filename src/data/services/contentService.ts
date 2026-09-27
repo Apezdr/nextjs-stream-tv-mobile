@@ -379,10 +379,14 @@ export const contentService = {
       isTVdevice: true,
     });
 
-    // Use regular get method - React Query will handle caching
-    return enhancedApiClient.get<BannerResponse>(
+    const result = await enhancedApiClient.get<BannerResponse | unknown>(
       `${API_ENDPOINTS.CONTENT.BANNER}${queryParams}`,
     );
+
+    // An empty library answers 200 with an object, not an array:
+    // `{ error: "No media found for banner", status: 404 }`. The banners index
+    // into the response, so normalise anything that isn't an array to empty.
+    return Array.isArray(result) ? (result as BannerResponse) : [];
   },
 
   /**

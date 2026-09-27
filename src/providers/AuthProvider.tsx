@@ -95,6 +95,8 @@ interface AuthContextType {
 
 const STORAGE_KEY = "auth-info";
 const STATUS_CHECK_INTERVAL = 30000; // 30 seconds
+// /system-status while the server is down. The server asks for 30 s or slower.
+const SERVER_RECOVERY_INTERVAL = 30000;
 /** Server requires minimum 5s polling interval per deviceAuthorization config */
 const AUTH_POLL_INTERVAL = 5000;
 const AUTH_TIMEOUT = 5 * 60 * 1000; // 5 minutes
@@ -407,7 +409,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     serverRecoveryInterval.current = setInterval(() => {
       if (DEBUG_AUTH) console.log("[Auth] Checking if server has recovered");
       checkServerStatus();
-    }, 10000);
+    }, SERVER_RECOVERY_INTERVAL);
   };
 
   const stopServerRecoveryChecking = () => {
