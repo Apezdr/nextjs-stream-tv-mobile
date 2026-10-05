@@ -609,6 +609,20 @@ export default function TVBanner({ style }: TVBannerProps) {
       dbg(
         `Video status changed to: ${status}, currentVideoURL: ${currentVideoURL}, currentPhase: ${currentPhase}`,
       );
+      // A clip that errors will never become ready; rotate now instead of
+      // waiting out the watchdog. Only while the machine is waiting for this
+      // clip, read from the REFS (see the stale-closure note at currentPhaseRef).
+      // An error from the previous clip arrives with the URL still null (it is
+      // cleared on rotation and set 3 s into the image phase), so it is ignored.
+      if (
+        status === "error" &&
+        currentVideoURLRef.current &&
+        currentPhaseRef.current === "image"
+      ) {
+        dbg("Clip failed to load, rotating without waiting for the watchdog");
+        setCurrentPhase("nextSlide");
+        return;
+      }
       if (status === "readyToPlay" && currentVideoURL) {
         dbg(`Video ready to play, setting isVideoReady to true`);
         setIsVideoReady(true);

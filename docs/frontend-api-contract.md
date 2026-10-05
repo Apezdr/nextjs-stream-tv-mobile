@@ -790,7 +790,7 @@ outside this table is sent; a new field has to be added on the server first.
 | `metadata.release_date` | string | `YYYY-MM-DD`, the sort key |
 | `metadata.trailer_url` | string, optional | |
 | `metadata.logo_path`, `metadata.backdrop_path` | string, optional | TMDB image paths (relative) |
-| `clipVideoURL` | string, optional | Only with `isTVdevice=true`, and only for movies with a video and a duration. Up to 50 s clip for the background preview |
+| `clipVideoURL` | string, optional | Only with `isTVdevice=true`, and only for movies with a video and a duration. Up to 50 s clip for the background preview. Always `video/mp4` with a `Content-Length`. May run longer than 50 s, because the clip starts on the keyframe before the requested start. The first request for a clip the server has not made yet takes a few seconds (copy) or 20 s or more (encode); after that it is served from the server's cache |
 
 The app's `BannerItem` type declares the subset it reads: `id`, `title`,
 `type`, `backdrop`, `backdropBlurhash`, `logo`, `clipVideoURL`, and
