@@ -628,10 +628,11 @@ export default function TVBanner({ style }: TVBannerProps) {
       }
       // Only treat `idle` as end-of-clip when a clip was actually on screen.
       // useOptimizedVideoPlayer's cleanup() strips the source with
-      // replaceAsync(null), which makes ExoPlayer clearMediaItems + prepare
-      // into STATE_IDLE — the unguarded branch turned that teardown into a
-      // phase change to fadeToImage behind the screensaver, where it does not
-      // belong. A genuine end-of-clip arrives as playToEnd, not idle.
+      // replaceAsync(null), which the expo-video patch turns into stop() +
+      // clearMediaItems(), i.e. STATE_IDLE — the unguarded branch turned that
+      // teardown into a phase change to fadeToImage behind the screensaver,
+      // where it does not belong. A genuine end-of-clip arrives as playToEnd,
+      // not idle.
       // Reads the REFS, not the closure. See currentPhaseRef above: this event
       // is delivered from a subscription created before the teardown, so the
       // closure still describes the clip that was playing.

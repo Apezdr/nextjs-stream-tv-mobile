@@ -430,7 +430,7 @@ index 0000000..2642136
 +  }
 +}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-index 8bae522..5954d8c 100644
+index 8bae522..b2fe5f1 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 @@ -60,7 +60,7 @@ import kotlin.time.DurationUnit
@@ -506,7 +506,21 @@ index 8bae522..5954d8c 100644
        super.onVideoInputFormatChanged(eventTime, format, decoderReuseEvaluation)
      }
    }
-@@ -578,21 +607,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
+@@ -424,8 +453,12 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+       uncommittedSource = null
+       isLoadingNewSource = true
+     } ?: run {
++      // stop() resets the renderers, which is what releases their decoders.
++      // clearMediaItems() alone only disables them, and a disabled renderer
++      // keeps its codec: the TV banner's 4K decoder stayed allocated for the
++      // whole film after the banner stripped its source.
++      player.stop()
+       player.clearMediaItems()
+-      player.prepare()
+       isLoadingNewSource = false
+     }
+   }
+@@ -578,21 +611,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
      for (i in 0 until group.length) {
        val format = group.getTrackFormat(i)
        val isSupported = group.isTrackSupported(i)
