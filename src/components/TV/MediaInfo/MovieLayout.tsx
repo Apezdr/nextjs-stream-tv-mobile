@@ -63,9 +63,11 @@ function formatHDR(hdr?: string | boolean): string | null {
   if (!hdr) return null;
 
   if (typeof hdr === "string") {
+    // The server lists every format a file carries, best first:
+    // "Dolby Vision, HDR10" is a Dolby Vision file with an HDR10 base layer.
+    if (hdr.toLowerCase().includes("dolby vision")) return "Dolby Vision";
     if (hdr.toLowerCase().includes("hdr10+")) return "HDR10+";
     if (hdr.toLowerCase().includes("hdr10")) return "HDR10";
-    if (hdr.toLowerCase().includes("dolby vision")) return "Dolby Vision";
     if (hdr.toLowerCase().includes("hdr")) return "HDR";
 
     if (hdr.trim().length > 0 && !hdr.toLowerCase().includes("sdr")) {
