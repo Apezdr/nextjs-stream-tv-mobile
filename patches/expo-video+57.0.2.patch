@@ -292,8 +292,145 @@ index 0000000..cd61c2e
 +  fun resolve(format: Format, manifest: HlsManifest?, group: Tracks.Group, index: Int): String =
 +    playlistId(format, manifest) ?: "${group.mediaTrackGroup.id}:$index"
 +}
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/SharedBandwidthMeter.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/SharedBandwidthMeter.kt
+new file mode 100644
+index 0000000..2642136
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/SharedBandwidthMeter.kt
+@@ -0,0 +1,131 @@
++package expo.modules.video.player
++
++import android.app.UiModeManager
++import android.content.Context
++import android.content.SharedPreferences
++import android.content.res.Configuration
++import android.os.Handler
++import android.os.Looper
++import android.util.Log
++import androidx.media3.common.C
++import androidx.media3.common.util.NetworkTypeObserver
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.exoplayer.upstream.BandwidthMeter
++import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
++import kotlin.math.abs
++
++/**
++ * One bandwidth meter for the whole process, like media3's own singleton
++ * (what `ExoPlayer.Builder` uses when no meter is set), but with a LAN-sized
++ * starting estimate on Wi-Fi and Ethernet and, on TV builds, the last measured
++ * estimate carried across process restarts.
++ *
++ * Why: before it has measured anything, media3 1.11 assumes 2.4 Mbps on US
++ * Wi-Fi/Ethernet and the ABR spends 70% of that, 1.68 Mbps. The transcoder's
++ * cheapest rung above 144p declares 1.79 Mbps, so every cold start landed on
++ * 256x144 and its ~72 KB segments never measured their way out. 10 Mbps
++ * (7 Mbps budget) starts at 720p, and the first 720p segment is big enough
++ * to give the meter a real number. A persisted estimate starts where the last
++ * session left off, which matters on TV boxes that kill the app on Home, so
++ * every launch is a cold process. Cellular keeps media3's country defaults.
++ *
++ * A stale persisted value on a slower link costs one slow first segment; the
++ * ABR switches down on the next selection (the down-switch gate is 25 s of
++ * buffer and the app holds 15 s at most).
++ *
++ * One log line per bandwidth sample, tag [TAG], so a logcat capture shows what
++ * each segment measured and what the ABR was then allowed to spend.
++ */
++@UnstableApi
++object SharedBandwidthMeter {
++  private const val TAG = "ExpoVideoBandwidth"
++  private const val PREFS_NAME = "expo_video_bandwidth"
++  private const val LAN_START_BPS = 10_000_000L
++
++  @Volatile private var instance: DefaultBandwidthMeter? = null
++
++  fun get(context: Context): DefaultBandwidthMeter =
++    instance ?: synchronized(this) {
++      instance ?: build(context.applicationContext).also { instance = it }
++    }
++
++  private fun build(context: Context): DefaultBandwidthMeter {
++    val persist = isTelevision(context)
++    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
++    val meter = DefaultBandwidthMeter.Builder(context)
++      .setInitialBitrateEstimate(C.NETWORK_TYPE_WIFI, LAN_START_BPS)
++      .setInitialBitrateEstimate(C.NETWORK_TYPE_ETHERNET, LAN_START_BPS)
++      .apply {
++        if (persist) {
++          // Consulted before the values above; C.TIME_UNSET falls through to them.
++          setInitialBitrateSupplier { networkType -> persisted(prefs, networkType) }
++        }
++      }
++      .build()
++
++    val networkTypes = NetworkTypeObserver.getInstance(context)
++    meter.addEventListener(
++      Handler(Looper.getMainLooper()),
++      object : BandwidthMeter.EventListener {
++        override fun onBandwidthSample(elapsedMs: Int, bytesTransferred: Long, bitrateEstimate: Long) {
++          val networkType = networkTypes.networkType
++          Log.i(
++            TAG,
++            "sample network=${networkName(networkType)} elapsedMs=$elapsedMs bytes=$bytesTransferred estimateBps=$bitrateEstimate"
++          )
++          // A reset on network change also reports here, with no bytes; only
++          // remember estimates that came out of a real transfer.
++          if (persist && elapsedMs > 0 && bytesTransferred > 0) {
++            store(prefs, networkType, bitrateEstimate)
++          }
++        }
++      }
++    )
++    Log.i(
++      TAG,
++      "meter created tv=$persist network=${networkName(networkTypes.networkType)} initialEstimateBps=${meter.bitrateEstimate}"
++    )
++    return meter
++  }
++
++  private fun isTelevision(context: Context): Boolean {
++    val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
++    return uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
++  }
++
++  /** Only Wi-Fi and Ethernet are remembered; cellular varies too much between sessions. */
++  private fun prefsKey(networkType: Int): String? = when (networkType) {
++    C.NETWORK_TYPE_WIFI -> "wifi"
++    C.NETWORK_TYPE_ETHERNET -> "ethernet"
++    else -> null
++  }
++
++  private fun persisted(prefs: SharedPreferences, networkType: Int): Long {
++    val key = prefsKey(networkType) ?: return C.TIME_UNSET
++    val stored = prefs.getLong(key, C.TIME_UNSET)
++    Log.i(TAG, "initial estimate for network=${networkName(networkType)} persistedBps=$stored")
++    return if (stored > 0) stored else C.TIME_UNSET
++  }
++
++  private fun store(prefs: SharedPreferences, networkType: Int, estimateBps: Long) {
++    val key = prefsKey(networkType) ?: return
++    if (estimateBps <= 0) return
++    val stored = prefs.getLong(key, C.TIME_UNSET)
++    // One sample lands per segment; skip writes for changes under 10%.
++    if (stored > 0 && abs(estimateBps - stored) * 10 < stored) return
++    prefs.edit().putLong(key, estimateBps).apply()
++  }
++
++  private fun networkName(networkType: Int): String = when (networkType) {
++    C.NETWORK_TYPE_WIFI -> "wifi"
++    C.NETWORK_TYPE_ETHERNET -> "ethernet"
++    C.NETWORK_TYPE_2G -> "2g"
++    C.NETWORK_TYPE_3G -> "3g"
++    C.NETWORK_TYPE_4G -> "4g"
++    C.NETWORK_TYPE_5G_NSA -> "5g-nsa"
++    C.NETWORK_TYPE_5G_SA -> "5g-sa"
++    C.NETWORK_TYPE_OFFLINE -> "offline"
++    C.NETWORK_TYPE_OTHER -> "other"
++    else -> "unknown"
++  }
++}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-index 8bae522..30cbdcb 100644
+index 8bae522..5954d8c 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 @@ -60,7 +60,7 @@ import kotlin.time.DurationUnit
@@ -305,7 +442,17 @@ index 8bae522..30cbdcb 100644
      .forceEnableMediaCodecAsynchronousQueueing()
      .setEnableDecoderFallback(true)
    private val listeners: MutableList<WeakReference<VideoPlayerListener>> = mutableListOf()
-@@ -128,9 +128,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -78,6 +78,9 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+     .apply {
+       setLooper(context.mainLooper)
+       setLoadControl(loadControl)
++      // media3's default meter starts at 2.4 Mbps on US Wi-Fi/Ethernet, which
++      // only fits the transcoder's 144p rung; see SharedBandwidthMeter.
++      setBandwidthMeter(SharedBandwidthMeter.get(context))
+       playerBuilderOptions?.seekBackwardIncrement?.let {
+         setSeekBackIncrementMs((it).toLong(DurationUnit.MILLISECONDS).coerceIn(1, 999_000))
+       }
+@@ -128,9 +131,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
    var duration = 0f
    var isLive = false
  
@@ -322,7 +469,7 @@ index 8bae522..30cbdcb 100644
      }
      userVolume = volume
      sendEvent(PlayerEvent.VolumeChanged(new, old))
-@@ -319,7 +326,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -319,7 +329,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
      }
  
      override fun onVolumeChanged(volume: Float) {
@@ -340,7 +487,7 @@ index 8bae522..30cbdcb 100644
          this@VideoPlayer.volume = volume
        }
      }
-@@ -343,7 +359,17 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -343,7 +362,17 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
  
    private val analyticsListener = object : AnalyticsListener {
      override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
@@ -359,7 +506,7 @@ index 8bae522..30cbdcb 100644
        super.onVideoInputFormatChanged(eventTime, format, decoderReuseEvaluation)
      }
    }
-@@ -578,21 +604,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
+@@ -578,21 +607,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
      for (i in 0 until group.length) {
        val format = group.getTrackFormat(i)
        val isSupported = group.isTrackSupported(i)
