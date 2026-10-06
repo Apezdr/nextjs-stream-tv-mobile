@@ -1,5 +1,5 @@
 import { Image, ImageProps } from "expo-image";
-import React, { useEffect, useMemo, useCallback } from "react";
+import React, { useMemo, useCallback } from "react";
 
 import { getAxiosInstance } from "@/src/data/api/axiosClient";
 
@@ -71,14 +71,10 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
     }
   }, [imageUri, optimize, isSvg, width, quality, getValidWidth]);
 
-  // Prefetch the optimized image when component mounts
-  useEffect(() => {
-    if (finalSource) {
-      Image.prefetch(finalSource).catch(() => {
-        // Silently handle prefetch errors - the image will still load normally
-      });
-    }
-  }, [finalSource]);
+  // No Image.prefetch here: the view below loads this same URL at once. On
+  // Android a prefetch is a second Glide job with a different cache key, so
+  // it downloaded every image twice and decoded a full-size copy into the
+  // memory cache for nothing.
 
   // Create a stable recycling key based on the URI to help with caching
   const recyclingKey = useMemo(() => {

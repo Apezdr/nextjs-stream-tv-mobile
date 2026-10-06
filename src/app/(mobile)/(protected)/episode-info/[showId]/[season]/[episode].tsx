@@ -43,6 +43,16 @@ function formatTimeFromSeconds(seconds?: number | null): string {
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
+/**
+ * A cast member's photo URL. The server sends `profile_path` either as a full
+ * TMDB URL or as a bare TMDB path; only the bare path takes a size prefix.
+ */
+function tmdbProfileUrl(profilePath: string, size: "w200" | "w500"): string {
+  return /^https?:\/\//i.test(profilePath)
+    ? profilePath
+    : `https://image.tmdb.org/t/p/${size}${profilePath}`;
+}
+
 export default function EpisodeInfoPage() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -468,7 +478,7 @@ export default function EpisodeInfoPage() {
                       actor.profile_path !== null ? (
                         <OptimizedImage
                           source={{
-                            uri: `https://image.tmdb.org/t/p/w500${actor.profile_path}`,
+                            uri: tmdbProfileUrl(actor.profile_path, "w500"),
                           }}
                           style={styles.castImage}
                           contentFit="cover"
@@ -521,7 +531,7 @@ export default function EpisodeInfoPage() {
                       actor.profile_path !== null ? (
                         <OptimizedImage
                           source={{
-                            uri: `https://image.tmdb.org/t/p/w200${actor.profile_path}`,
+                            uri: tmdbProfileUrl(actor.profile_path, "w200"),
                           }}
                           style={styles.castImage}
                           contentFit="cover"
