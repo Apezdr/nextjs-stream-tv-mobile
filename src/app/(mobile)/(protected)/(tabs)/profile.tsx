@@ -9,7 +9,9 @@ import {
   Switch,
   ScrollView,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MOBILE_TAB_CONFIG } from "@/src/constants/MobileNavConstants";
 import { useAuth } from "@/src/providers/AuthProvider";
 import { useQualityPreferencesStore } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
@@ -17,6 +19,7 @@ import { globalDefaultOptions } from "@/src/utils/qualityTiers";
 
 export default function ProfilePage() {
   const { signOut, user } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const globalDefault = useQualityPreferencesStore((s) => s.globalDefault);
   const setGlobalDefault = useQualityPreferencesStore(
@@ -51,7 +54,15 @@ export default function ProfilePage() {
   return (
     <ScrollView
       style={styles.scroll}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[
+        styles.container,
+        {
+          // The tab bar floats over the page, so leave room to scroll the
+          // logout button clear of it.
+          paddingBottom:
+            MOBILE_TAB_CONFIG.TAB_BAR_HEIGHT + Math.max(insets.bottom, 12) + 12,
+        },
+      ]}
       showsVerticalScrollIndicator={false}
     >
       <Text style={styles.title}>Profile</Text>
@@ -94,8 +105,8 @@ export default function ProfilePage() {
           <View style={styles.optionText}>
             <Text style={styles.optionLabel}>Data saver on cellular</Text>
             <Text style={styles.optionDescription}>
-              Avoid Original and high-bitrate streams automatically on
-              cellular. Picking a quality in the player still works.
+              Avoid Original and high-bitrate streams automatically on cellular.
+              Picking a quality in the player still works.
             </Text>
           </View>
           <Switch

@@ -1,6 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useMemo } from "react";
-import { View, StyleSheet, Text, Pressable, TVFocusGuideView } from "react-native";
+import {
+  View,
+  StyleSheet,
+  Text,
+  Pressable,
+  ScrollView,
+  TVFocusGuideView,
+} from "react-native";
 
 import { useQualityPreferencesStore } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
@@ -18,7 +25,11 @@ export default function SettingsPage() {
   );
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={styles.title}>Settings</Text>
 
       {/* Playback quality default (delivery-tiers contract). A tier picked
@@ -48,7 +59,7 @@ export default function SettingsPage() {
                   </Text>
                 </View>
                 {isSelected && (
-                  <Ionicons name="checkmark" size={24} color="#FFFFFF" />
+                  <Ionicons name="checkmark" size={20} color="#FFFFFF" />
                 )}
               </Pressable>
             );
@@ -58,7 +69,7 @@ export default function SettingsPage() {
           Picking a quality inside the player remembers it for that title.
         </Text>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -66,30 +77,28 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: "#141414",
     flex: 1,
-    paddingHorizontal: 80,
-    paddingTop: 60,
   },
   optionDescription: {
     color: "#8C8C8C",
-    fontSize: 16,
-    marginTop: 4,
+    fontSize: 13,
+    marginTop: 2,
   },
   optionLabel: {
     color: "#FFFFFF",
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: "500",
   },
   optionRow: {
     alignItems: "center",
     backgroundColor: "rgba(255, 255, 255, 0.06)",
     borderColor: "rgba(255, 255, 255, 0)",
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 2,
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 10,
-    paddingHorizontal: 24,
-    paddingVertical: 18,
+    marginBottom: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   optionRowFocused: {
     backgroundColor: "rgba(255, 255, 255, 0.18)",
@@ -100,28 +109,33 @@ const styles = StyleSheet.create({
   },
   optionText: {
     flexShrink: 1,
-    paddingRight: 24,
+    paddingRight: 16,
+  },
+  scrollContent: {
+    paddingBottom: 40,
+    paddingHorizontal: 40,
+    paddingTop: 20,
   },
   section: {
-    maxWidth: 720,
+    maxWidth: 560,
   },
   sectionFootnote: {
     color: "#8C8C8C",
-    fontSize: 14,
-    marginTop: 8,
+    fontSize: 12,
+    marginTop: 6,
   },
   sectionTitle: {
     color: "#FFFFFF",
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     letterSpacing: 1,
-    marginBottom: 14,
+    marginBottom: 8,
     textTransform: "uppercase",
   },
   title: {
     color: "#FFFFFF",
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: "bold",
-    marginBottom: 30,
+    marginBottom: 16,
   },
 });
