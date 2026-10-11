@@ -28,6 +28,10 @@ import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { ScreensaverResponse } from "@/src/data/types/content.types";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import {
+  selectHealthNotice,
+  useServerHealthStore,
+} from "@/src/stores/serverHealthStore";
 import { resolveShowWatchTarget } from "@/src/utils/nextUpEpisode";
 
 // Fixed timing constants that don't depend on dimensions
@@ -62,6 +66,11 @@ const INSTRUCTION_POSITIONS = [
   "bottom-center",
 ] as const;
 type InstructionPosition = (typeof INSTRUCTION_POSITIONS)[number];
+
+// How long the current slide stays up once the server is unreachable. The
+// slide can no longer change (every refresh fails), so past this it is a
+// static backdrop zooming on an OLED; after it, black plus the moving notice.
+const OUTAGE_BLACKOUT_MS = 120_000;
 
 const SCREENSAVER_BUTTONS = [
   { action: "watch", label: "Watch Now", icon: "▶️" },
@@ -118,6 +127,24 @@ export const Screensaver: React.FC = () => {
   const fadeInTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstLoadRef = useRef<boolean>(true);
+
+  // The server is down, per the health store — whether or not the context's
+  // 15 s refresh has failed yet. Drives the drifting notice over the current
+  // slide and, after OUTAGE_BLACKOUT_MS, drops the slide.
+  const healthNotice = useServerHealthStore(selectHealthNotice);
+  const [outageSince, setOutageSince] = useState<number | null>(null);
+  const [outageNow, setOutageNow] = useState(() => Date.now());
+  useEffect(() => {
+    setOutageSince((since) => (healthNotice ? (since ?? Date.now()) : null));
+  }, [healthNotice]);
+  useEffect(() => {
+    if (outageSince === null) return;
+    setOutageNow(Date.now());
+    const timer = setInterval(() => setOutageNow(Date.now()), 10_000);
+    return () => clearInterval(timer);
+  }, [outageSince]);
+  const outageHidesContent =
+    outageSince !== null && outageNow - outageSince >= OUTAGE_BLACKOUT_MS;
 
   // Transition pause state for user interaction
   const pauseStartTimeRef = useRef<number>(0);
@@ -1135,11 +1162,22 @@ export const Screensaver: React.FC = () => {
     return null;
   }
 
-  // No content to show: a dim notice that keeps moving (burn-in), on black.
-  if (error && !displayedContent) {
+  // No content to show, or a slide that has been frozen by an outage for
+  // OUTAGE_BLACKOUT_MS: a dim notice that keeps moving (burn-in), on black.
+  if (
+    (error && !displayedContent) ||
+    (displayedContent && outageHidesContent)
+  ) {
     return (
       <View style={styles.container}>
-        <ScreensaverUnavailable />
+        {healthNotice ? (
+          <ScreensaverUnavailable
+            title="Can't reach the server"
+            subtitle="The screensaver resumes when it's back"
+          />
+        ) : (
+          <ScreensaverUnavailable />
+        )}
       </View>
     );
   }
@@ -1327,6 +1365,15 @@ export const Screensaver: React.FC = () => {
                 <Text style={styles.networkName}>{network.name}</Text>
               )}
             </Reanimated.View>
+          )}
+
+          {/* The server is down: say so, dimly and on the move, over a slide
+              that can no longer change. */}
+          {healthNotice && (
+            <ScreensaverUnavailable
+              title="Can't reach the server"
+              subtitle="Showing the last title loaded"
+            />
           )}
 
           {/* Burn-in protection dimming overlay */}

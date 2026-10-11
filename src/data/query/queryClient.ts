@@ -13,6 +13,8 @@ import {
 } from "@tanstack/react-query";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 
+import { shouldRetryQuery } from "@/src/data/query/queryState";
+
 // Teach React Query what "focused" means on React Native.
 //
 // Without this, `refetchOnWindowFocus` below is DEAD CONFIG on both platforms.
@@ -82,15 +84,9 @@ export const queryClient = new QueryClient({
       // Cache time: how long inactive data stays in cache
       gcTime: Platform.isTV ? 10 * 60 * 1000 : 5 * 60 * 1000, // 10 min for TV, 5 min for mobile
 
-      // Retry configuration
-      retry: (failureCount, error: Error & { status?: number }) => {
-        // Don't retry on 4xx errors
-        const status = error?.status;
-        if (status !== undefined && status >= 400 && status < 500) {
-          return false;
-        }
-        return failureCount < 3;
-      },
+      // Retry configuration: no 4xx retries, and none once the server-health
+      // probe has found the server down (see shouldRetryQuery).
+      retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 3),
 
       // Retry delay with exponential backoff
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),

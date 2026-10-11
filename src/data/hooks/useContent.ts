@@ -7,7 +7,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
 import { describeRequestError } from "@/src/data/api/describeRequestError";
-import { isAwaitingFirstData } from "@/src/data/query/queryState";
+import {
+  isAwaitingFirstData,
+  shouldRetryQuery,
+} from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import {
   ContentListResponse,
@@ -609,6 +612,10 @@ export function useTVMediaDetails(
     enabled: !!mediaId && !!mediaType,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
+    // One retry, and none once the server is known down. The movie page's
+    // loader shows its message on the first failure; this page should not
+    // sit on its skeleton for a full backoff instead.
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 2),
   });
 
   // Derive the active season synchronously from show data.
@@ -649,6 +656,10 @@ export function useTVMediaDetails(
     enabled: !!mediaId && !!mediaType && effectiveSeason !== undefined,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
+    // One retry, and none once the server is known down. The movie page's
+    // loader shows its message on the first failure; this page should not
+    // sit on its skeleton for a full backoff instead.
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 2),
   });
 
   // Merge show-level and season-level data into a single response object.

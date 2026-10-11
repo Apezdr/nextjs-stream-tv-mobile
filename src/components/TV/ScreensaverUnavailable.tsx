@@ -23,7 +23,15 @@ const CORNERS: ViewStyle[] = [
 
 const jitter = () => Math.round((Math.random() * 2 - 1) * JITTER_PX);
 
-function ScreensaverUnavailableComponent() {
+interface ScreensaverUnavailableProps {
+  title?: string;
+  subtitle?: string;
+}
+
+function ScreensaverUnavailableComponent({
+  title = "Screensaver content unavailable",
+  subtitle = "Retrying automatically…",
+}: ScreensaverUnavailableProps) {
   const [corner, setCorner] = useState(0);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const opacity = useRef(new Animated.Value(0)).current;
@@ -63,8 +71,8 @@ function ScreensaverUnavailableComponent() {
         },
       ]}
     >
-      <Text style={styles.title}>Screensaver content unavailable</Text>
-      <Text style={styles.subtitle}>Retrying automatically…</Text>
+      <Text style={styles.title}>{title}</Text>
+      <Text style={styles.subtitle}>{subtitle}</Text>
     </Animated.View>
   );
 }

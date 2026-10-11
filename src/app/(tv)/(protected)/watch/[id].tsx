@@ -13,6 +13,7 @@ import {
 } from "react";
 import { View, StyleSheet, Text, BackHandler, Pressable } from "react-native";
 
+import { FullScreenNotice } from "@/src/components/TV/FullScreenNotice";
 import StandaloneVideoControls from "@/src/components/Video/StandaloneVideoControls";
 import { Colors } from "@/src/constants/Colors";
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
@@ -942,35 +943,18 @@ export default function WatchPage() {
   if (finalError) {
     return (
       <View style={styles.container}>
-        <View style={styles.messageContainer}>
-          <Text style={styles.errorText}>{finalError}</Text>
-          {/* A failed content load can be retried here, and retries itself
-              once the server is back; player errors have their own paths. */}
-          {contentError ? (
-            <Pressable
-              focusable
-              hasTVPreferredFocus
-              style={({ focused }) => [
-                styles.clickableText,
-                focused && styles.clickableTextFocused,
-              ]}
-              onPress={retryContent}
-            >
-              <Text style={styles.messageText}>Try again</Text>
-            </Pressable>
-          ) : null}
-          <Pressable
-            focusable
-            hasTVPreferredFocus={!contentError}
-            style={({ focused }) => [
-              styles.clickableText,
-              focused && styles.clickableTextFocused,
-            ]}
-            onPress={handleExit}
-          >
-            <Text style={styles.messageText}>Go back to browse</Text>
-          </Pressable>
-        </View>
+        <FullScreenNotice
+          title={contentError ? "Couldn't load this title" : "Playback stopped"}
+          message={finalError}
+          actions={[
+            // A failed content load can be retried here, and retries itself
+            // once the server is back; player errors have their own paths.
+            ...(contentError
+              ? [{ label: "Try again", onPress: retryContent, preferred: true }]
+              : []),
+            { label: "Go back to browse", onPress: handleExit },
+          ]}
+        />
       </View>
     );
   }

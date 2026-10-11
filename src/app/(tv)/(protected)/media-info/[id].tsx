@@ -1,14 +1,8 @@
 import { useLocalSearchParams, useFocusEffect, router } from "expo-router";
 import { useCallback, useState, useRef, useEffect, useMemo } from "react";
-import {
-  View,
-  StyleSheet,
-  Text,
-  Pressable,
-  Animated,
-  BackHandler,
-} from "react-native";
+import { View, StyleSheet, Animated, BackHandler } from "react-native";
 
+import { FullScreenNotice } from "@/src/components/TV/FullScreenNotice";
 import MediaInfoSkeleton from "@/src/components/TV/MediaInfo/MediaInfoSkeleton";
 import MovieLayout from "@/src/components/TV/MediaInfo/MovieLayout";
 import TVShowLayout from "@/src/components/TV/MediaInfo/TVShowLayout";
@@ -337,24 +331,23 @@ export default function MediaInfoPage() {
   }
 
   if (error || !mediaInfo) {
-    const errorMessage = error || "Failed to load media information";
-
     return (
       <View style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{errorMessage}</Text>
-          <Pressable
-            focusable
-            hasTVPreferredFocus
-            style={({ focused }) => [
-              styles.backButton,
-              focused && styles.backButtonFocused,
-            ]}
-            onPress={handleGoBack}
-          >
-            <Text style={styles.backButtonText}>Go Back</Text>
-          </Pressable>
-        </View>
+        <FullScreenNotice
+          title="Couldn't load this title"
+          message={error || "Failed to load media information"}
+          actions={[
+            {
+              label: "Try again",
+              onPress: () =>
+                params.type === "movie"
+                  ? movieData.refetch()
+                  : tvData.refetch(),
+              preferred: true,
+            },
+            { label: "Go back", onPress: handleGoBack },
+          ]}
+        />
       </View>
     );
   }
@@ -396,35 +389,8 @@ export default function MediaInfoPage() {
 }
 
 const styles = StyleSheet.create({
-  backButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    borderRadius: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-  },
-  backButtonFocused: {
-    backgroundColor: Colors.dark.tint,
-    borderColor: "#FFFFFF",
-    borderWidth: 2,
-  },
-  backButtonText: {
-    color: Colors.dark.whiteText,
-    fontSize: 16,
-  },
   container: {
     backgroundColor: Colors.dark.background,
     flex: 1,
-  },
-  errorContainer: {
-    alignItems: "center",
-    flex: 1,
-    justifyContent: "center",
-    padding: 20,
-  },
-  errorText: {
-    color: "#E50914",
-    fontSize: 18,
-    marginBottom: 20,
-    textAlign: "center",
   },
 });

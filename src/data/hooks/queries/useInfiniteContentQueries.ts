@@ -8,7 +8,10 @@ import { useCallback } from "react";
 import { API_ENDPOINTS, buildQueryParams } from "@/src/data/api/endpoints";
 import { enhancedApiClient } from "@/src/data/api/enhancedClient";
 import { queryKeys } from "@/src/data/query/queryKeys";
-import { isAwaitingFirstData } from "@/src/data/query/queryState";
+import {
+  isAwaitingFirstData,
+  shouldRetryQuery,
+} from "@/src/data/query/queryState";
 import type {
   ContentListResponse,
   HorizontalListParams,
@@ -108,14 +111,9 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     },
     initialPageParam: 0,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, error: Error & { status?: number }) => {
-      // A 4xx is an answer. Repeating it six times only repeats it, and the
-      // home screen's 60 s refresh would then do so every minute.
-      const status = error?.status;
-      if (status !== undefined && status >= 400 && status < 500) return false;
-      // retry 6 times for network/server errors
-      return failureCount < 6;
-    },
+    // Up to six tries for network/server errors; none after a 4xx or once the
+    // server is known to be down (shouldRetryQuery).
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 6),
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff, max 10s
     // Stale time is configured in queryClient
   });
@@ -269,14 +267,9 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
     initialPageParam: 0,
     enabled: !!genre,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, error: Error & { status?: number }) => {
-      // A 4xx is an answer. Repeating it six times only repeats it, and the
-      // home screen's 60 s refresh would then do so every minute.
-      const status = error?.status;
-      if (status !== undefined && status >= 400 && status < 500) return false;
-      // retry 6 times for network/server errors
-      return failureCount < 6;
-    },
+    // Up to six tries for network/server errors; none after a 4xx or once the
+    // server is known to be down (shouldRetryQuery).
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 6),
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff, max 10s
   });
 
@@ -349,7 +342,7 @@ export function useInfiniteWatchlistContent(
     enabled: enabled && !!playlistId,
     refetchInterval,
     refetchIntervalInBackground,
-    retry: (failureCount) => failureCount < 6,
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 6),
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
   });
 

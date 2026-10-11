@@ -1,3 +1,35 @@
+import { useServerHealthStore } from "@/src/stores/serverHealthStore";
+
+/**
+ * Whether a failed query attempt is worth another try.
+ *
+ * Not after a 4xx: that is an answer. And not once the health store knows
+ * the server is down (offline, unreachable, or degraded): the probe has
+ * already pronounced, and retrying only keeps a skeleton on screen for the
+ * length of the backoff. The TV media-info page spent that time on its
+ * skeleton while the movie page, whose loader does not retry, showed its
+ * message at once.
+ */
+export function shouldRetryQuery(
+  failureCount: number,
+  error: unknown,
+  maxFailures: number,
+): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return false;
+  }
+  const { isOnline, reachability } = useServerHealthStore.getState();
+  if (
+    !isOnline ||
+    reachability === "unreachable" ||
+    reachability === "degraded"
+  ) {
+    return false;
+  }
+  return failureCount < maxFailures;
+}
+
 /**
  * "Show the spinner" for a query that has no data yet.
  *
