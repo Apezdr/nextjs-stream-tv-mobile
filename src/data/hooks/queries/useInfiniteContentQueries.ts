@@ -8,6 +8,7 @@ import { useCallback } from "react";
 import { API_ENDPOINTS, buildQueryParams } from "@/src/data/api/endpoints";
 import { enhancedApiClient } from "@/src/data/api/enhancedClient";
 import { queryKeys } from "@/src/data/query/queryKeys";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import type {
   ContentListResponse,
   HorizontalListParams,
@@ -107,7 +108,11 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     },
     initialPageParam: 0,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, _error: Error & { status?: number }) => {
+    retry: (failureCount, error: Error & { status?: number }) => {
+      // A 4xx is an answer. Repeating it six times only repeats it, and the
+      // home screen's 60 s refresh would then do so every minute.
+      const status = error?.status;
+      if (status !== undefined && status >= 400 && status < 500) return false;
       // retry 6 times for network/server errors
       return failureCount < 6;
     },
@@ -199,6 +204,12 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
 
   return {
     ...query,
+    // Paused-aware, unlike React Query's own flag: true until the first page
+    // arrives, including while that first fetch is paused for lack of
+    // network. The raw isLoading is false while paused, which left every row
+    // keyed on it empty, with "nothing found" wording, when the app started
+    // offline.
+    isLoading: isAwaitingFirstData(query),
     prefetchNext,
     prefetchMultiple,
     prefetchBulk,
@@ -258,7 +269,11 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
     initialPageParam: 0,
     enabled: !!genre,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, _error: Error & { status?: number }) => {
+    retry: (failureCount, error: Error & { status?: number }) => {
+      // A 4xx is an answer. Repeating it six times only repeats it, and the
+      // home screen's 60 s refresh would then do so every minute.
+      const status = error?.status;
+      if (status !== undefined && status >= 400 && status < 500) return false;
       // retry 6 times for network/server errors
       return failureCount < 6;
     },

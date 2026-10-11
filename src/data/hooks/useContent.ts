@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import {
   ContentListResponse,
@@ -671,11 +672,12 @@ export function useTVMediaDetails(
 
   return {
     data,
-    // True only on the very first load (no cached data). False during background
+    // True only on the very first load (no cached data), including while that
+    // first fetch is paused for lack of network. False during background
     // refetches so the UI doesn't flash a full skeleton on revisits.
-    isLoading: showQuery.isLoading,
+    isLoading: isAwaitingFirstData(showQuery),
     // True while season episodes are loading or switching seasons
-    isLoadingEpisodes: seasonQuery.isLoading,
+    isLoadingEpisodes: isAwaitingFirstData(seasonQuery),
     // True during a background re-fetch (data already present)
     isRefreshing: showQuery.isRefetching || seasonQuery.isRefetching,
     error: (showQuery.error?.message || seasonQuery.error?.message || null) as

@@ -9,6 +9,7 @@ import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileConte
 import MobileContentList from "@/src/components/Mobile/Lists/MobileContentList";
 import MobileGenreRow from "@/src/components/Mobile/Rows/MobileGenreRow";
 import { Colors } from "@/src/constants/Colors";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { Genre, MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
@@ -37,7 +38,9 @@ export default function MoviesPage() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    isLoading: allMoviesLoading,
+    isPending: allMoviesPending,
+    isFetching: allMoviesFetching,
+    isPaused: allMoviesPaused,
     refetch: refetchAllMovies,
   } = useInfiniteQuery({
     queryKey: ["content", "allMovies", { type: "movie", sort: sortBy }],
@@ -59,6 +62,14 @@ export default function MoviesPage() {
       return undefined;
     },
     enabled: viewMode === "all",
+  });
+
+  // Paused-aware first-load flag (see queryState.ts); false when the query is
+  // disabled in genre view, as the raw isLoading was.
+  const allMoviesLoading = isAwaitingFirstData({
+    isPending: allMoviesPending,
+    isFetching: allMoviesFetching,
+    isPaused: allMoviesPaused,
   });
 
   // Transform MediaItem to MobileContentCardData

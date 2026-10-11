@@ -91,6 +91,12 @@ export interface ReportClientErrorInput {
    */
   dedupeContext?: string;
   dedupeKey?: string;
+  /**
+   * Send even if this dedupeKey already went out this session. For reports
+   * that are events, not a recurring error: each one is wanted, and a shared
+   * key is what groups them on the admin page.
+   */
+  allowRepeat?: boolean;
   details?: PlaybackErrorDetails | Record<string, unknown>;
 }
 
@@ -107,7 +113,7 @@ export async function reportClientError(
       input.dedupeKey ??
       `${input.category}:${hashString(input.message + (input.dedupeContext ?? ""))}`;
 
-    if (sentDedupeKeys.has(dedupeKey)) return false;
+    if (!input.allowRepeat && sentDedupeKeys.has(dedupeKey)) return false;
     if (Date.now() < cooldownUntil) return false;
 
     const report: ClientErrorReport = {
@@ -178,7 +184,12 @@ export function reportServerEpisode(episode: Episode): Promise<boolean> {
     category: "network",
     severity: episode.bannerShown ? "error" : "warning",
     message: `Server unreachable for ${Math.round(durationMs / 1000)}s: ${triggerText} on ${trigger.url}; ${failedProbes} of ${episode.probes.length} probes failed`,
-    dedupeKey: `network:server-unreachable:${episode.startedAt}`,
+    // One key per kind, not per episode, so the admin page shows "server
+    // unreachable: N reports, M users" as one group instead of a new group
+    // for every outage. allowRepeat is what lets a second episode in a
+    // session through the per-session dedupe.
+    dedupeKey: `network:server-unreachable:${episode.bannerShown ? "banner" : "brief"}`,
+    allowRepeat: true,
     details: {
       startedAt: new Date(episode.startedAt).toISOString(),
       endedAt: new Date(endedAt).toISOString(),

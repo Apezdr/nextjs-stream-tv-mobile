@@ -27,6 +27,7 @@ import {
   getFlattenedInfiniteGenreData,
 } from "@/src/data/hooks/queries/useInfiniteContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { MediaItem } from "@/src/data/types/content.types";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
@@ -65,7 +66,9 @@ const TVGenrePageContent = memo(function TVGenrePageContent() {
 
   const {
     data: genreData,
-    isLoading,
+    isPending,
+    isFetching,
+    isPaused,
     error,
     fetchNextPage,
     hasNextPage,
@@ -80,6 +83,9 @@ const TVGenrePageContent = memo(function TVGenrePageContent() {
     includeWatchHistory: true,
     isTVdevice: true,
   });
+
+  // Paused-aware first-load flag (see queryState.ts).
+  const isLoading = isAwaitingFirstData({ isPending, isFetching, isPaused });
 
   const items = useMemo(
     () => transformMediaItems(getFlattenedInfiniteGenreData(genreData)),

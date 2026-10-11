@@ -215,6 +215,29 @@ describe("serverHealth", () => {
     expect(ended[0].wentOffline).toBe(true);
   });
 
+  it("a probe that finishes after the device went offline is not counted", async () => {
+    fetchMode = "hang";
+    serverHealth.noteFailure({
+      url: "/api/authenticated/search",
+      code: "ERR_NETWORK",
+    });
+    await advance(PROBE_DEBOUNCE_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    serverHealth.setOnline(false);
+    await advance(PROBE_TIMEOUT_MS);
+    expect(state().reachability).toBe("suspect");
+    expect(state().episode?.probes).toHaveLength(0);
+
+    fetchMode = "ok";
+    serverHealth.setOnline(true);
+    await advance(ONLINE_RESUME_DELAY_MS);
+    expect(state().reachability).toBe("ok");
+    // The server was never shown to be unreachable: closed quietly, no banner
+    // flash on reconnect, nothing reported.
+    expect(ended).toHaveLength(0);
+  });
+
   it("failures during an open episode are counted, not probed again", async () => {
     fetchMode = "network";
     serverHealth.noteFailure({ url: "/a", code: "ERR_NETWORK" });

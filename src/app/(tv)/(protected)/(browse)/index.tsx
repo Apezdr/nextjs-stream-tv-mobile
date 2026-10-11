@@ -148,33 +148,32 @@ export default function TVHomePage() {
       const now = Date.now();
       const timeSinceLastRefresh = now - lastRefreshRef.current;
 
-      // Refresh rows that have data or failed to get any — not rows still on
-      // their first load, since refetch() cancels and restarts an in-flight
-      // fetch. The errored case matters: React Query never refetches an
-      // errored query on its own, and a row was skipped here until it had
-      // data, so "Failed to load content" used to stay until the screen
-      // remounted.
+      // Refresh rows that already have data. Not rows still on their first
+      // load (refetch() cancels and restarts an in-flight fetch), and not
+      // errored rows: this callback is rebuilt whenever any row starts or
+      // stops fetching, so a refetch of an errored row from here would start
+      // over the moment its last attempt failed, seven requests at a time.
+      // Errored rows get the Retry button, the 60 s refresh below, and the
+      // recovery refetch in AuthProvider.
+      //
+      // The debounce stamp is set once, before the branches: stamping only
+      // inside the first one left the other rows undebounced for as long as
+      // Continue Watching was still on its first load.
       if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
-        if (
-          (recentlyWatched.data || recentlyWatched.isError) &&
-          refreshCallbacks.recentlyWatched
-        ) {
+        lastRefreshRef.current = now;
+        if (recentlyWatched.data && refreshCallbacks.recentlyWatched) {
           logDebug("Refreshing recently watched data (debounced)");
-          lastRefreshRef.current = now;
           refreshCallbacks.recentlyWatched();
         }
-        if (
-          (recentlyAdded.data || recentlyAdded.isError) &&
-          refreshCallbacks.recentlyAdded
-        ) {
+        if (recentlyAdded.data && refreshCallbacks.recentlyAdded) {
           logDebug("Refreshing recently added data (debounced)");
           refreshCallbacks.recentlyAdded();
         }
-        if ((tvShows.data || tvShows.isError) && refreshCallbacks.tvShows) {
+        if (tvShows.data && refreshCallbacks.tvShows) {
           logDebug("Refreshing TV shows data (debounced)");
           refreshCallbacks.tvShows();
         }
-        if ((movies.data || movies.isError) && refreshCallbacks.movies) {
+        if (movies.data && refreshCallbacks.movies) {
           logDebug("Refreshing movies data (debounced)");
           refreshCallbacks.movies();
         }
@@ -230,19 +229,15 @@ export default function TVHomePage() {
     }, [
       isFocused,
       recentlyWatched.data,
-      recentlyWatched.isError,
       recentlyWatched.hasNextPage,
       recentlyWatched.isFetching,
       recentlyAdded.data,
-      recentlyAdded.isError,
       recentlyAdded.hasNextPage,
       recentlyAdded.isFetching,
       tvShows.data,
-      tvShows.isError,
       tvShows.hasNextPage,
       tvShows.isFetching,
       movies.data,
-      movies.isError,
       movies.hasNextPage,
       movies.isFetching,
       refreshCallbacks,
@@ -567,6 +562,10 @@ export default function TVHomePage() {
         </View>
 
         {/* Recently Watched Section */}
+        {/* isLoading here is useInfiniteContentList's, not React Query's: true
+            until the first page arrives, including while that fetch is paused
+            for lack of network. The raw flag is false while paused and would
+            fall through to an empty row. */}
         {recentlyWatched.isLoading ? (
           <View style={styles.loadingSection}>
             <Text style={styles.sectionTitle}>Continue Watching</Text>
