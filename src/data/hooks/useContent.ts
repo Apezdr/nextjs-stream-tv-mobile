@@ -688,6 +688,14 @@ export function useTVMediaDetails(
     seasonQuery.refetch();
   }, [showQuery, seasonQuery]);
 
+  // Retry in place: React Query keeps the error (and the page its card)
+  // while the refetch runs, so only the button shows progress. The season
+  // query follows on its own once show data is back.
+  const retry = useCallback(async (): Promise<boolean> => {
+    const result = await showQuery.refetch();
+    return result.status === "success";
+  }, [showQuery]);
+
   return {
     data,
     // True only on the very first load (no cached data), including while that
@@ -703,6 +711,7 @@ export function useTVMediaDetails(
         ? describeRequestError(showQuery.error ?? seasonQuery.error)
         : null,
     refetch,
+    retry,
     // The season the hook is currently fetching/displaying — useful for
     // components that need to highlight the correct season button without
     // maintaining their own derive-season useEffect.
@@ -900,6 +909,30 @@ export function useMovieDetails(
       fetchData(false);
     }
   }, [fetchData, data]);
+
+  /**
+   * Retry in place after a failure: isLoading and the current error are left
+   * alone until the result, so the page keeps its error card (whose button
+   * shows the progress) instead of flashing the skeleton. Resolves true on
+   * success.
+   */
+  const retry = useCallback(async (): Promise<boolean> => {
+    if (!mediaType || !mediaId) return false;
+    try {
+      const result = await contentService.getTVMediaDetails({
+        mediaType,
+        mediaId,
+        includeWatchHistory: true,
+      });
+      setData(result);
+      setError(null);
+      return true;
+    } catch (err) {
+      setError(describeRequestError(err));
+      return false;
+    }
+  }, [mediaType, mediaId]);
+
   // Not React Query, so the recovery refetch in AuthProvider does not reach
   // this; retry here when the server comes back from a confirmed outage.
   useRetryOnServerRecovery(error !== null, refetch);
@@ -910,6 +943,7 @@ export function useMovieDetails(
     isRefreshing,
     error,
     refetch,
+    retry,
   };
 }
 

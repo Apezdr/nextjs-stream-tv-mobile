@@ -340,9 +340,7 @@ export default function MediaInfoPage() {
             {
               label: "Try again",
               onPress: () =>
-                params.type === "movie"
-                  ? movieData.refetch()
-                  : tvData.refetch(),
+                params.type === "movie" ? movieData.retry() : tvData.retry(),
               preferred: true,
             },
             { label: "Go back", onPress: handleGoBack },
