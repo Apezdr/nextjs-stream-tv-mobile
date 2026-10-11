@@ -1282,9 +1282,14 @@ The client reads only the status code.
 or a 5xx makes the server a *suspect*; one probe goes out 1 s later. If it
 fails, a second goes out 3 s after that; two failures in a row show the TV
 banner ("Can't reach the server"), after which the probe repeats every 10 s.
-A `503` shows a separate "database isn't responding" notice. Any successful
-response from any endpoint, including the session poll, clears everything at
-once. While the device reports itself offline nothing is probed and nothing
+A `503` shows a separate "database isn't responding" notice **only when its
+body is `/api/status`'s own JSON** (`ok: false`, `db.statusText: "Down"`).
+Any other 503 is a failed probe like any other: when the app container is
+stopped, Caddy serves its outage page as a 503 on purpose (Cloudflare passes
+an origin 503 through but replaces 502 and 504 with its own page), and that
+must read as "can't reach the server", not as a database problem. Any
+successful response from any endpoint, including the session poll, clears
+everything at once. While the device reports itself offline nothing is probed and nothing
 is blamed on the server.
 
 Request details: `cache: "no-store"`, `credentials: "omit"`, an 8 s abort,

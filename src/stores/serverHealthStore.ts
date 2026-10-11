@@ -142,6 +142,13 @@ let consecutiveProbeFailures = 0;
 
 const { getState, setState } = useServerHealthStore;
 
+/** The 503 body `GET /api/status` sends when Mongo does not answer. */
+function isDatabaseDownBody(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const { ok, db } = body as { ok?: unknown; db?: { statusText?: unknown } };
+  return ok === false && db?.statusText === "Down";
+}
+
 function clearProbeTimer() {
   if (probeTimer) {
     clearTimeout(probeTimer);
@@ -200,9 +207,20 @@ async function probe(): Promise<void> {
         },
       );
       viaCloudflare = !!response.headers?.get?.("cf-ray");
-      if (response.ok) outcome = "ok";
-      else if (response.status === 503) outcome = "degraded";
-      else outcome = `status:${response.status}`;
+      if (response.ok) {
+        outcome = "ok";
+      } else if (response.status === 503) {
+        // Not every 503 is the app saying its database is down. When the app
+        // itself is stopped, Caddy serves its own outage page as a 503 (on
+        // purpose: Cloudflare passes an origin 503 through but replaces 502
+        // and 504 with its own). Only /api/status's JSON means "app up,
+        // database down"; any other body is the app being gone. The read
+        // stays inside the try so the abort above still bounds it.
+        const body: unknown = await response.json().catch(() => null);
+        outcome = isDatabaseDownBody(body) ? "degraded" : "status:503";
+      } else {
+        outcome = `status:${response.status}`;
+      }
     } catch (error: unknown) {
       outcome =
         error instanceof Error && error.name === "AbortError"

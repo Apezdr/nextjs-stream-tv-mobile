@@ -141,18 +141,20 @@ export const Screensaver: React.FC = () => {
     });
   }, [isScreensaverActive, isPlaying, currentMode, playerState, error]);
 
-  // Handle error state - auto-clear errors after display
+  // Clear a load error once content is on screen. While there is none, the
+  // error IS the screen ("unavailable / retrying"); clearing it after 5 s
+  // used to drop into the `return null` below and leave the TV black for the
+  // rest of an outage. The context clears it on the next successful load.
   useEffect(() => {
-    if (error) {
+    if (error && displayedContent) {
       console.warn("[Screensaver] Error detected:", error);
-      // Auto-clear error after a delay to prevent permanent error states
       const errorClearTimer = setTimeout(() => {
         clearError();
       }, 5000);
 
       return () => clearTimeout(errorClearTimer);
     }
-  }, [error, clearError]);
+  }, [error, displayedContent, clearError]);
 
   // Function to start zoom animation from current value
   const startZoomAnimation = React.useCallback(

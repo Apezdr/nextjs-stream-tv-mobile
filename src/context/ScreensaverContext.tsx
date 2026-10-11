@@ -15,6 +15,7 @@ import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { contentService } from "@/src/data/services/contentService";
 import { ScreensaverResponse } from "@/src/data/types/content.types";
+import { useServerHealthStore } from "@/src/stores/serverHealthStore";
 
 interface ScreensaverError {
   message: string;
@@ -54,6 +55,12 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
   // Refs for performance and timer management
   const opacity = useRef(new Animated.Value(0)).current;
   const isPlayingRef = useRef<boolean>(false);
+  // Mirrors for code that runs outside a render: the error timer and the
+  // server-health subscriber below.
+  const isActiveRef = useRef(false);
+  const contentRef = useRef<ScreensaverResponse | null>(null);
+  isActiveRef.current = isScreensaverActive;
+  contentRef.current = screensaverContent;
 
   // Consolidated timer management
   const timersRef = useRef<{
@@ -105,10 +112,15 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
 
       setError(newError);
 
-      // Auto-clear error after timeout
       if (timersRef.current.errorReset) {
         clearTimeout(timersRef.current.errorReset);
+        timersRef.current.errorReset = null;
       }
+
+      // Auto-clear only when there is content to fall back to. With nothing
+      // loaded the error IS the screen: clearing it left the TV black for the
+      // rest of an outage (seen 2026-10-11). A successful load clears it.
+      if (!contentRef.current) return;
 
       timersRef.current.errorReset = setTimeout(() => {
         clearError();
@@ -327,6 +339,30 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
     isPlaying,
     isRemoteActive,
   ]);
+
+  // Reload the moment the server is reachable again. The 15 s refresh would
+  // get there on its own, but a screensaver still saying "unavailable" for up
+  // to 15 s after an outage ended reads as still broken. The content loader
+  // is not React Query, so AuthProvider's recovery refetch does not reach it.
+  const loadRef = useRef(loadScreensaverContent);
+  loadRef.current = loadScreensaverContent;
+  useEffect(
+    () =>
+      useServerHealthStore.subscribe((state, previous) => {
+        if (
+          previous.reachability !== "ok" &&
+          state.reachability === "ok" &&
+          isActiveRef.current &&
+          !contentRef.current
+        ) {
+          console.log(
+            "[ScreensaverContext] Server reachable again, reloading content",
+          );
+          void loadRef.current();
+        }
+      }),
+    [],
+  );
 
   // Cleanup on unmount
   useEffect(() => {

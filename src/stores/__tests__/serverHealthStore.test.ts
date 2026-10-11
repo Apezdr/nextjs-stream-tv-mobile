@@ -10,7 +10,8 @@ import {
   type Episode,
 } from "../serverHealthStore";
 
-type FetchMode = "ok" | "503" | "502" | "network" | "hang" | "manual";
+type FetchMode =
+  "ok" | "503" | "503-html" | "502" | "network" | "hang" | "manual";
 let fetchMode: FetchMode = "ok";
 /** In "manual" mode the probe stays open until the test answers it. */
 let manualRespond: ((status: number) => void) | null = null;
@@ -18,18 +19,30 @@ let manualRespond: ((status: number) => void) | null = null;
 const fetchMock = jest.fn(
   (_url: string, init?: RequestInit) =>
     new Promise<Response>((resolve, reject) => {
-      const respond = (status: number) =>
+      const respond = (status: number, json: unknown = undefined) =>
         resolve({
           ok: status >= 200 && status < 300,
           status,
           headers: {
             get: (name: string) => (name === "cf-ray" ? "ray" : null),
           },
+          json: () =>
+            json === undefined
+              ? Promise.reject(new SyntaxError("not JSON"))
+              : Promise.resolve(json),
         } as unknown as Response);
       switch (fetchMode) {
         case "ok":
-          return respond(200);
+          return respond(200, { ok: true });
         case "503":
+          // /api/status's own body when Mongo is down.
+          return respond(503, {
+            ok: false,
+            error: "MongoDB connection failed",
+            db: { statusText: "Down", details: "MongoDB is not responding" },
+          });
+        case "503-html":
+          // Caddy's outage page while the app itself is stopped.
           return respond(503);
         case "502":
           return respond(502);
@@ -180,6 +193,22 @@ describe("serverHealth", () => {
       "degraded",
       "degraded",
       "ok",
+    ]);
+  });
+
+  it("a 503 that is not /api/status's own JSON is a failed probe, not 'degraded'", async () => {
+    // Seen on 2026-10-11 with the app container stopped: Caddy answers 503
+    // with its outage page, and the banner wrongly blamed the database.
+    fetchMode = "503-html";
+    serverHealth.noteFailure({ url: "/api/authenticated/list", status: 503 });
+    await advance(PROBE_DEBOUNCE_MS);
+    expect(state().reachability).toBe("suspect");
+    await advance(CONFIRM_INTERVAL_MS);
+    expect(state().reachability).toBe("unreachable");
+    expect(selectHealthNotice(state())?.kind).toBe("unreachable");
+    expect(state().episode?.probes.map((p) => p.outcome)).toEqual([
+      "status:503",
+      "status:503",
     ]);
   });
 
