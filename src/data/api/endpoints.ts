@@ -41,7 +41,9 @@ export const API_ENDPOINTS = {
 
   // System endpoints
   SYSTEM: {
-    STATUS: "/api/authenticated/system-status",
+    // GET — unauthenticated Mongo ping, 200 or 503. The server-health probe;
+    // /system-status is the admin dashboard's aggregate and needs a session.
+    HEALTH: "/api/status",
     SYNC_VALIDATION: "/api/authenticated/sync/updateValidationStatus",
     UPDATE_PLAYBACK: "/api/authenticated/sync/updatePlayback",
     PRESENCE_END: "/api/authenticated/sync/presence/end",

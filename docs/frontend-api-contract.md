@@ -5,7 +5,8 @@
 > **Sources of truth in this repo:**
 >
 > - `src/data/api/endpoints.ts`
-> - `src/data/types/content.types.ts`, `auth.types.ts`, `serverStatus.types.ts`
+> - `src/data/types/content.types.ts`, `auth.types.ts`
+> - `src/stores/serverHealthStore.ts` (the §14 probe)
 > - `src/data/services/contentService.ts`
 > - `src/data/hooks/queries/*`, `src/data/hooks/useContent.ts`
 > - UI consumers under `src/app/` and `src/components/`
@@ -29,7 +30,7 @@
 11. [Search](#11-search)
 12. [Playback & presence](#12-playback--presence)
 13. [Player support assets](#13-player-support-assets)
-14. [System status](#14-system-status)
+14. [Server health probe](#14-server-health-probe)
 15. [Counts & calendar](#15-counts--calendar)
 16. [Endpoint inventory](#16-endpoint-inventory)
 17. [Known client quirks](#17-known-client-quirks)
@@ -109,7 +110,7 @@ Since the 27 September 2026 server release, these GETs return a **weak** ETag
 | `/notifications`, `HEAD /notifications?count=true` | Not called by the app yet |
 | `/sync/pullPlayback` | Not called by the app yet |
 | `/watchlist?action=status` | Rate-limited: `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After` on 429 |
-| `/system-status` | 304 carries `private, must-revalidate, max-age=30` |
+| `/api/status` | `Cache-Control: no-store` from server commit `0fe6d6a` (2026-10-10; live once the production image is rebuilt). Before that it sent no `Cache-Control` at all; the client defeats OS caches itself either way (§14) |
 
 Everything else is `no-store, private` (including `/media` and
 `/media/direct-info`, whose playback URLs rotate). `/screensaver` is never cached.
@@ -1255,34 +1256,54 @@ Response typed as open object (`EpisodePickerResponse`). Prefer `/media` with `i
 
 ---
 
-## 14. System status
+## 14. Server health probe
 
-### `GET /api/authenticated/system-status`
+### `GET /api/status`
 
-Often called with **skipAuth** during health probes.
+**Unauthenticated.** A Mongo ping: `200` when the database answers, `503` when
+it does not. This is the only liveness check the app makes; it does **not**
+call `/api/authenticated/system-status` (that route needs a session, fans out
+to every file server per request, and is the admin dashboard's concern).
 
-#### Response (`ServerStatusResponse`)
+#### Response
 
 ```ts
-{
-  overall: {
-    level: "normal" | "warning" | "error" | "unknown";
-    message: string;
-    updatedAt: string;
-  };
-  servers: Array<{
-    serverId: string;
-    serverName: string;
-    lastUpdated: string;
-    level: "normal" | "warning" | "error" | "unknown";
-    message: string;
-    error?: string;
-  }>;
-  hasActiveIncidents: boolean;
-}
+// 200
+{ ok: true; status: string; db: { statusText: "Up"; details: string } }
+// 503
+{ ok: false; error: string; db: { statusText: "Down"; details: string } }
 ```
 
-Client derives a summary: Next.js app down (request failed after retries) vs individual media-server warnings/errors for TV notification UI.
+The client reads only the status code.
+
+#### When the client calls it
+
+`src/stores/serverHealthStore.ts` owns this. A request that gets no response
+or a 5xx makes the server a *suspect*; one probe goes out 1 s later. If it
+fails, a second goes out 3 s after that; two failures in a row show the TV
+banner ("Can't reach the server"), after which the probe repeats every 10 s.
+A `503` shows a separate "database isn't responding" notice. Any successful
+response from any endpoint, including the session poll, clears everything at
+once. While the device reports itself offline nothing is probed and nothing
+is blamed on the server.
+
+Request details: `cache: "no-store"`, `credentials: "omit"`, an 8 s abort,
+and a unique `?_=<timestamp>` query: until server commit `0fe6d6a` ships,
+the route sends no `Cache-Control`, and NSURLCache on tvOS would otherwise
+keep answering an old `200` for the length of an outage. Nothing is sent
+while signed out.
+
+Server side, merged 2026-10-10 as commit `0fe6d6a` (not live until the
+production image is rebuilt): the route sends `Cache-Control: no-store`;
+`db.details` is a fixed phrase ("MongoDB is not responding"), never the
+driver's error text; and the ping is capped at 2 s, so a dead or saturated
+Mongo returns `503` within about 2 s, well inside the client's 8 s abort.
+Response shapes are unchanged.
+
+For the record, since the old client code expected otherwise:
+`/api/authenticated/system-status` reports `overall.level` and
+`servers[].level` from `normal | elevated | heavy | critical | unknown`,
+never `warning` or `error`.
 
 ---
 
@@ -1346,7 +1367,7 @@ Response: **iCal string** (`text` / string body).
 | GET | `/api/authenticated/episode-picker` | Legacy picker |
 | GET | `/api/authenticated/count` | Library stats |
 | GET | `/api/authenticated/calendar/:endpoint` | iCal |
-| GET | `/api/authenticated/system-status` | Health |
+| GET | `/api/status` | Server health probe (unauthenticated, §14) |
 
 ### Declared but secondary / admin
 
@@ -1432,7 +1453,7 @@ Document these so backend changes don’t “fix” the app unexpectedly.
 | Paths | `src/data/api/endpoints.ts` |
 | Content types | `src/data/types/content.types.ts` |
 | Auth types | `src/data/types/auth.types.ts` |
-| Server status types | `src/data/types/serverStatus.types.ts` |
+| Server health probe | `src/stores/serverHealthStore.ts` |
 | HTTP service | `src/data/services/contentService.ts` |
 | React Query hooks | `src/data/hooks/queries/useContentQueries.ts` |
 | Infinite lists | `src/data/hooks/queries/useInfiniteContentQueries.ts` |

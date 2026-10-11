@@ -20,13 +20,15 @@ import {
 import { API_ENDPOINTS } from "@/src/data/api/endpoints";
 import { enhancedApiClient } from "@/src/data/api/enhancedClient";
 import { cacheStore } from "@/src/data/cache/cacheStore";
-import { clearAllCaches } from "@/src/data/query/queryClient";
+import { clearAllCaches, queryClient } from "@/src/data/query/queryClient";
+import { reportServerEpisode } from "@/src/data/services/errorReportingService";
 import type {
   DeviceCodeResponse,
   GetSessionResponse,
 } from "@/src/data/types/auth.types";
 import { classifySessionBody } from "@/src/providers/authSessionPolicy";
 import { useBackdropStore } from "@/src/stores/backdropStore";
+import { serverHealth, type Episode } from "@/src/stores/serverHealthStore";
 import { clearCookieJar } from "@/src/utils/cookieJar";
 
 type User = {
@@ -79,10 +81,6 @@ interface AuthContextType {
   isAuthenticating: boolean;
   /** refresh the authentication token if needed */
   refreshToken: () => Promise<boolean>;
-  /** indicates if server is currently down/unreachable */
-  isServerDown: boolean;
-  /** last known server status message */
-  serverStatusMessage: string | null;
   /**
    * true when the last sign-out was forced by the server invalidating the
    * session, rather than requested by the user. Login screens use it to
@@ -95,8 +93,6 @@ interface AuthContextType {
 
 const STORAGE_KEY = "auth-info";
 const STATUS_CHECK_INTERVAL = 30000; // 30 seconds
-// /system-status while the server is down. The server asks for 30 s or slower.
-const SERVER_RECOVERY_INTERVAL = 30000;
 /** Server requires minimum 5s polling interval per deviceAuthorization config */
 const AUTH_POLL_INTERVAL = 5000;
 const AUTH_TIMEOUT = 5 * 60 * 1000; // 5 minutes
@@ -179,10 +175,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [isServerDown, setIsServerDown] = useState(false);
-  const [serverStatusMessage, setServerStatusMessage] = useState<string | null>(
-    null,
-  );
   /**
    * Set when the session was ended by the server rather than by the user, so
    * the login screens can explain why they're being asked to sign in again.
@@ -191,9 +183,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [sessionExpired, setSessionExpired] = useState(false);
 
   const statusCheckInterval = useRef<ReturnType<typeof setInterval> | null>(
-    null,
-  );
-  const serverRecoveryInterval = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
   const authPollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -306,6 +295,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
         accessTokenRef.current
       ) {
         refreshUserStatus();
+        // Timers sleep in the background; if the banner was up, ask now.
+        serverHealth.probeIfUnhealthy();
       }
       appStateRef.current = nextAppState;
     };
@@ -343,7 +334,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       enhancedApiClient.setBaseUrl(server);
       enhancedApiClient.setAuthToken(accessToken);
       enhancedApiClient.setTokenRefreshCallback(refreshToken);
-      enhancedApiClient.setServerStatusCheckCallback(checkServerStatus);
+      serverHealth.configure({ server });
       cacheStore.invalidateUserSpecificCache();
       setApiReady(true);
 
@@ -358,16 +349,34 @@ export function AuthProvider({ children }: PropsWithChildren) {
       enhancedApiClient.setBaseUrl(null);
       enhancedApiClient.setAuthToken(null);
       enhancedApiClient.setTokenRefreshCallback(null);
-      // Also drop the status-check callback. Leaving it registered meant a
-      // late axios error after sign-out could still invoke a checkServerStatus
-      // closure holding the old server, restarting the recovery interval
-      // against a host we're no longer signed in to.
-      enhancedApiClient.setServerStatusCheckCallback(null);
+      // Health tracking stops with the session. A probe still in flight for
+      // the old server is ignored by the store once the server is cleared, so
+      // a late answer cannot raise a banner over the login screen or hand the
+      // next sign-in a stale one.
+      serverHealth.configure({ server: null });
       setApiReady(false);
     }
   }, [server, accessToken]);
 
-  // 7️⃣ Cleanup on component unmount
+  // 7️⃣ What happens when the server comes back after being unreachable:
+  // refetch whatever failed in the meantime (React Query never retries an
+  // errored query on its own), and report the episode now that something can
+  // receive it. Registered once; the store calls this only for episodes in
+  // which a probe actually failed, so an endpoint that merely 5xxes on its
+  // own cannot keep the whole cache in a refetch loop.
+  useEffect(() => {
+    serverHealth.setHooks({
+      onEpisodeEnded: (episode: Episode) => {
+        queryClient.invalidateQueries({
+          predicate: (query) => query.state.status === "error",
+        });
+        void reportServerEpisode(episode);
+      },
+    });
+    return () => serverHealth.setHooks({});
+  }, []);
+
+  // 8️⃣ Cleanup on component unmount
   useEffect(() => {
     return () => {
       stopStatusChecking();
@@ -400,24 +409,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
       clearInterval(statusCheckInterval.current);
       statusCheckInterval.current = null;
     }
-    stopServerRecoveryChecking();
-  };
-
-  const startServerRecoveryChecking = () => {
-    stopServerRecoveryChecking();
-    if (DEBUG_AUTH) console.log("[Auth] Starting server recovery checking");
-    serverRecoveryInterval.current = setInterval(() => {
-      if (DEBUG_AUTH) console.log("[Auth] Checking if server has recovered");
-      checkServerStatus();
-    }, SERVER_RECOVERY_INTERVAL);
-  };
-
-  const stopServerRecoveryChecking = () => {
-    if (serverRecoveryInterval.current) {
-      if (DEBUG_AUTH) console.log("[Auth] Stopping server recovery checking");
-      clearInterval(serverRecoveryInterval.current);
-      serverRecoveryInterval.current = null;
-    }
   };
 
   const stopAuthPolling = () => {
@@ -429,52 +420,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (authTimeoutTimer.current) {
       clearTimeout(authTimeoutTimer.current);
       authTimeoutTimer.current = null;
-    }
-  };
-
-  const checkServerStatus = async (): Promise<void> => {
-    // Via the ref, not `server`: this runs from the probe's error paths and
-    // from the axios status-check callback, both of which can be holding an
-    // older render's closure. Reading state directly there would see null and
-    // silently skip every check.
-    if (!serverRef.current) return;
-    try {
-      if (DEBUG_AUTH)
-        console.log("[Auth] Checking server status via enhanced client");
-      const statusSummary = await enhancedApiClient.checkServerStatus();
-      if (!statusSummary) {
-        setIsServerDown(true);
-        setServerStatusMessage("Unable to determine server status");
-        return;
-      }
-      if (statusSummary.isNextJSAppDown) {
-        setIsServerDown(true);
-        setServerStatusMessage(statusSummary.message);
-        startServerRecoveryChecking();
-        if (DEBUG_AUTH)
-          console.log("[Auth] NextJS app is down:", statusSummary.message);
-      } else {
-        setIsServerDown(false);
-        stopServerRecoveryChecking();
-        if (statusSummary.hasServerIssues) {
-          setServerStatusMessage(statusSummary.message);
-          if (DEBUG_AUTH)
-            console.log(
-              "[Auth] Server issues detected:",
-              statusSummary.message,
-            );
-        } else {
-          setServerStatusMessage(null);
-          if (DEBUG_AUTH) console.log("[Auth] All systems operational");
-        }
-      }
-    } catch (error) {
-      console.error("[Auth] Server status check failed:", error);
-      setIsServerDown(true);
-      setServerStatusMessage(
-        "Server status check failed. Attempting to reconnect.",
-      );
-      startServerRecoveryChecking();
     }
   };
 
@@ -547,7 +492,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
             // The server is unwell, which says nothing about this session.
             // Signing out here would evict users over a transient 5xx.
             console.warn("[Auth] Server error during session check");
-            await checkServerStatus();
+            serverHealth.noteFailure({
+              url: API_ENDPOINTS.AUTH.GET_SESSION,
+              status: response.status,
+              viaCloudflare: !!response.headers.get("cf-ray"),
+            });
             return false;
 
           case "unknown-error":
@@ -560,6 +509,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
           case "valid":
             break;
         }
+
+        // A live session answer is also proof the server is reachable.
+        serverHealth.noteSuccess();
 
         // classifySessionBody() only returns "valid" when the body carries a
         // user, but that isn't visible to TS as a type guard on `data`.
@@ -582,7 +534,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
         // abort. We couldn't complete the check, so treat it as a
         // connectivity/server problem — never as grounds for a sign-out.
         console.warn("[Auth] Session check failed:", error);
-        await checkServerStatus();
+        serverHealth.noteFailure({
+          url: API_ENDPOINTS.AUTH.GET_SESSION,
+          code:
+            error instanceof Error && error.name === "AbortError"
+              ? "timeout"
+              : "network",
+        });
         return false;
       }
     })();
@@ -1133,7 +1091,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
     try {
       stopStatusChecking();
       stopAuthPolling();
-      stopServerRecoveryChecking();
+      // Drops any open episode unreported and cancels the probe timer, so
+      // nothing in flight can raise a banner over the login screen.
+      serverHealth.reset();
 
       // Capture before clearing — the server call below still needs them.
       const priorServer = serverRef.current;
@@ -1143,8 +1103,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setUser(null);
       setAccessToken(null);
       setIsAuthenticating(false);
-      setIsServerDown(false);
-      setServerStatusMessage(null);
       setSessionExpired(options?.reason === "session-invalidated");
       userRef.current = null;
       accessTokenRef.current = null;
@@ -1300,8 +1258,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
         isRefreshing,
         isAuthenticating,
         refreshToken: stableRefreshToken,
-        isServerDown,
-        serverStatusMessage,
         sessionExpired,
         clearSessionExpiredNotice,
       }}

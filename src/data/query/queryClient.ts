@@ -98,8 +98,12 @@ export const queryClient = new QueryClient({
       // Refetch on window focus (useful for TV apps)
       refetchOnWindowFocus: Platform.isTV ? false : true,
 
-      // Don't refetch on reconnect for TV (usually stable connection)
-      refetchOnReconnect: Platform.isTV ? false : true,
+      // Refetch stale active queries when the network comes back. Live config
+      // now that useNetworkStatus feeds onlineManager; before that, nothing on
+      // React Native ever told React Query the network had gone or returned.
+      // TV is included: an Ethernet or Wi-Fi drop on a SHIELD is exactly the
+      // case where the rows on screen are stale and nothing else refetches.
+      refetchOnReconnect: true,
 
       // Network mode
       networkMode: "online", // 'online' | 'always' | 'offlineFirst'

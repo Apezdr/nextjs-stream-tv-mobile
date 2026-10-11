@@ -16,6 +16,7 @@ import OptimizedImage from "@/src/components/common/OptimizedImage";
 import ContentItem, {
   ContentItemData,
 } from "@/src/components/TV/Pages/ContentRow/ContentItem";
+import { RetryNotice } from "@/src/components/TV/RetryNotice";
 import { Colors } from "@/src/constants/Colors";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
@@ -262,7 +263,9 @@ export default function SearchPage() {
   const {
     data: searchResults,
     isLoading,
+    isFetching,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["search", debouncedQuery],
     queryFn: () =>
@@ -476,9 +479,11 @@ export default function SearchPage() {
             </View>
           ) : error ? (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                Failed to load results. Please try again.
-              </Text>
+              <RetryNotice
+                message="Failed to load results."
+                onRetry={() => refetch()}
+                isRetrying={isFetching}
+              />
             </View>
           ) : transformedResults.length === 0 ? (
             <View style={styles.emptyContainer}>

@@ -1,57 +1,28 @@
-import React, { useEffect } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import React, { memo } from "react";
+import { StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
-import { useAuth } from "@/src/providers/AuthProvider";
+import {
+  selectHealthNotice,
+  useServerHealthStore,
+} from "@/src/stores/serverHealthStore";
 
-export function ServerStatusNotification() {
-  const { isServerDown, serverStatusMessage } = useAuth();
+/**
+ * The TV's one line about connectivity: the device is offline, the server
+ * can't be reached, or the server is up without its database. Driven by the
+ * server-health store, which raises the server notices only after its own
+ * probe failed twice — a single failed request never shows anything.
+ */
+function ServerStatusNotificationComponent() {
+  const notice = useServerHealthStore(selectHealthNotice);
 
-  // Track state changes with useEffect
-  useEffect(() => {
-    console.log("[ServerStatusNotification] State changed:", {
-      isServerDown,
-      serverStatusMessage,
-      shouldShow: isServerDown || !!serverStatusMessage,
-    });
-  }, [isServerDown, serverStatusMessage]);
-
-  // Debug logging on every render
-  console.log("[ServerStatusNotification] Render:", {
-    isServerDown,
-    serverStatusMessage,
-    shouldShow: isServerDown || !!serverStatusMessage,
-  });
-
-  // Don't render anything if there are no issues
-  if (!isServerDown && !serverStatusMessage) {
-    console.log(
-      "[ServerStatusNotification] Not rendering - no issues detected",
-    );
-    return null;
-  }
-
-  console.log("[ServerStatusNotification] Rendering notification");
+  if (!notice) return null;
 
   return (
     <View style={styles.container}>
-      <View
-        style={[
-          styles.notification,
-          isServerDown ? styles.errorNotification : styles.warningNotification,
-        ]}
-      >
-        <Text
-          style={[
-            styles.icon,
-            isServerDown ? styles.errorIcon : styles.warningIcon,
-          ]}
-        >
-          {isServerDown ? "⚠️" : "ℹ️"}
-        </Text>
-        <Text style={styles.message}>
-          {serverStatusMessage || "Server status unknown"}
-        </Text>
+      <View style={styles.notification}>
+        <Text style={styles.icon}>⚠️</Text>
+        <Text style={styles.message}>{notice.message}</Text>
       </View>
     </View>
   );
@@ -66,13 +37,8 @@ const styles = StyleSheet.create({
     top: 20,
     zIndex: 1000, // Allow touches to pass through
   },
-  errorIcon: {
-    color: Colors.dark.whiteText,
-  },
-  errorNotification: {
-    backgroundColor: "#dc3545",
-  },
   icon: {
+    color: Colors.dark.whiteText,
     fontSize: 20,
     marginRight: 12,
   },
@@ -84,6 +50,7 @@ const styles = StyleSheet.create({
   },
   notification: {
     alignItems: "center",
+    backgroundColor: "#dc3545",
     borderRadius: 8,
     elevation: 5,
     flexDirection: "row",
@@ -94,10 +61,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
   },
-  warningIcon: {
-    color: Colors.dark.whiteText,
-  },
-  warningNotification: {
-    backgroundColor: "#fd7e14",
-  },
 });
+
+export const ServerStatusNotification = memo(ServerStatusNotificationComponent);
