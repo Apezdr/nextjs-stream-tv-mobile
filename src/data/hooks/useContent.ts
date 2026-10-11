@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
+import { describeRequestError } from "@/src/data/api/describeRequestError";
 import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import {
@@ -24,6 +25,7 @@ import {
   GenresContentParams,
   EpisodeSpecificResponse,
 } from "@/src/data/types/content.types";
+import { useRetryOnServerRecovery } from "@/src/hooks/useRetryOnServerRecovery";
 
 // Debounce utility for app state changes
 function useDebounce<T extends (...args: AppStateStatus[]) => void>(
@@ -88,8 +90,9 @@ export function useContentList(params: HorizontalListParams = {}) {
       } catch (err) {
         // Only show errors for foreground fetches to avoid UI disruption
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Content list fetch error:", err);
         } else {
@@ -194,8 +197,9 @@ export function useMediaDetails(params: MediaParams) {
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Media details fetch error:", err);
         } else {
@@ -282,8 +286,9 @@ export function useEpisodePicker(params: EpisodePickerParams) {
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Episode picker fetch error:", err);
         } else {
@@ -370,8 +375,9 @@ export function useContentCounts(type?: "recentlyWatched") {
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Content counts fetch error:", err);
         } else {
@@ -456,8 +462,9 @@ export function useBanner() {
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Banner fetch error:", err);
         } else {
@@ -680,8 +687,10 @@ export function useTVMediaDetails(
     isLoadingEpisodes: isAwaitingFirstData(seasonQuery),
     // True during a background re-fetch (data already present)
     isRefreshing: showQuery.isRefetching || seasonQuery.isRefetching,
-    error: (showQuery.error?.message || seasonQuery.error?.message || null) as
-      string | null,
+    error:
+      showQuery.error || seasonQuery.error
+        ? describeRequestError(showQuery.error ?? seasonQuery.error)
+        : null,
     refetch,
     // The season the hook is currently fetching/displaying — useful for
     // components that need to highlight the correct season button without
@@ -733,8 +742,9 @@ export function useRootShowData(mediaId: string, enabled: boolean = true) {
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error(
             `Root show data fetch error for mediaId ${mediaId}:`,
@@ -770,6 +780,7 @@ export function useRootShowData(mediaId: string, enabled: boolean = true) {
       fetchData(false);
     }
   }, [fetchData, data]);
+  useRetryOnServerRecovery(enabled && error !== null, refetch);
 
   return {
     data,
@@ -820,8 +831,9 @@ export function useMovieDetails(
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Movie details fetch error:", err);
         } else {
@@ -877,6 +889,9 @@ export function useMovieDetails(
       fetchData(false);
     }
   }, [fetchData, data]);
+  // Not React Query, so the recovery refetch in AuthProvider does not reach
+  // this; retry here when the server comes back from a confirmed outage.
+  useRetryOnServerRecovery(error !== null, refetch);
 
   return {
     data,
@@ -911,8 +926,9 @@ export function useGenresList(params: GenresListParams = {}) {
         setData(result);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Genres list fetch error:", err);
         } else {
@@ -1013,8 +1029,9 @@ export function useGenreContent(params: GenresContentParams) {
         });
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Genre content fetch error:", err);
         } else {
@@ -1152,8 +1169,9 @@ export function useShowEpisode(
         setData(result as unknown as EpisodeSpecificResponse);
       } catch (err) {
         if (!isBackgroundRefresh) {
-          const errorMessage =
-            err instanceof Error ? err.message : "Unknown error";
+          // Plain wording, never the transport's "Request failed with
+          // status code 503"; the health store supplies offline/unreachable.
+          const errorMessage = describeRequestError(err);
           setError(errorMessage);
           console.error("Episode details fetch error:", err);
         } else {
@@ -1209,6 +1227,7 @@ export function useShowEpisode(
       fetchData(false);
     }
   }, [fetchData, data]);
+  useRetryOnServerRecovery(error !== null, refetch);
 
   return {
     data,

@@ -74,6 +74,14 @@ interface ServerHealthState {
   /** Device network, as reported by useNetworkStatus. Assumed online until told otherwise. */
   isOnline: boolean;
   episode: Episode | null;
+  /**
+   * Recoveries from a CONFIRMED-unreachable episode, counted up. What a
+   * subscriber should key its "server is back, reload" on: `reachability`
+   * returning to "ok" also happens after an endpoint-specific error sends
+   * the server through suspect-and-back, and reloading on that would repeat
+   * the same failure in a loop.
+   */
+  recoveries: number;
 }
 
 export interface ServerHealthHooks {
@@ -102,6 +110,7 @@ export const useServerHealthStore = create<ServerHealthState>(() => ({
   reachability: "ok",
   isOnline: true,
   episode: null,
+  recoveries: 0,
 }));
 
 // Module constants, not literals built per call: Zustand v5 hands the
@@ -173,8 +182,13 @@ function recover(recoveredBy: Episode["recoveredBy"]) {
   const { episode } = getState();
   clearProbeTimer();
   consecutiveProbeFailures = 0;
-  setState({ reachability: "ok", episode: null });
-  if (episode?.serverWasUnreachable) {
+  const confirmed = !!episode?.serverWasUnreachable;
+  setState({
+    reachability: "ok",
+    episode: null,
+    ...(confirmed && { recoveries: getState().recoveries + 1 }),
+  });
+  if (confirmed && episode) {
     hooks.onEpisodeEnded?.({ ...episode, endedAt: Date.now(), recoveredBy });
   }
 }

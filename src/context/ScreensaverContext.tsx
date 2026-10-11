@@ -349,9 +349,11 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
   useEffect(
     () =>
       useServerHealthStore.subscribe((state, previous) => {
+        // Keyed on confirmed recoveries, not on reachability returning to
+        // "ok": an endpoint-specific failure also sends the server through
+        // suspect-and-back, and reloading on that would loop on it.
         if (
-          previous.reachability !== "ok" &&
-          state.reachability === "ok" &&
+          state.recoveries !== previous.recoveries &&
           isActiveRef.current &&
           !contentRef.current
         ) {

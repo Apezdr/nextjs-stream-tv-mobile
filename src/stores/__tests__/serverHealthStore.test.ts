@@ -87,6 +87,7 @@ afterEach(() => {
 
 describe("serverHealth", () => {
   it("one failed request sends one probe; a passing probe closes the episode quietly", async () => {
+    const recoveriesBefore = state().recoveries;
     serverHealth.noteFailure({ url: "/api/authenticated/search", status: 502 });
     expect(state().reachability).toBe("suspect");
     expect(fetchMock).not.toHaveBeenCalled();
@@ -100,11 +101,15 @@ describe("serverHealth", () => {
 
     expect(state().reachability).toBe("ok");
     expect(state().episode).toBeNull();
-    // The server answered: nothing to refetch, nothing to report.
+    // The server answered: nothing to refetch, nothing to report, and no
+    // "recovery" for subscribers to reload on (that would loop on an
+    // endpoint-specific error).
     expect(ended).toHaveLength(0);
+    expect(state().recoveries).toBe(recoveriesBefore);
   });
 
   it("two failed probes show the banner; the first success clears it and reports", async () => {
+    const recoveriesBefore = state().recoveries;
     fetchMode = "network";
     serverHealth.noteFailure({
       url: "/api/authenticated/search",
@@ -125,6 +130,7 @@ describe("serverHealth", () => {
     expect(selectHealthNotice(state())).toBeNull();
 
     expect(ended).toHaveLength(1);
+    expect(state().recoveries).toBe(recoveriesBefore + 1);
     const episode = ended[0];
     expect(episode.bannerShown).toBe(true);
     expect(episode.serverWasUnreachable).toBe(true);
