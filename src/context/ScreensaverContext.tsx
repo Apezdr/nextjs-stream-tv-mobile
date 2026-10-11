@@ -31,6 +31,8 @@ interface ScreensaverContextType {
   hideScreensaver: () => void;
   // Direct communication from video players
   setVideoPlayingState: (isPlaying: boolean) => void;
+  /** What the players last reported through setVideoPlayingState. */
+  isVideoPlaying: boolean;
   // Error state
   error: ScreensaverError | null;
   clearError: () => void;
@@ -387,6 +389,7 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
       showScreensaver,
       hideScreensaver,
       setVideoPlayingState,
+      isVideoPlaying: isPlaying,
       error,
       clearError,
     }),
@@ -398,6 +401,7 @@ export const ScreensaverProvider: React.FC<{ children: ReactNode }> = ({
       showScreensaver,
       hideScreensaver,
       setVideoPlayingState,
+      isPlaying,
       error,
       clearError,
     ],
