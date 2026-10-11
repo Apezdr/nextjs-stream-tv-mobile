@@ -2,6 +2,7 @@ import React, { memo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
+import { useScreensaver } from "@/src/context/ScreensaverContext";
 import {
   selectHealthNotice,
   useServerHealthStore,
@@ -15,8 +16,12 @@ import {
  */
 function ServerStatusNotificationComponent() {
   const notice = useServerHealthStore(selectHealthNotice);
+  const { isScreensaverActive } = useScreensaver();
 
-  if (!notice) return null;
+  // Not over the screensaver: a fixed red bar is a burn-in risk for exactly
+  // as long as an outage lasts, and the screensaver's own notice already
+  // says the server is down.
+  if (!notice || isScreensaverActive) return null;
 
   return (
     <View style={styles.container}>

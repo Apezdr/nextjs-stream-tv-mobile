@@ -22,6 +22,7 @@ import Reanimated, {
   cancelAnimation,
 } from "react-native-reanimated";
 
+import { ScreensaverUnavailable } from "@/src/components/TV/ScreensaverUnavailable";
 import { Colors } from "@/src/constants/Colors";
 import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
@@ -1134,14 +1135,11 @@ export const Screensaver: React.FC = () => {
     return null;
   }
 
-  // Show error state if there's an error and no content
+  // No content to show: a dim notice that keeps moving (burn-in), on black.
   if (error && !displayedContent) {
     return (
       <View style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Screensaver content unavailable</Text>
-          <Text style={styles.errorSubtext}>Retrying automatically...</Text>
-        </View>
+        <ScreensaverUnavailable />
       </View>
     );
   }
@@ -1404,34 +1402,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     backgroundColor: "black",
     zIndex: 9999,
-  },
-
-  errorContainer: {
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-    flex: 1,
-    justifyContent: "center",
-    padding: 40,
-  },
-
-  errorSubtext: {
-    color: "#ccc",
-    fontSize: 24,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.75)",
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
-  },
-
-  errorText: {
-    color: Colors.dark.whiteText,
-    fontSize: 36,
-    fontWeight: "bold",
-    marginBottom: 16,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.75)",
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 5,
   },
 
   exitText: {
