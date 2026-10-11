@@ -10,8 +10,10 @@ import {
   type Episode,
 } from "../serverHealthStore";
 
-type FetchMode = "ok" | "503" | "502" | "network" | "hang";
+type FetchMode = "ok" | "503" | "502" | "network" | "hang" | "manual";
 let fetchMode: FetchMode = "ok";
+/** In "manual" mode the probe stays open until the test answers it. */
+let manualRespond: ((status: number) => void) | null = null;
 
 const fetchMock = jest.fn(
   (_url: string, init?: RequestInit) =>
@@ -33,6 +35,9 @@ const fetchMock = jest.fn(
           return respond(502);
         case "network":
           return reject(new TypeError("Network request failed"));
+        case "manual":
+          manualRespond = respond;
+          return;
         case "hang":
           init?.signal?.addEventListener("abort", () => {
             const error = new Error("Aborted");
@@ -53,6 +58,7 @@ beforeEach(() => {
   global.fetch = fetchMock as unknown as typeof fetch;
   fetchMock.mockClear();
   fetchMode = "ok";
+  manualRespond = null;
   ended = [];
   // configure() resets only on a change, so go through null to start clean.
   serverHealth.configure({ server: null });
@@ -235,6 +241,25 @@ describe("serverHealth", () => {
     expect(state().reachability).toBe("ok");
     // The server was never shown to be unreachable: closed quietly, no banner
     // flash on reconnect, nothing reported.
+    expect(ended).toHaveLength(0);
+  });
+
+  it("a success that lands after the device went offline still counts", async () => {
+    fetchMode = "manual";
+    serverHealth.noteFailure({
+      url: "/api/authenticated/search",
+      code: "ERR_NETWORK",
+    });
+    await advance(PROBE_DEBOUNCE_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // expo-network says offline, but the probe comes back 200: the server
+    // is reachable whatever the link state claims.
+    serverHealth.setOnline(false);
+    manualRespond?.(200);
+    await advance(0);
+    expect(state().reachability).toBe("ok");
+    expect(state().episode).toBeNull();
     expect(ended).toHaveLength(0);
   });
 

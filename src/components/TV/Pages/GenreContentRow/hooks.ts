@@ -8,6 +8,7 @@ import {
   useInfiniteGenreContent,
   getFlattenedInfiniteGenreData,
 } from "@/src/data/hooks/queries/useInfiniteContentQueries";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { MediaItem } from "@/src/data/types/content.types";
 
 export interface UseGenreContentParams {
@@ -45,7 +46,9 @@ export function useGenreContentData({
   // Only start loading when shouldLoad is true
   const {
     data: genreContentData,
-    isLoading: isLoadingGenreContent,
+    isPending: isGenreContentPending,
+    isFetching: isGenreContentFetching,
+    isPaused: isGenreContentPaused,
     error: genreContentError,
     fetchNextPage,
     hasNextPage,
@@ -59,6 +62,14 @@ export function useGenreContentData({
     sortOrder: "desc",
     includeWatchHistory: true,
     isTVdevice: true,
+  });
+
+  // Paused-aware first-load flag (see queryState.ts); false until shouldLoad
+  // enables the query, as the raw isLoading was.
+  const isLoadingGenreContent = isAwaitingFirstData({
+    isPending: isGenreContentPending,
+    isFetching: isGenreContentFetching,
+    isPaused: isGenreContentPaused,
   });
 
   // Transform the genre content data using the flattened helper

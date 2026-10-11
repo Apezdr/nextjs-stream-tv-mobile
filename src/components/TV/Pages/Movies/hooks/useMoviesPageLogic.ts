@@ -17,6 +17,7 @@ import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useGenresList } from "@/src/data/hooks/queries/useContentQueries";
 import { useInfiniteContentList } from "@/src/data/hooks/queries/useInfiniteContentQueries";
 import { useRootShowData } from "@/src/data/hooks/useContent";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { MediaItem } from "@/src/data/types/content.types";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
@@ -51,13 +52,22 @@ export function useMoviesPageLogic(initialViewMode: MoviesViewMode = "all") {
   // Fetch available movie genres
   const {
     data: genresData,
-    isLoading: isLoadingGenres,
+    isPending: isGenresPending,
+    isFetching: isGenresFetching,
+    isPaused: isGenresPaused,
     error: genresError,
     refetch: refetchGenres,
   } = useGenresList({
     type: "movie",
     includeCounts: true,
     isTVdevice: true,
+  });
+  // Paused-aware first-load flag (see queryState.ts). The all-movies list
+  // below gets its own from useInfiniteContentList.
+  const isLoadingGenres = isAwaitingFirstData({
+    isPending: isGenresPending,
+    isFetching: isGenresFetching,
+    isPaused: isGenresPaused,
   });
 
   // Infinite query for "all movies" view

@@ -213,16 +213,13 @@ async function probe(): Promise<void> {
     }
 
     // The world may have moved on while the request was out: a reset or a
-    // server change, a recovery through some other request — or the device
-    // going offline, in which case this failure says nothing about the
-    // server and would only flash the red banner for a second on reconnect.
-    if (
-      server !== base ||
-      getState().reachability === "ok" ||
-      !getState().isOnline
-    ) {
-      return;
-    }
+    // server change, or a recovery through some other request.
+    if (server !== base || getState().reachability === "ok") return;
+    // A failure that lands after the device went offline says nothing about
+    // the server and would only flash the red banner for a second on
+    // reconnect. A success still counts: a 200 proves the server reachable
+    // even when expo-network is lagging behind the link.
+    if (!getState().isOnline && outcome !== "ok") return;
 
     const result: ProbeResult = {
       at: startedAt,

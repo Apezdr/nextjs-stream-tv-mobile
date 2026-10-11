@@ -18,6 +18,7 @@ import {
   getFlattenedInfiniteWatchlistData,
   useInfiniteWatchlistContent,
 } from "@/src/data/hooks/queries/useInfiniteContentQueries";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { navigationHelper } from "@/src/utils/navigationHelper";
@@ -62,7 +63,9 @@ const MyListPageContent = memo(function MyListPageContent() {
 
   const {
     data: playlistsData,
-    isLoading: isLoadingPlaylists,
+    isPending: isPlaylistsPending,
+    isFetching: isPlaylistsFetching,
+    isPaused: isPlaylistsPaused,
     error: playlistsError,
   } = useQuery({
     queryKey: ["watchlist", "playlists", "tv"],
@@ -73,6 +76,14 @@ const MyListPageContent = memo(function MyListPageContent() {
       }),
     refetchInterval: isScreenFocused ? 15000 : false,
     refetchIntervalInBackground: true,
+  });
+
+  // Paused-aware first-load flags (see queryState.ts): a first fetch paused
+  // for lack of network must still read as loading, not as an empty list.
+  const isLoadingPlaylists = isAwaitingFirstData({
+    isPending: isPlaylistsPending,
+    isFetching: isPlaylistsFetching,
+    isPaused: isPlaylistsPaused,
   });
 
   const playlists = useMemo(
@@ -122,7 +133,9 @@ const MyListPageContent = memo(function MyListPageContent() {
 
   const {
     data: watchlistContent,
-    isLoading: isLoadingContent,
+    isPending: isContentPending,
+    isFetching: isContentFetching,
+    isPaused: isContentPaused,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -143,6 +156,11 @@ const MyListPageContent = memo(function MyListPageContent() {
       refetchIntervalInBackground: true,
     },
   );
+  const isLoadingContent = isAwaitingFirstData({
+    isPending: isContentPending,
+    isFetching: isContentFetching,
+    isPaused: isContentPaused,
+  });
 
   const watchlistItems = useMemo(() => {
     return getFlattenedInfiniteWatchlistData(watchlistContent);
