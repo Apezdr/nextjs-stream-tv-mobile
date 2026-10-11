@@ -1,10 +1,15 @@
+import { usePathname } from "expo-router";
 import React, { memo, useEffect, useRef, useState } from "react";
-import { Animated, StyleSheet, Text, View } from "react-native";
+import {
+  Animated,
+  StyleSheet,
+  Text,
+  useTVEventHandler,
+  View,
+} from "react-native";
 
 import { Colors } from "@/src/constants/Colors";
-import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
 import { useScreensaver } from "@/src/context/ScreensaverContext";
-import { useTVAppState } from "@/src/context/TVAppStateContext";
 import {
   selectHealthNotice,
   useServerHealthStore,
@@ -39,20 +44,25 @@ const PHASE_OPACITY: Record<Phase, { full: number; mini: number }> = {
 function ServerStatusNotificationComponent() {
   const notice = useServerHealthStore(selectHealthNotice);
   const { isScreensaverActive, isVideoPlaying } = useScreensaver();
-  const { currentMode } = useTVAppState();
-  const { isRemoteActive } = useRemoteActivity();
 
-  const onWatchScreen = currentMode === "watch";
+  // The route, not the app-state "mode": the browse layout stays mounted
+  // under the watch screen and its effect keeps forcing "browse", so the
+  // mode is not a reliable "on the watch screen" signal.
+  const pathname = usePathname();
+  const onWatchScreen = pathname.startsWith("/watch");
 
-  // A remote press restarts the cycle. Rising edge only: isRemoteActive
-  // stays true for 5 s after a press, and the cycle must not restart on
-  // every render during that window.
+  // A remote key press restarts the cycle. Straight from the hardware
+  // events, not from the activity context: focus and blur events are not
+  // presses, and only an actual press means someone is looking.
   const [cycle, setCycle] = useState(0);
-  const wasRemoteActive = useRef(isRemoteActive);
-  useEffect(() => {
-    if (isRemoteActive && !wasRemoteActive.current) setCycle((c) => c + 1);
-    wasRemoteActive.current = isRemoteActive;
-  }, [isRemoteActive]);
+  useTVEventHandler((event) => {
+    const type = event?.eventType;
+    if (!type || type === "focus" || type === "blur") return;
+    if (event.eventKeyAction !== undefined && event.eventKeyAction !== 1) {
+      return; // key down of a press that is still being held
+    }
+    setCycle((c) => c + 1);
+  });
 
   const [phase, setPhase] = useState<Phase>("full");
   useEffect(() => {
