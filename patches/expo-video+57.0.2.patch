@@ -15,10 +15,49 @@ index d2c09ac..84c8bbf 100644
    implementation "androidx.media3:media3-exoplayer:${androidxMedia3Version}"
    implementation "androidx.media3:media3-exoplayer-dash:${androidxMedia3Version}"
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
-index 65f16a5..cd5db7b 100644
+index 65f16a5..025e142 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
-@@ -153,6 +153,11 @@ class VideoModule : Module() {
+@@ -6,6 +6,7 @@ import androidx.media3.common.Player.REPEAT_MODE_OFF
+ import androidx.media3.common.Player.REPEAT_MODE_ONE
+ import androidx.media3.common.util.UnstableApi
+ import expo.modules.kotlin.Promise
++import expo.modules.kotlin.exception.Exceptions
+ import expo.modules.kotlin.functions.Coroutine
+ import expo.modules.kotlin.functions.Queues
+ import expo.modules.kotlin.modules.Module
+@@ -14,6 +15,8 @@ import expo.modules.kotlin.types.Either
+ import expo.modules.kotlin.views.ViewDefinitionBuilder
+ import expo.modules.video.enums.AudioMixingMode
+ import expo.modules.video.enums.ContentFit
++import expo.modules.video.player.DisplayHdr
++import expo.modules.video.player.VideoFormatSupport
+ import expo.modules.video.player.VideoPlayer
+ import expo.modules.video.records.BufferOptions
+ import expo.modules.video.records.PlayerBuilderOptions
+@@ -51,6 +54,21 @@ class VideoModule : Module() {
+       VideoView.isPictureInPictureSupported(appContext.throwingActivity)
+     }
+ 
++    // Asks the device's decoders the exact question media3 asks before it
++    // selects a video track (see VideoFormatSupport). Lets the app withhold a
++    // raw-file or pinned-Original tier a device cannot decode instead of
++    // playing a black screen with audio.
++    AsyncFunction("isVideoFormatSupported") { mimeType: String?, codecs: String?, width: Int, height: Int, frameRate: Double ->
++      val context = appContext.reactContext?.applicationContext ?: throw Exceptions.ReactContextLost()
++      VideoFormatSupport.probe(context, mimeType, codecs, width, height, frameRate)
++    }
++
++    // Display.HdrCapabilities ints (1 Dolby Vision, 2 HDR10, 3 HLG, 4 HDR10+).
++    Function("getDisplayHdrTypes") {
++      val context = appContext.reactContext?.applicationContext ?: throw Exceptions.ReactContextLost()
++      DisplayHdr.supportedTypes(context)
++    }
++
+     Function("getCurrentVideoCacheSize") {
+       VideoManager.cache.getCurrentCacheSize()
+     }
+@@ -153,6 +171,11 @@ class VideoModule : Module() {
            ref.audioTracks.availableAudioTracks
          }
  
@@ -30,6 +69,26 @@ index 65f16a5..cd5db7b 100644
        Property("audioTrack")
          .get { ref: VideoPlayer ->
            ref.audioTracks.currentAudioTrack
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/DisplayHdr.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/DisplayHdr.kt
+new file mode 100644
+index 0000000..56fd838
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/DisplayHdr.kt
+@@ -0,0 +1,14 @@
++package expo.modules.video.player
++
++import android.content.Context
++import android.hardware.display.DisplayManager
++import android.view.Display
++
++/** What the default display says it can show, as Android's HdrCapabilities ints. */
++object DisplayHdr {
++  fun supportedTypes(context: Context): List<Int> {
++    val manager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return emptyList()
++    val display = manager.getDisplay(Display.DEFAULT_DISPLAY) ?: return emptyList()
++    return display.hdrCapabilities?.supportedHdrTypes?.toList() ?: emptyList()
++  }
++}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/FlacSafeRenderersFactory.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/FlacSafeRenderersFactory.kt
 new file mode 100644
 index 0000000..ca60998
@@ -429,11 +488,98 @@ index 0000000..2642136
 +    else -> "unknown"
 +  }
 +}
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoFormatSupport.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoFormatSupport.kt
+new file mode 100644
+index 0000000..09e55b1
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoFormatSupport.kt
+@@ -0,0 +1,73 @@
++package expo.modules.video.player
++
++import android.content.Context
++import androidx.media3.common.Format
++import androidx.media3.common.MimeTypes
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
++import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
++
++/**
++ * The question media3's video renderer asks before a track is selected: is
++ * there a decoder for this MIME type, and does it accept this codec
++ * profile/level, size and frame rate (MediaCodecInfo.isFormatSupported)?
++ *
++ * Answers:
++ *  - "hardware" / "software": a decoder accepts the format.
++ *  - "exceeds": decoders exist for the MIME type but none accepts this
++ *    profile/level, size or rate. media3 still selects such a track as a last
++ *    resort, which ends in a decoder error or a slideshow.
++ *  - "unsupported": no decoder at all. media3 leaves the track unselected and
++ *    raises no error: audio plays over a black screen.
++ *  - "unknown": the question could not be formed (no MIME type).
++ */
++@UnstableApi
++object VideoFormatSupport {
++  fun probe(context: Context, mimeType: String?, codecs: String?, width: Int, height: Int, frameRate: Double): Map<String, Any?> {
++    val codecString = codecs?.takeIf { it.isNotBlank() }
++    val mime = mimeType?.takeIf { it.isNotBlank() } ?: codecString?.let { MimeTypes.getMediaMimeType(it) }
++    if (mime == null) {
++      return mapOf("support" to "unknown", "reason" to "no-mime", "decoders" to emptyList<String>())
++    }
++    val format = Format.Builder()
++      .setSampleMimeType(mime)
++      .apply {
++        codecString?.let { setCodecs(it) }
++        if (width > 0) setWidth(width)
++        if (height > 0) setHeight(height)
++        if (frameRate > 0) setFrameRate(frameRate.toFloat())
++      }
++      .build()
++
++    var probedMime = mime
++    var infos = decoderInfos(mime)
++    if (infos.isEmpty()) {
++      // The renderer's own fallback: a Dolby Vision format may be decoded by
++      // the HEVC/AVC decoder of its base layer.
++      MediaCodecUtil.getAlternativeCodecMimeType(format)?.let { alternative ->
++        infos = decoderInfos(alternative)
++        probedMime = alternative
++      }
++    }
++    val match = infos.firstOrNull { it.isFormatSupported(context, format) }
++    val support = when {
++      infos.isEmpty() -> "unsupported"
++      match == null -> "exceeds"
++      match.hardwareAccelerated -> "hardware"
++      else -> "software"
++    }
++    return mapOf(
++      "support" to support,
++      "mimeType" to probedMime,
++      "decoder" to match?.name,
++      "decoders" to infos.map { it.name },
++      "adaptive" to match?.adaptive
++    )
++  }
++
++  private fun decoderInfos(mime: String): List<MediaCodecInfo> = try {
++    MediaCodecUtil.getDecoderInfos(mime, false, false)
++  } catch (e: MediaCodecUtil.DecoderQueryException) {
++    emptyList()
++  }
++}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-index 8bae522..b2fe5f1 100644
+index 8bae522..817e606 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-@@ -60,7 +60,7 @@ import kotlin.time.DurationUnit
+@@ -2,6 +2,7 @@ package expo.modules.video.player
+ 
+ import android.content.Context
+ import android.media.MediaMetadataRetriever
++import android.util.Log
+ import androidx.media3.common.C
+ import android.webkit.URLUtil
+ import androidx.annotation.OptIn
+@@ -60,7 +61,7 @@ import kotlin.time.DurationUnit
  @UnstableApi
  class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSource?, playerBuilderOptions: expo.modules.video.records.PlayerBuilderOptions? = null) : AutoCloseable, SharedObject(appContext), IntervalUpdateEmitter {
    // This improves the performance of playing DRM-protected content
@@ -442,17 +588,21 @@ index 8bae522..b2fe5f1 100644
      .forceEnableMediaCodecAsynchronousQueueing()
      .setEnableDecoderFallback(true)
    private val listeners: MutableList<WeakReference<VideoPlayerListener>> = mutableListOf()
-@@ -78,6 +78,9 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -78,6 +79,13 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
      .apply {
        setLooper(context.mainLooper)
        setLoadControl(loadControl)
++      // Stock expo-video builds `trackSelector` and never passes it, so
++      // ExoPlayer ran its own selector and the field was dead. Wiring it in is
++      // what lets applyTrackSelectionPolicy() reach the selector ExoPlayer uses.
++      setTrackSelector(trackSelector)
 +      // media3's default meter starts at 2.4 Mbps on US Wi-Fi/Ethernet, which
 +      // only fits the transcoder's 144p rung; see SharedBandwidthMeter.
 +      setBandwidthMeter(SharedBandwidthMeter.get(context))
        playerBuilderOptions?.seekBackwardIncrement?.let {
          setSeekBackIncrementMs((it).toLong(DurationUnit.MILLISECONDS).coerceIn(1, 999_000))
        }
-@@ -128,9 +131,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -128,9 +136,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
    var duration = 0f
    var isLive = false
  
@@ -469,7 +619,7 @@ index 8bae522..b2fe5f1 100644
      }
      userVolume = volume
      sendEvent(PlayerEvent.VolumeChanged(new, old))
-@@ -319,7 +329,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -319,7 +334,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
      }
  
      override fun onVolumeChanged(volume: Float) {
@@ -487,7 +637,7 @@ index 8bae522..b2fe5f1 100644
          this@VideoPlayer.volume = volume
        }
      }
-@@ -343,7 +362,17 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -343,7 +367,17 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
  
    private val analyticsListener = object : AnalyticsListener {
      override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
@@ -506,7 +656,14 @@ index 8bae522..b2fe5f1 100644
        super.onVideoInputFormatChanged(eventTime, format, decoderReuseEvaluation)
      }
    }
-@@ -424,8 +453,12 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -418,18 +452,40 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+     val mediaSource = newSource?.toMediaSource(context)
+ 
+     mediaSource?.let {
++      applyTrackSelectionPolicy(newSource)
+       player.setMediaSource(it)
+       player.prepare()
+       commitedSource = newSource
        uncommittedSource = null
        isLoadingNewSource = true
      } ?: run {
@@ -514,13 +671,34 @@ index 8bae522..b2fe5f1 100644
 +      // clearMediaItems() alone only disables them, and a disabled renderer
 +      // keeps its codec: the TV banner's 4K decoder stayed allocated for the
 +      // whole film after the banner stripped its source.
++      applyTrackSelectionPolicy(null)
 +      player.stop()
        player.clearMediaItems()
 -      player.prepare()
        isLoadingNewSource = false
      }
    }
-@@ -578,21 +611,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
+ 
++  // Per-source track-selection policy, applied before the media source is
++  // set so the first selection already honours it. Reset to the defaults
++  // (no mixed-MIME adaptation, no preferred MIME) for a source that carries
++  // nothing, so a policy never leaks from one source into the next.
++  private fun applyTrackSelectionPolicy(source: VideoSource?) {
++    val mixed = source?.allowMixedCodecAdaptation ?: false
++    val preferred = source?.preferredVideoMimeTypes.orEmpty()
++    trackSelector.setParameters(
++      trackSelector.buildUponParameters()
++        .setAllowVideoMixedMimeTypeAdaptiveness(mixed)
++        .setPreferredVideoMimeTypes(*preferred.toTypedArray())
++        .build()
++    )
++    Log.i("ExpoVideoTrackPolicy", "mixedCodecAdaptation=$mixed preferredVideoMimeTypes=$preferred")
++  }
++
+   private fun applyPitchCorrection(playbackParameters: PlaybackParameters): PlaybackParameters {
+     val speed = playbackParameters.speed
+     val pitch = if (preservesPitch) 1f else speed
+@@ -578,21 +634,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
      for (i in 0 until group.length) {
        val format = group.getTrackFormat(i)
        val isSupported = group.isTrackSupported(i)
@@ -797,8 +975,28 @@ index 28afe31..aa5c8e9 100644
        val size = VideoSize(format)
        val mimeType = format.sampleMimeType
        val averageBitrate = format.averageBitrate.takeIf { it != Format.NO_VALUE }
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/VideoSource.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/VideoSource.kt
+index b0bfb49..7b36d25 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/records/VideoSource.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/records/VideoSource.kt
+@@ -28,7 +28,14 @@ class VideoSource(
+   @Field var metadata: VideoMetadata? = null,
+   @Field var headers: Map<String, String>? = null,
+   @Field var useCaching: Boolean = false,
+-  @Field val contentType: ContentType = ContentType.AUTO
++  @Field val contentType: ContentType = ContentType.AUTO,
++  // Track-selection policy for this source (Android). `allowMixedCodecAdaptation`
++  // lets ABR adapt across video MIME types (AVC <-> HEVC rungs); it must only be
++  // set on a master whose variants share one dynamic range, because media3 has
++  // no colour-range compatibility check of its own. `preferredVideoMimeTypes`
++  // is passed to DefaultTrackSelector.setPreferredVideoMimeTypes.
++  @Field var allowMixedCodecAdaptation: Boolean = false,
++  @Field var preferredVideoMimeTypes: List<String>? = null
+ ) : Record, Serializable {
+   private fun toMediaId(): String {
+     return "uri:${this.uri}" +
 diff --git a/node_modules/expo-video/build/VideoPlayer.types.d.ts b/node_modules/expo-video/build/VideoPlayer.types.d.ts
-index 8acf5e5..60e3c86 100644
+index 8acf5e5..271cd0b 100644
 --- a/node_modules/expo-video/build/VideoPlayer.types.d.ts
 +++ b/node_modules/expo-video/build/VideoPlayer.types.d.ts
 @@ -159,11 +159,22 @@ export declare class VideoPlayer extends SharedObject<VideoPlayerEvents> {
@@ -824,7 +1022,26 @@ index 8acf5e5..60e3c86 100644
      /**
       * An array of audio tracks available for the current video.
       *
-@@ -624,6 +635,21 @@ export type AudioTrack = {
+@@ -343,6 +354,18 @@ export type VideoSourceObject = {
+      * @platform ios
+      */
+     contentType?: ContentType;
++    /**
++     * Lets adaptive selection cross video MIME types (for example AVC and HEVC rungs of one
++     * HLS master). Only set it on a master whose variants share one dynamic range.
++     * @default false
++     * @platform android
++     */
++    allowMixedCodecAdaptation?: boolean;
++    /**
++     * Video MIME types the track selector should prefer, in order (`DefaultTrackSelector.setPreferredVideoMimeTypes`).
++     * @platform android
++     */
++    preferredVideoMimeTypes?: string[];
+ };
+ /**
+  * Contains information about any errors that the player encountered during the playback
+@@ -624,6 +647,21 @@ export type AudioTrack = {
       * @platform ios
       */
      autoSelect?: boolean;
@@ -846,6 +1063,23 @@ index 8acf5e5..60e3c86 100644
  };
  /**
   * Determines the time that the actual position seeked to may precede or exceed the requested seek position.
+diff --git a/node_modules/expo-video/ios/Records/VideoSource.swift b/node_modules/expo-video/ios/Records/VideoSource.swift
+index d9a69a0..836ce0e 100644
+--- a/node_modules/expo-video/ios/Records/VideoSource.swift
++++ b/node_modules/expo-video/ios/Records/VideoSource.swift
+@@ -21,5 +21,12 @@ internal struct VideoSource: Record {
+ 
+   @Field
+   var contentType: ContentType = .auto
++
++  // Android-only track-selection policy; declared so the record parses alike.
++  @Field
++  var allowMixedCodecAdaptation: Bool = false
++
++  @Field
++  var preferredVideoMimeTypes: [String]? = nil
+ }
+ // swiftlint:enable redundant_optional_initialization
 diff --git a/node_modules/expo-video/ios/VideoModule.swift b/node_modules/expo-video/ios/VideoModule.swift
 index 2bf2f75..25e8dcf 100644
 --- a/node_modules/expo-video/ios/VideoModule.swift
