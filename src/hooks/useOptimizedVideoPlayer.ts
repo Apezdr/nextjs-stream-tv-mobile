@@ -3,6 +3,8 @@ import { useVideoPlayer, VideoPlayer } from "expo-video";
 import { useRef, useEffect, useCallback, useState } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
+import { videoSourceFor } from "@/src/utils/videoRange";
+
 interface SavedPlayerState {
   url: string;
   currentTime: number;
@@ -53,8 +55,10 @@ export function useOptimizedVideoPlayer(
   const pinnedSource = pinnedSourceRef.current;
 
   // Use the original useVideoPlayer - conditionally apply onPlayerSetup
+  // The source object is derived from the pinned string, so expo-video's
+  // `JSON.stringify(parsedSource)` key is as stable as the string was.
   const player = useVideoPlayer(
-    pinnedSource,
+    pinnedSource ? videoSourceFor(pinnedSource) : null,
     deferSetup ? undefined : onPlayerSetup,
   );
 
@@ -133,7 +137,7 @@ export function useOptimizedVideoPlayer(
     });
     requestedSourceRef.current = videoURL;
     player
-      .replaceAsync({ uri: videoURL })
+      .replaceAsync(videoSourceFor(videoURL))
       .then(() => {
         // Only NOW does the player actually hold this source.
         pdbg("DRIFT-RESOLVED", {
@@ -294,7 +298,7 @@ export function useOptimizedVideoPlayer(
       );
 
       // Restore the video source
-      await player.replaceAsync({ uri: videoURL });
+      await player.replaceAsync(videoSourceFor(videoURL));
       requestedSourceRef.current = videoURL;
       markLoadedSource(videoURL);
 

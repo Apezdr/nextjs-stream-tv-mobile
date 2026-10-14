@@ -6,6 +6,8 @@ import {
   fileURL,
   getStreamKey,
   isFileTierURL,
+  isPinnedTierURL,
+  rangeParamOf,
   stripDirectParam,
   stripRangeParam,
   withDirectParam,
@@ -355,5 +357,25 @@ describe("describeStreamTier", () => {
     expect(describeStreamTier("https://cdn.example.com/banner.mp4")).toBe(
       "other",
     );
+  });
+});
+
+describe("rangeParamOf / isPinnedTierURL", () => {
+  it("reads the range control back from a master", () => {
+    expect(rangeParamOf(`${MASTER}?range=pq&direct=1`)).toBe("pq");
+    expect(rangeParamOf(`${MASTER}?range=sdr`)).toBe("sdr");
+    expect(rangeParamOf(`${MASTER}?direct=1`)).toBeNull();
+    expect(rangeParamOf(`${MASTER}?range=pq&range=sdr`)).toBe("invalid");
+    expect(rangeParamOf(`${MASTER}?range=hdr`)).toBe("invalid");
+    expect(rangeParamOf(`${FILE}?range=pq`)).toBeNull();
+    expect(rangeParamOf(null)).toBeNull();
+  });
+
+  it("names the tiers with no ABR", () => {
+    expect(isPinnedTierURL(FILE)).toBe(true);
+    expect(isPinnedTierURL(`${MASTER}?direct=only`)).toBe(true);
+    expect(isPinnedTierURL(`${MASTER}?direct=1`)).toBe(false);
+    expect(isPinnedTierURL(MASTER)).toBe(false);
+    expect(isPinnedTierURL(undefined)).toBe(false);
   });
 });

@@ -10,6 +10,8 @@ export type DirectPlayWithholdReason =
   | "segment-budget"
   | "unscannable"
   | "ineligible-source"
+  | "unmappable-codec"
+  | "codec-unsupported"
   | "poisoned"
   | "disabled";
 
@@ -88,6 +90,18 @@ export interface DirectPlayFileInfo {
   moovBytes?: number | null;
   sampleCount?: number | null;
   indexClass?: string;
+  /**
+   * Exact source facts (jit-transcoder, 2026-10-14): what the device-side
+   * codec gate asks the decoder about. `videoCodecs` is the RFC 6381 string
+   * of the video stream (e.g. "av01.0.12M.10", "avc1.640028"); the server
+   * sends ONE string despite the plural name, so an array is tolerated but
+   * not expected.
+   */
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  bitDepth?: number;
+  videoCodecs?: string | string[];
 }
 
 export interface DirectPlayInfo {

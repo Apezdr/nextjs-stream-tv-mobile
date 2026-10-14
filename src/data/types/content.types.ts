@@ -158,6 +158,9 @@ export interface TVDeviceMediaResponse {
   watchHistory?: WatchHistory; // Optional watch history data
 }
 
+/** The transcoder feature that makes `?range=pq|sdr` masters available. */
+export const STREAM_FEATURE_RANGE_FILTER = "master-video-range-filter-v1";
+
 // Media details response (from /media endpoint)
 export interface MediaDetailsResponse {
   id?: string;
@@ -175,6 +178,17 @@ export interface MediaDetailsResponse {
   // raw file because the transcoder cannot take this title. Emitted by the
   // server's sanitizeTVData; older servers omit it.
   playbackSource?: string;
+  // The transcoder's `/health.features` verbatim, sent only when
+  // `playbackSource` is "jit" (live since 2026-10-14). The app may only send
+  // `?range=` when it lists STREAM_FEATURE_RANGE_FILTER.
+  streamFeatures?: string[];
+  // "<width>x<height>" of the first video stream, from the sync's ffprobe.
+  dimensions?: string;
+  // The static file URL behind `videoURL`, and the transcoder's own
+  // eligibility verdict for this title. Not consumed by the player yet.
+  rawVideoURL?: string;
+  jitEligible?: boolean;
+  jitUrl?: string;
   description?: string; // Content description
   episodeNumber?: number; // For TV shows
   seasonNumber?: number; // For TV shows

@@ -5,6 +5,9 @@ import {
   describeActiveQuality,
   fileTierWithholdReason,
   globalDefaultOptions,
+  originalUsable,
+  originalWithholdReason,
+  tierUsable,
   reasonToUserCopy,
   resolveAvailableTiers,
   resolveInitialTier,
@@ -652,5 +655,242 @@ describe("describeActiveQuality (the chrome badge)", () => {
         videoTrack: { size: { width: 1280, height: 720 }, videoRange: "sdr" },
       }),
     ).toBe("Auto · 720p");
+  });
+});
+
+// ── Device-side codec gate (2026-10-14): the decoder's own answer on the
+// verdict's exact format vetoes the pinned tiers; a codec name never does.
+describe("device codec gate", () => {
+  const MASTER = "https://t.example.com/stream/abc/master.m3u8";
+  const DEXTER: DirectPlayInfo = {
+    hls: { offered: false, reason: "codec-unsupported" },
+    file: {
+      available: true,
+      container: "mkv",
+      videoCodec: "av1",
+      videoCodecs: "av01.0.12M.10",
+      width: 3840,
+      height: 2160,
+      frameRate: 23.976,
+      bitDepth: 10,
+    },
+  };
+  const AVC_OFFERED: DirectPlayInfo = {
+    hls: { offered: true, codecs: "avc1.640028", videoRange: "SDR" },
+    file: {
+      available: true,
+      container: "mp4",
+      videoCodec: "h264",
+      videoCodecs: "avc1.640028",
+      width: 1920,
+      height: 1080,
+      frameRate: 23.976,
+      bitDepth: 8,
+    },
+    original: { audio: [] },
+  };
+  const DEVICE_COPY = "This device can't decode AV1 10-bit video at 3840×2160.";
+
+  it("withholds Direct Play when the device has no decoder, or one that cannot take the format", () => {
+    for (const answer of ["unsupported", "exceeds"] as const) {
+      expect(
+        fileTierWithholdReason(DEXTER, "android-tv", {
+          fileVideoSupport: answer,
+        }),
+      ).toBe(DEVICE_COPY);
+      expect(
+        resolveInitialTier("directplay", DEXTER, false, "android-tv", {
+          fileVideoSupport: answer,
+        }),
+      ).toBe("auto");
+    }
+  });
+
+  it("keeps Direct Play on every answer that is not a refusal", () => {
+    for (const answer of [
+      "hardware",
+      "software",
+      "unknown",
+      undefined,
+    ] as const) {
+      expect(
+        fileTierWithholdReason(DEXTER, "android-tv", {
+          fileVideoSupport: answer,
+        }),
+      ).toBeNull();
+    }
+    expect(fileTierWithholdReason(DEXTER, "android-tv", null)).toBeNull();
+  });
+
+  it("renders the greyed Direct Play row with the device's reason and the Original row with the server's", () => {
+    const rows = resolveAvailableTiers(DEXTER, "android-tv", {
+      fileVideoSupport: "unsupported",
+    });
+    expect(rows.map((r) => r.id)).toEqual([
+      "auto",
+      "original",
+      "directplay",
+      "transcode",
+    ]);
+    expect(rows[1].unavailableReason).toBe(
+      "This file's video codec can't be streamed unmodified.",
+    );
+    expect(rows[2].unavailableReason).toBe(DEVICE_COPY);
+  });
+
+  it("vetoes the offered Original rung by the same answer, keeping the row greyed", () => {
+    const caps = { originalVideoSupport: "unsupported" as const };
+    expect(originalWithholdReason(AVC_OFFERED, "android-tv", caps)).toBe(
+      "This device can't decode H.264 video at 1920×1080.",
+    );
+    expect(originalUsable(AVC_OFFERED, "android-tv", caps)).toBe(false);
+    expect(tierUsable("original", AVC_OFFERED, "android-tv", caps)).toBe(false);
+    const rows = resolveAvailableTiers(AVC_OFFERED, "android-tv", caps);
+    expect(rows[1]).toMatchObject({
+      id: "original",
+      unavailableReason: "This device can't decode H.264 video at 1920×1080.",
+    });
+    expect(
+      resolveInitialTier("original", AVC_OFFERED, false, "android-tv", caps),
+    ).toBe("auto");
+    expect(
+      resolveTierSourceURL(MASTER, "original", AVC_OFFERED, "android-tv", caps),
+    ).toBe(`${MASTER}?direct=1`);
+  });
+
+  it("leaves the Original rung alone when the device accepts it or cannot say", () => {
+    for (const answer of [
+      "hardware",
+      "software",
+      "unknown",
+      undefined,
+    ] as const) {
+      const caps = { originalVideoSupport: answer };
+      expect(
+        originalWithholdReason(AVC_OFFERED, "android-tv", caps),
+      ).toBeNull();
+      expect(originalUsable(AVC_OFFERED, "android-tv", caps)).toBe(true);
+      expect(
+        resolveAvailableTiers(AVC_OFFERED, "android-tv", caps)[1],
+      ).toMatchObject({
+        id: "original",
+        description: expect.stringMatching(/pinned/i),
+      });
+    }
+  });
+
+  it("never applies on Apple platforms, where the probe cannot be asked", () => {
+    const caps = {
+      fileVideoSupport: "unsupported" as const,
+      originalVideoSupport: "unsupported" as const,
+    };
+    expect(originalWithholdReason(AVC_OFFERED, "apple-tv", caps)).toBeNull();
+    expect(fileTierWithholdReason(DEXTER, "apple-tv", caps)).toBeNull();
+    expect(
+      resolveAvailableTiers(AVC_OFFERED, "apple-tv", caps).map((r) => r.id),
+    ).toEqual(["auto", "original", "transcode"]);
+  });
+
+  it("descends from a vetoed Direct Play straight to the ladder, never into the same codec's copy rung", () => {
+    const caps = {
+      fileVideoSupport: "unsupported" as const,
+      originalVideoSupport: "unsupported" as const,
+    };
+    expect(descentTierFor("directplay", "android-tv", AVC_OFFERED, caps)).toBe(
+      "transcode",
+    );
+    expect(
+      descentTierFor("directplay", "android-tv", AVC_OFFERED, {
+        fileVideoSupport: "hardware",
+      }),
+    ).toBe("original");
+  });
+
+  it("maps the new server reason and keeps the enriched copy first", () => {
+    expect(reasonToUserCopy("codec-unsupported")).toBe(
+      "This file's video codec can't be streamed unmodified.",
+    );
+    const enriched: DirectPlayInfo = {
+      ...DEXTER,
+      reasonCopy: "Server says no.",
+    };
+    expect(
+      resolveAvailableTiers(enriched, "android-tv")[1].unavailableReason,
+    ).toBe("Server says no.");
+  });
+});
+
+// ── Range-filtered ABR masters: only the ABR tiers carry `range`, only on
+// Android, written before `direct` so one selection has one spelling.
+describe("resolveTierSourceURL with a range", () => {
+  const MASTER = "https://t.example.com/stream/abc/master.m3u8";
+  const OFFERED: DirectPlayInfo = {
+    hls: { offered: true, codecs: "hvc1.1.6.L153.90" },
+    file: { available: true, container: "mkv", videoCodec: "hevc" },
+    original: { audio: [] },
+  };
+
+  it("adds the range to Auto and Transcoded only", () => {
+    expect(
+      resolveTierSourceURL(MASTER, "auto", OFFERED, "android-tv", null, "sdr"),
+    ).toBe(`${MASTER}?range=sdr&direct=1`);
+    expect(
+      resolveTierSourceURL(
+        MASTER,
+        "transcode",
+        OFFERED,
+        "android-tv",
+        null,
+        "pq",
+      ),
+    ).toBe(`${MASTER}?range=pq`);
+    expect(
+      resolveTierSourceURL(
+        `${MASTER}?token=x`,
+        "auto",
+        OFFERED,
+        "android",
+        null,
+        "sdr",
+      ),
+    ).toBe(`${MASTER}?token=x&range=sdr&direct=1`);
+  });
+
+  it("never puts a range on the pinned tiers", () => {
+    expect(
+      resolveTierSourceURL(
+        MASTER,
+        "original",
+        OFFERED,
+        "android-tv",
+        null,
+        "pq",
+      ),
+    ).toBe(`${MASTER}?direct=only`);
+    expect(
+      resolveTierSourceURL(
+        MASTER,
+        "directplay",
+        OFFERED,
+        "android-tv",
+        null,
+        "sdr",
+      ),
+    ).toBe("https://t.example.com/stream/abc/file");
+  });
+
+  it("ignores the range off Android and when none was resolved", () => {
+    expect(
+      resolveTierSourceURL(MASTER, "auto", OFFERED, "apple-tv", null, "pq"),
+    ).toBe(`${MASTER}?direct=1`);
+    expect(
+      resolveTierSourceURL(MASTER, "auto", OFFERED, "web", null, "pq"),
+    ).toBe(MASTER);
+    expect(
+      resolveTierSourceURL(MASTER, "auto", OFFERED, "android-tv", null, null),
+    ).toBe(`${MASTER}?direct=1`);
+    expect(resolveTierSourceURL(MASTER, "auto", OFFERED, "android-tv")).toBe(
+      `${MASTER}?direct=1`,
+    );
   });
 });

@@ -53,6 +53,49 @@ export interface CodecSupportProbeEntry {
   support: "hardware" | "software" | "unsupported" | "unknown";
 }
 
+/**
+ * What the silent-failure guard concluded: the player reached readyToPlay
+ * and the clock advanced, but no video track was selected / no frame was
+ * rendered / no audio track was selected. media3 raises no error for these.
+ */
+export type SilentFailureVerdict =
+  | "video-unsupported"
+  | "video-not-rendering"
+  | "video-unselected"
+  | "audio-unselected";
+
+export type SilentFailureAction =
+  "descend-or-card" | "audio-retry" | "report-only";
+
+export interface SilentFailureVideoTrack {
+  id: string | null;
+  mimeType: string | null;
+  width: number | null;
+  height: number | null;
+  /** media3's per-track support flag (FORMAT_HANDLED only); null off Android. */
+  isSupported: boolean | null;
+}
+
+export interface SilentFailureAudioTrack {
+  id: string | null;
+  sampleMimeType: string | null;
+  isSupported: boolean | null;
+}
+
+export interface SilentFailureDetails {
+  verdict: SilentFailureVerdict;
+  action: SilentFailureAction;
+  /** Seconds the playback clock advanced since the source became ready. */
+  clockAdvancedSec: number;
+  firstFrameSeen: boolean;
+  /** `describeStreamTier(url)` — which delivery tier was playing. */
+  tier: string;
+  videoTracks: SilentFailureVideoTrack[];
+  selectedVideoTrack: string | null;
+  audioTracks: SilentFailureAudioTrack[];
+  selectedAudioTrack: string | null;
+}
+
 /** `details` shape for category "playback". */
 export interface PlaybackErrorDetails {
   /** The stream URL in use when the error fired (master.m3u8 URL). */
@@ -79,4 +122,6 @@ export interface PlaybackErrorDetails {
     to: string;
     position: number;
   };
+  /** Present when the silent-failure guard, not a player error, raised this. */
+  silentFailure?: SilentFailureDetails;
 }

@@ -13,14 +13,23 @@
 //   directplay  `/file` — the untouched container, every original track,
 //               Android only, subject to the device-side vetoes below.
 //   transcode   default master — the ladder only. The opt-out.
+//
+// Both pinned tiers are also vetoed on Android when the device's decoder,
+// asked about the file's exact codec, size and frame rate (verdict fields
+// width/height/frameRate/videoCodecs, DeviceDecodeCapabilities), says no.
+// The ABR tiers carry a `range` (pq|sdr) when the device negotiated one.
 import { DirectPlayInfo } from "@/src/data/types/directPlay.types";
 import { PlatformClass } from "@/src/utils/deviceInfo";
 import {
+  StreamVideoRange,
   fileURL,
   stripDirectParam,
   withDirectOnlyParam,
   withDirectParam,
+  withRangeParam,
 } from "@/src/utils/streamUrls";
+import type { VideoFormatSupport } from "@/src/utils/videoDiagnostics";
+import { deviceCannotDecodeCopy, videoFormatOf } from "@/src/utils/videoFormat";
 
 function isApple(platformClass: PlatformClass): boolean {
   return platformClass === "apple-tv" || platformClass === "ios";
@@ -39,6 +48,20 @@ function isAndroid(platformClass: PlatformClass): boolean {
 export interface DeviceDecodeCapabilities {
   /** Dolby Vision profile numbers the decoders advertise; null = unknown. */
   dolbyVisionProfiles?: number[] | null;
+  /**
+   * The decoder's answer for the raw file's video format and for the
+   * Original rung's (videoFormatOf → probeVideoFormatSupport). undefined =
+   * not asked yet; "unknown" = could not be asked. Only "unsupported" (no
+   * decoder at all) and "exceeds" (a decoder, but not for this profile,
+   * size or rate) withhold a tier: the device's own word on the exact file,
+   * never a rule keyed on a codec name.
+   */
+  fileVideoSupport?: VideoFormatSupport;
+  originalVideoSupport?: VideoFormatSupport;
+}
+
+function isDecoderRefusal(support: VideoFormatSupport | undefined): boolean {
+  return support === "unsupported" || support === "exceeds";
 }
 
 // ExoPlayer's MP4 extractor materializes the whole sample table on the Java
@@ -62,6 +85,16 @@ export function fileTierWithholdReason(
   if (!isAndroid(platformClass)) return null;
   const file = info?.file;
   if (!file?.available) return null;
+
+  // The device asked about this exact file said no. Without a decoder media3
+  // plays the audio over a black screen and raises nothing, so this is the
+  // one veto that matters most; "exceeds" ends in an error or a slideshow.
+  if (isDecoderRefusal(caps?.fileVideoSupport)) {
+    const spec = videoFormatOf(info).file;
+    return spec
+      ? deviceCannotDecodeCopy(spec)
+      : "This device can't decode this file's video.";
+  }
 
   const dvProfile = file.dvProfile;
   if (typeof dvProfile === "number") {
@@ -118,6 +151,39 @@ export function pinnedOriginalSupported(
   info: DirectPlayInfo | null | undefined,
 ): boolean {
   return !!info?.hls?.offered && info.original !== undefined;
+}
+
+/**
+ * Why the pinned-Original master must not be opened on this device even
+ * though the server offers it: the copy rung is the source video
+ * re-packaged, so a decoder that refuses the raw file refuses it too, and
+ * `?direct=only` pins that one variant with nothing to fall back to. Null
+ * when nothing known forbids it. Android only, like the file-tier veto.
+ */
+export function originalWithholdReason(
+  info: DirectPlayInfo | null | undefined,
+  platformClass: PlatformClass,
+  caps?: DeviceDecodeCapabilities | null,
+): string | null {
+  if (!isAndroid(platformClass)) return null;
+  if (!pinnedOriginalSupported(info)) return null;
+  if (!isDecoderRefusal(caps?.originalVideoSupport)) return null;
+  const spec = videoFormatOf(info).original;
+  return spec
+    ? deviceCannotDecodeCopy(spec)
+    : "This device can't decode the original video.";
+}
+
+/** Whether the pinned-Original master can be opened: offered AND not vetoed here. */
+export function originalUsable(
+  info: DirectPlayInfo | null | undefined,
+  platformClass: PlatformClass,
+  caps?: DeviceDecodeCapabilities | null,
+): boolean {
+  return (
+    pinnedOriginalSupported(info) &&
+    originalWithholdReason(info, platformClass, caps) === null
+  );
 }
 
 export type QualityTierId = "auto" | "original" | "directplay" | "transcode";
@@ -194,6 +260,10 @@ export function reasonToUserCopy(reason: string | undefined): string | null {
     case "ineligible-source":
     case "unmappable-codec":
       return "This format can't be streamed unmodified.";
+    case "codec-unsupported":
+      // The copy rung handles only codecs it can express in HLS; this one
+      // (AV1, say) is not among them. Distinct from a structural refusal.
+      return "This file's video codec can't be streamed unmodified.";
     case "poisoned":
       return "Original streaming was disabled for this title after a playback fault.";
     default:
@@ -218,7 +288,7 @@ export function tierUsable(
   if (platformClass === "web") return tier === "auto";
   switch (tier) {
     case "original":
-      return pinnedOriginalSupported(info);
+      return originalUsable(info, platformClass, caps);
     case "directplay":
       return directPlayUsable(info, platformClass, caps);
     default:
@@ -253,7 +323,14 @@ export function resolveAvailableTiers(
   const tiers: QualityTierOption[] = [row("auto")];
   if (info) {
     if (pinnedOriginalSupported(info)) {
-      tiers.push(row("original"));
+      // Offered by the server; a device veto keeps the row, greyed, with
+      // the reason, exactly like the Direct Play row below.
+      tiers.push(
+        row(
+          "original",
+          originalWithholdReason(info, platformClass, caps) ?? undefined,
+        ),
+      );
     } else if (
       !info.hls?.offered &&
       info.hls?.reason !== undefined &&
@@ -304,22 +381,35 @@ export function resolveTierSourceURL(
   info: DirectPlayInfo | null | undefined,
   platformClass: PlatformClass,
   caps?: DeviceDecodeCapabilities | null,
+  range?: StreamVideoRange | null,
 ): string {
   // Defensive: the default master must never carry a stray `direct` param,
   // whatever the API delivered.
-  if (platformClass === "web" || tier === "transcode") {
-    return stripDirectParam(masterURL);
+  if (platformClass === "web") return stripDirectParam(masterURL);
+  if (tier === "transcode") {
+    return withRange(stripDirectParam(masterURL), range, platformClass);
   }
   if (tier === "directplay" && directPlayUsable(info, platformClass, caps)) {
     return fileURL(masterURL) ?? masterURL;
   }
-  if (tier === "original" && pinnedOriginalSupported(info)) {
+  if (tier === "original" && originalUsable(info, platformClass, caps)) {
     return withDirectOnlyParam(masterURL);
   }
   // Auto — and any pinned tier this title cannot take: the ?direct=1 master
   // is the ladder plus the Original rung when offered, identical to the
   // default master otherwise.
-  return withDirectParam(masterURL);
+  return withRange(withDirectParam(masterURL), range, platformClass);
+}
+
+// The ABR masters carry the range the device negotiated (Android only in
+// this pass; Apple keeps the mixed master). The pinned tiers never do.
+function withRange(
+  url: string,
+  range: StreamVideoRange | null | undefined,
+  platformClass: PlatformClass,
+): string {
+  if (!range || !isAndroid(platformClass)) return url;
+  return withRangeParam(url, range);
 }
 
 /**
@@ -343,9 +433,9 @@ export function resolveInitialTier(
       return "transcode";
     case "directplay":
       if (directPlayUsable(info, platformClass, caps)) return "directplay";
-      return pinnedOriginalSupported(info) ? "original" : "auto";
+      return originalUsable(info, platformClass, caps) ? "original" : "auto";
     case "original":
-      return pinnedOriginalSupported(info) ? "original" : "auto";
+      return originalUsable(info, platformClass, caps) ? "original" : "auto";
     default:
       return "auto";
   }
@@ -365,11 +455,16 @@ export function descentTierFor(
   tier: QualityTierId,
   platformClass: PlatformClass,
   info?: DirectPlayInfo | null,
+  caps?: DeviceDecodeCapabilities | null,
 ): QualityTierId | null {
   if (platformClass === "web") return null;
   switch (tier) {
     case "directplay":
-      return pinnedOriginalSupported(info) ? "original" : "transcode";
+      // A device that cannot decode the file cannot decode its copy rung
+      // either, so that descent skips straight to the ladder.
+      return originalUsable(info, platformClass, caps)
+        ? "original"
+        : "transcode";
     case "original":
     case "auto":
       return "transcode";

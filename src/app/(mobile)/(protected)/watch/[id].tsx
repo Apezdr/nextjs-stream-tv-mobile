@@ -19,6 +19,7 @@ import MobileVideoControls from "@/src/components/Mobile/Video/MobileVideoContro
 import { Colors } from "@/src/constants/Colors";
 import { useDirectPlayInfo } from "@/src/data/hooks/queries/useDirectPlayInfo";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
+import { useSilentTrackGuard } from "@/src/data/hooks/useSilentTrackGuard";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
 import { useVideoTierFallback } from "@/src/data/hooks/useVideoTierFallback";
 import { contentService } from "@/src/data/services/contentService";
@@ -29,6 +30,7 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useQualityTier } from "@/src/hooks/useQualityTier";
+import { useVideoRange } from "@/src/hooks/useVideoRange";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
 import { navigationHelper } from "@/src/utils/navigationHelper";
@@ -205,6 +207,11 @@ export default function MobileWatchPage() {
     return () => setVerdictAudioTracks(null);
   }, [directPlayInfo]);
 
+  // The dynamic range the ABR masters ask for (`?range=pq|sdr`), from the
+  // payload's streamFeatures/transfer/dimensions, the display and the
+  // "HDR and 4K Auto" preference; null keeps today's unfiltered master.
+  const videoRange = useVideoRange(effectiveVideoData);
+
   const quality = useQualityTier({
     videoURL: effectiveVideoURL,
     directPlayInfo,
@@ -216,6 +223,7 @@ export default function MobileWatchPage() {
     playerRef,
     notifySourceReplacedRef,
     playbackSource: effectiveVideoData?.playbackSource ?? null,
+    videoRange,
   });
 
   const playbackSourceURL = quality.activeSourceURL;
@@ -518,8 +526,25 @@ export default function MobileWatchPage() {
     suppressWhile: tierFallback.isHandling,
   });
 
-  // Combine content, audio and video errors
-  const finalError = contentError || audioError || videoError;
+  // The failures no error announces: ready, clock running, but no video
+  // track selected / no frame drawn / no audio track selected. Armed only
+  // while the VideoView is mounted; PiP pauses it.
+  const silentGuard = useSilentTrackGuard({
+    player,
+    quality,
+    videoURL: playbackSourceURL,
+    enabled: !(loading || !quality.sourceReady) && !!player,
+    isHandlingError: tierFallback.isHandling,
+    isInPictureInPicture: () => pipActiveRef.current,
+    preferredLanguages: ["en"],
+    getPlaybackSessionId: getSessionId,
+    mediaId: params.id ?? null,
+    mediaType: params.type ?? null,
+  });
+
+  // Combine content, audio, video and silent-failure errors
+  const finalError =
+    contentError || audioError || videoError || silentGuard.error;
 
   // Quality-source resolution (preference hydration + bounded verdict wait)
   // is part of initial loading.
@@ -817,6 +842,16 @@ export default function MobileWatchPage() {
       <View style={styles.container}>
         <View style={styles.messageContainer}>
           <Text style={styles.errorText}>Error: {finalError}</Text>
+          {/* A silent failure (no frame drawn, no track selected) can be
+              retried in place; player errors have their own paths. */}
+          {silentGuard.error ? (
+            <TouchableOpacity
+              style={styles.errorButton}
+              onPress={silentGuard.retry}
+            >
+              <Text style={styles.errorButtonText}>Try again</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={styles.errorButton} onPress={handleExit}>
             <Text style={styles.errorButtonText}>Go back</Text>
           </TouchableOpacity>
@@ -850,6 +885,7 @@ export default function MobileWatchPage() {
         nativeControls={false}
         onPictureInPictureStart={handlePiPStart}
         onPictureInPictureStop={handlePiPStop}
+        onFirstFrameRender={silentGuard.onFirstFrameRender}
       />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <MobileVideoControls

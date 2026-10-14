@@ -44,11 +44,19 @@ interface QualityPreferencesState {
   rememberedOrder: string[];
   /** Mobile: avoid Original/high-bitrate tiers automatically on cellular. */
   cellularDataSaver: boolean;
+  /**
+   * "HDR and 4K Auto": ask the transcoder for range-filtered masters
+   * (`?range=pq|sdr`) and let Auto adapt across video codecs on SDR masters,
+   * so a 4K HEVC rung and HDR are reachable under Auto. Off is today's
+   * behaviour: the unfiltered master, no codec crossing, no range request.
+   */
+  enhancedAutoPlayback: boolean;
   /** True once AsyncStorage rehydration finished (success or failure). */
   hasHydrated: boolean;
   setGlobalDefault: (tier: QualityTierId) => void;
   rememberTier: (mediaKey: string, tier: QualityTierId) => void;
   setCellularDataSaver: (enabled: boolean) => void;
+  setEnhancedAutoPlayback: (enabled: boolean) => void;
 }
 
 export const useQualityPreferencesStore = create<QualityPreferencesState>()(
@@ -58,6 +66,7 @@ export const useQualityPreferencesStore = create<QualityPreferencesState>()(
       rememberedTiers: {},
       rememberedOrder: [],
       cellularDataSaver: true,
+      enhancedAutoPlayback: true,
       hasHydrated: false,
       setGlobalDefault: (tier) => set({ globalDefault: tier }),
       rememberTier: (mediaKey, tier) =>
@@ -77,6 +86,8 @@ export const useQualityPreferencesStore = create<QualityPreferencesState>()(
           return { rememberedTiers, rememberedOrder };
         }),
       setCellularDataSaver: (enabled) => set({ cellularDataSaver: enabled }),
+      setEnhancedAutoPlayback: (enabled) =>
+        set({ enhancedAutoPlayback: enabled }),
     }),
     {
       name: "quality-preferences",
@@ -86,6 +97,7 @@ export const useQualityPreferencesStore = create<QualityPreferencesState>()(
         rememberedTiers: state.rememberedTiers,
         rememberedOrder: state.rememberedOrder,
         cellularDataSaver: state.cellularDataSaver,
+        enhancedAutoPlayback: state.enhancedAutoPlayback,
       }),
       // Fires after the rehydration attempt settles either way — an empty or
       // unreadable store must still unblock playback.

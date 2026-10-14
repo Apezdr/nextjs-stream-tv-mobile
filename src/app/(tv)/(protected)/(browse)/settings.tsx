@@ -18,6 +18,12 @@ export default function SettingsPage() {
   const setGlobalDefault = useQualityPreferencesStore(
     (s) => s.setGlobalDefault,
   );
+  const enhancedAutoPlayback = useQualityPreferencesStore(
+    (s) => s.enhancedAutoPlayback,
+  );
+  const setEnhancedAutoPlayback = useQualityPreferencesStore(
+    (s) => s.setEnhancedAutoPlayback,
+  );
 
   const qualityOptions = useMemo(
     () => globalDefaultOptions(getPlatformClass()),
@@ -68,6 +74,35 @@ export default function SettingsPage() {
         <Text style={styles.sectionFootnote}>
           Picking a quality inside the player remembers it for that title.
         </Text>
+      </View>
+
+      {/* Range-filtered masters + cross-codec Auto (device negotiates
+          `?range=pq|sdr` with the transcoder). Off = today's behaviour. */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Playback features</Text>
+        <TVFocusGuideView autoFocus>
+          <Pressable
+            style={({ focused }) => [
+              styles.optionRow,
+              enhancedAutoPlayback && styles.optionRowSelected,
+              focused && styles.optionRowFocused,
+            ]}
+            onPress={() => setEnhancedAutoPlayback(!enhancedAutoPlayback)}
+            focusable
+            isTVSelectable
+          >
+            <View style={styles.optionText}>
+              <Text style={styles.optionLabel}>HDR and 4K Auto</Text>
+              <Text style={styles.optionDescription}>
+                Lets Auto reach the 4K and HDR streams when the server offers
+                them. Turn off to play exactly as before.
+              </Text>
+            </View>
+            <Text style={styles.optionLabel}>
+              {enhancedAutoPlayback ? "On" : "Off"}
+            </Text>
+          </Pressable>
+        </TVFocusGuideView>
       </View>
     </ScrollView>
   );

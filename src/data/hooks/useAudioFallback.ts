@@ -16,6 +16,7 @@ import {
   HlsAudioGroupInfo,
   getCachedAudioGroups,
 } from "@/src/utils/hlsAudioFormats";
+import { videoSourceFor } from "@/src/utils/videoRange";
 
 interface Options {
   videoURL: string | null;
@@ -210,7 +211,7 @@ export function useAudioFallback({
         // The replace reloads the source to recover from the codec error —
         // this is the ONLY place a track switch may go through replaceAsync;
         // manual selection assigns player.audioTrack directly.
-        await player.replaceAsync({ uri: urlRef.current });
+        await player.replaceAsync(videoSourceFor(urlRef.current));
 
         // On Apple platforms audio selection is per-AVPlayerItem, so the
         // pre-replace assignment dies with the old item and automatic

@@ -15,8 +15,16 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { QualityTierController } from "@/src/hooks/useQualityTier";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
-import { isDirectOnlyURL, isFileTierURL } from "@/src/utils/streamUrls";
+import {
+  describeStreamTier,
+  isDirectOnlyURL,
+  isPinnedTierURL,
+} from "@/src/utils/streamUrls";
 import { logPlaybackError } from "@/src/utils/videoDiagnostics";
+import {
+  rangeNegotiationFailure,
+  videoSourceFor,
+} from "@/src/utils/videoRange";
 
 // Matches useAudioFallback's trigger exactly — those errors are its job.
 const AUDIO_ERROR_RE =
@@ -44,10 +52,6 @@ const HTTP_404_RE = /Response code: 404|ERROR_CODE_IO_BAD_HTTP_STATUS/;
 function isNoRetryError(sourceURL: string, message: string): boolean {
   if (NO_RETRY_RE.test(message)) return true;
   return isDirectOnlyURL(sourceURL) && HTTP_404_RE.test(message);
-}
-
-function isPinnedTierURL(url: string | null): boolean {
-  return isDirectOnlyURL(url) || isFileTierURL(url);
 }
 
 interface Options {
@@ -213,7 +217,34 @@ export function useVideoTierFallback({
 
       const q = qualityRef.current;
       const src = videoURLRef.current;
-      if (!src || !q.descentTarget || handlingRef.current) return;
+      if (!src || handlingRef.current) return;
+
+      // The server refused the `range` this master asked for (406 nothing
+      // left in that range, 400 invalid). A negotiation answer, never worth
+      // retrying the same URL: ask for the next range down instead, at
+      // position, and only descend a tier when nothing is left to ask for.
+      if (rangeNegotiationFailure(src, e.message)) {
+        handlingRef.current = true;
+        try {
+          console.warn(
+            `[useVideoTierFallback] Range refused on ${describeStreamTier(src)} — negotiating down:`,
+            e.message,
+          );
+          logPlaybackError({
+            rawErrorMessage: `Range negotiation (${describeStreamTier(src)}): ${e.message}`,
+            severity: "warning",
+            videoURL: src,
+            playerStatus: status,
+            playbackSessionId: ctxRef.current.getPlaybackSessionId?.() ?? null,
+            mediaId: ctxRef.current.mediaId ?? null,
+            mediaType: ctxRef.current.mediaType ?? null,
+          });
+          if (await q.downgradeRange()) return;
+        } finally {
+          handlingRef.current = false;
+        }
+      }
+      if (!q.descentTarget) return;
 
       // Claim the error synchronously so useVideoErrorHandling's listener
       // (registered after this hook's) suppresses its fatal error surface.
@@ -239,7 +270,7 @@ export function useVideoTierFallback({
             "[useVideoTierFallback] Fatal player error — retrying same source once:",
             e.message,
           );
-          await player.replaceAsync({ uri: src });
+          await player.replaceAsync(videoSourceFor(src));
           if (position > 0) {
             applyResumePosition(player, position, "useVideoTierFallback");
           }

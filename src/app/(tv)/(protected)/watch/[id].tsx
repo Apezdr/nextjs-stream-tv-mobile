@@ -20,6 +20,7 @@ import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { useDirectPlayInfo } from "@/src/data/hooks/queries/useDirectPlayInfo";
 import { useAudioFallback } from "@/src/data/hooks/useAudioFallback";
+import { useSilentTrackGuard } from "@/src/data/hooks/useSilentTrackGuard";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
 import { useVideoTierFallback } from "@/src/data/hooks/useVideoTierFallback";
 import { setWatchMode, tvQueryHelpers } from "@/src/data/query/queryClient";
@@ -34,13 +35,18 @@ import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useQualityTier } from "@/src/hooks/useQualityTier";
+import { useVideoRange, videoRangeFor } from "@/src/hooks/useVideoRange";
 import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
-import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
+import {
+  qualityPrefMediaKey,
+  useQualityPreferencesStore,
+} from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
 import { describeActiveQuality } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
+import { videoSourceFor } from "@/src/utils/videoRange";
 import { patchWatchHistoryPosition } from "@/src/utils/watchProgress";
 
 function parseNumericParam(value: string | undefined): number | undefined {
@@ -222,6 +228,11 @@ export default function WatchPage() {
     return () => setVerdictAudioTracks(null);
   }, [directPlayInfo]);
 
+  // The dynamic range the ABR masters ask for (`?range=pq|sdr`), from the
+  // payload's streamFeatures/transfer/dimensions, the display and the
+  // "HDR and 4K Auto" preference; null keeps today's unfiltered master.
+  const videoRange = useVideoRange(effectiveVideoData);
+
   const quality = useQualityTier({
     videoURL: effectiveVideoURL,
     directPlayInfo,
@@ -233,6 +244,7 @@ export default function WatchPage() {
     playerRef,
     notifySourceReplacedRef,
     playbackSource: effectiveVideoData?.playbackSource ?? null,
+    videoRange,
   });
 
   const playbackSourceURL = quality.activeSourceURL;
@@ -468,6 +480,24 @@ export default function WatchPage() {
     suppressWhile: tierFallback.isHandling,
   });
 
+  // The failures no error announces: ready, clock running, but no video
+  // track selected / no frame drawn / no audio track selected (media3 drops
+  // a track it has no decoder for silently). Only armed while the
+  // VideoView below is mounted, which is the same condition as the full
+  // loading screen not showing.
+  const silentGuard = useSilentTrackGuard({
+    player,
+    quality,
+    videoURL: playbackSourceURL,
+    enabled:
+      !((loading || !quality.sourceReady) && !currentEpisodeData) && !!player,
+    isHandlingError: tierFallback.isHandling,
+    preferredLanguages: ["en"],
+    getPlaybackSessionId: getSessionId,
+    mediaId: params.id ?? null,
+    mediaType: params.type ?? null,
+  });
+
   // Refs let the fetch callback read the latest "first load" state without
   // listing them as deps. Including them in the deps array would re-create
   // `fetchEpisodeData` after the first fetch, which in turn re-fires the
@@ -674,8 +704,12 @@ export default function WatchPage() {
           console.log("[WatchPage] Replacing video source");
           const nextSourceURL = quality.applyEpisodeSource(
             newEpisodeData.videoURL,
+            videoRangeFor(
+              newEpisodeData,
+              useQualityPreferencesStore.getState().enhancedAutoPlayback,
+            ),
           );
-          await player.replaceAsync({ uri: nextSourceURL });
+          await player.replaceAsync(videoSourceFor(nextSourceURL));
           // Tell the hook we swapped the source ourselves, so its drift effect
           // does not issue a second redundant replaceAsync when
           // effectiveVideoURL catches up — that reload would discard both the
@@ -766,7 +800,11 @@ export default function WatchPage() {
 
   // Combine content, audio, video, and episode switch errors
   const finalError =
-    contentError || audioError || videoError || episodeSwitchError;
+    contentError ||
+    audioError ||
+    videoError ||
+    silentGuard.error ||
+    episodeSwitchError;
 
   // Separate initial loading from episode switching
   // Only show full loading screen for initial page load, not during episode
@@ -1011,9 +1049,24 @@ export default function WatchPage() {
       <View style={styles.container}>
         <View style={styles.messageContainer}>
           <Text style={styles.errorText}>Error: {finalError}</Text>
+          {/* A silent failure (no frame drawn, no track selected) can be
+              retried in place; player errors have their own paths. */}
+          {silentGuard.error ? (
+            <Pressable
+              focusable
+              hasTVPreferredFocus
+              style={({ focused }) => [
+                styles.clickableText,
+                focused && styles.clickableTextFocused,
+              ]}
+              onPress={silentGuard.retry}
+            >
+              <Text style={styles.messageText}>Try again</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             focusable
-            hasTVPreferredFocus
+            hasTVPreferredFocus={!silentGuard.error}
             style={({ focused }) => [
               styles.clickableText,
               focused && styles.clickableTextFocused,
@@ -1055,6 +1108,7 @@ export default function WatchPage() {
         fullscreenOptions={{ enable: false }}
         allowsPictureInPicture={false}
         nativeControls={false}
+        onFirstFrameRender={silentGuard.onFirstFrameRender}
       />
 
       {isControlsReady ? (

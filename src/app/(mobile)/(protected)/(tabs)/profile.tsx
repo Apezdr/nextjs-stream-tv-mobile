@@ -31,6 +31,12 @@ export default function ProfilePage() {
   const setCellularDataSaver = useQualityPreferencesStore(
     (s) => s.setCellularDataSaver,
   );
+  const enhancedAutoPlayback = useQualityPreferencesStore(
+    (s) => s.enhancedAutoPlayback,
+  );
+  const setEnhancedAutoPlayback = useQualityPreferencesStore(
+    (s) => s.setEnhancedAutoPlayback,
+  );
 
   const qualityOptions = useMemo(
     () => globalDefaultOptions(getPlatformClass()),
@@ -114,6 +120,20 @@ export default function ProfilePage() {
             onValueChange={setCellularDataSaver}
           />
         </View>
+
+        <View style={styles.toggleRow}>
+          <View style={styles.optionText}>
+            <Text style={styles.optionLabel}>HDR and 4K Auto</Text>
+            <Text style={styles.optionDescription}>
+              Lets Auto reach the 4K and HDR streams when the server offers
+              them. Turn off to play exactly as before.
+            </Text>
+          </View>
+          <Switch
+            value={enhancedAutoPlayback}
+            onValueChange={setEnhancedAutoPlayback}
+          />
+        </View>
       </View>
 
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -124,51 +144,31 @@ export default function ProfilePage() {
 }
 
 const styles = StyleSheet.create({
-  scroll: {
-    backgroundColor: "#141414",
-    flex: 1,
-  },
   container: {
     alignItems: "center",
     padding: 20,
     paddingTop: 60,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#FFFFFF",
-    marginBottom: 8,
+  logoutButton: {
+    backgroundColor: "#E50914",
+    borderRadius: 8,
+    paddingHorizontal: 32,
+    paddingVertical: 12,
   },
-  subtitle: {
+  logoutText: {
+    color: "#FFFFFF",
     fontSize: 16,
-    color: "#8C8C8C",
-    marginBottom: 32,
-  },
-  userInfo: {
-    alignItems: "center",
-    marginBottom: 32,
-  },
-  userName: {
-    fontSize: 20,
     fontWeight: "600",
-    color: "#FFFFFF",
-    marginBottom: 4,
   },
-  userEmail: {
+  optionDescription: {
+    color: "#8C8C8C",
+    fontSize: 13,
+    marginTop: 2,
+  },
+  optionLabel: {
+    color: "#FFFFFF",
     fontSize: 16,
-    color: "#8C8C8C",
-  },
-  section: {
-    alignSelf: "stretch",
-    marginBottom: 32,
-  },
-  sectionTitle: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "600",
-    letterSpacing: 1,
-    marginBottom: 12,
-    textTransform: "uppercase",
+    fontWeight: "500",
   },
   optionRow: {
     alignItems: "center",
@@ -187,15 +187,32 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     paddingRight: 12,
   },
-  optionLabel: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "500",
+  scroll: {
+    backgroundColor: "#141414",
+    flex: 1,
   },
-  optionDescription: {
+  section: {
+    alignSelf: "stretch",
+    marginBottom: 32,
+  },
+  sectionTitle: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: 1,
+    marginBottom: 12,
+    textTransform: "uppercase",
+  },
+  subtitle: {
     color: "#8C8C8C",
-    fontSize: 13,
-    marginTop: 2,
+    fontSize: 16,
+    marginBottom: 32,
+  },
+  title: {
+    color: "#FFFFFF",
+    fontSize: 28,
+    fontWeight: "bold",
+    marginBottom: 8,
   },
   toggleRow: {
     alignItems: "center",
@@ -205,15 +222,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 6,
   },
-  logoutButton: {
-    backgroundColor: "#E50914",
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  logoutText: {
-    color: "#FFFFFF",
+  userEmail: {
+    color: "#8C8C8C",
     fontSize: 16,
+  },
+  userInfo: {
+    alignItems: "center",
+    marginBottom: 32,
+  },
+  userName: {
+    color: "#FFFFFF",
+    fontSize: 20,
     fontWeight: "600",
+    marginBottom: 4,
   },
 });

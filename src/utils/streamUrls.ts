@@ -109,6 +109,35 @@ export function withDirectOnlyParam(url: string): string {
   });
 }
 
+/**
+ * The `range` control on a stream master as the app would read it back:
+ * "pq" | "sdr", "invalid" for a repeated or unrecognised value, null when
+ * absent or on a non-master URL.
+ */
+export function rangeParamOf(
+  url: string | null | undefined,
+): StreamVideoRange | "invalid" | null {
+  if (!url) return null;
+  const parts = splitURL(url);
+  if (parts.path.match(STREAM_TAIL_RE)?.[2] !== "master.m3u8") return null;
+  const ranges = queryParams(parts.query).filter((param) =>
+    RANGE_PARAM_RE.test(param),
+  );
+  if (ranges.length === 0) return null;
+  if (ranges.length === 1 && ranges[0] === "range=pq") return "pq";
+  if (ranges.length === 1 && ranges[0] === "range=sdr") return "sdr";
+  return "invalid";
+}
+
+/**
+ * True for the tiers with no ABR: the raw file and the pinned-Original
+ * master. A stall there never steps down by itself, and a silent failure
+ * there has somewhere lower to go.
+ */
+export function isPinnedTierURL(url: string | null | undefined): boolean {
+  return isDirectOnlyURL(url) || isFileTierURL(url);
+}
+
 /** True when the URL is the pinned-Original master (`?direct=only`). */
 export function isDirectOnlyURL(url: string | null | undefined): boolean {
   if (!url) return false;

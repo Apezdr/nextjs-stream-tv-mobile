@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DirectPlayInfo } from "@/src/data/types/directPlay.types";
 import { useDolbyVisionProfiles } from "@/src/hooks/useDolbyVisionProfiles";
+import { useVideoFormatSupport } from "@/src/hooks/useVideoFormatSupport";
 import { useQualityPreferencesStore } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
 import {
@@ -29,7 +30,9 @@ import {
   tierUsable,
 } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
-import { canonicalVideoId } from "@/src/utils/streamUrls";
+import { StreamVideoRange, canonicalVideoId } from "@/src/utils/streamUrls";
+import { videoFormatOf } from "@/src/utils/videoFormat";
+import { nextRangeFallback, videoSourceFor } from "@/src/utils/videoRange";
 
 // How long an Android session holding a remembered "original" preference
 // waits for the verdict before starting on Auto anyway. A remembered choice
@@ -42,6 +45,11 @@ const VERDICT_WAIT_MS = 5000;
 // descend a tier (§8's "first attempt recovery, then drop a tier" policy for
 // user-initiated switches).
 const SWITCH_WATCHDOG_MS = 5000;
+
+// How long a stored pinned preference waits for the device's decoder answer
+// on the verdict's exact format once the verdict is in. The probe is a native
+// round trip of a few milliseconds; the bound only guards a hung bridge.
+const PROBE_WAIT_MS = 1500;
 
 interface Options {
   /** Canonical master URL from the API (NOT a tier-mutated URL). */
@@ -57,6 +65,12 @@ interface Options {
   >;
   /** The media payload's `playbackSource` (raw-served titles have no verdict). */
   playbackSource?: string | null;
+  /**
+   * The dynamic range to ask the ABR masters for (`?range=pq|sdr`), null for
+   * the unfiltered master. Resolved per title by useVideoRange; the pinned
+   * tiers never carry it.
+   */
+  videoRange?: StreamVideoRange | null;
 }
 
 export interface QualityTierController {
@@ -80,7 +94,10 @@ export interface QualityTierController {
    * Master-level tiers carry over; Android "original" demotes to auto — the
    * old file's verdict cannot authorize the new file's /file tier.
    */
-  applyEpisodeSource: (masterURL: string) => string;
+  applyEpisodeSource: (
+    masterURL: string,
+    range?: StreamVideoRange | null,
+  ) => string;
   tiers: QualityTierOption[];
   activeTier: QualityTierId;
   /**
@@ -101,9 +118,21 @@ export interface QualityTierController {
   /** Where a descent would land from the active tier; null at the bottom. */
   descentTarget: QualityTierId | null;
   isSwitching: boolean;
-  /** "Original (Dolby Vision)" / "Original (HDR10)" / … or null. */
   /** True once an automatic descent happened this mount (menu shows why). */
   hasDescended: boolean;
+  /**
+   * Synchronous "a swap is in flight" read for listeners that must not act
+   * mid-transition (the `isSwitching` state lags a render behind).
+   */
+  isBusy: () => boolean;
+  /** The range the ABR masters currently ask for, after any downgrade. */
+  activeVideoRange: StreamVideoRange | null;
+  /**
+   * The server refused the active master's range (406/400): re-open the
+   * same tier at position one range down (pq → sdr → none). False when
+   * nothing is left to ask for.
+   */
+  downgradeRange: () => Promise<boolean>;
 }
 
 export function useQualityTier({
@@ -114,18 +143,40 @@ export function useQualityTier({
   playerRef,
   notifySourceReplacedRef,
   playbackSource = null,
+  videoRange = null,
 }: Options): QualityTierController {
   const platformClass = useMemo(() => getPlatformClass(), []);
   // What the device's decoders advertise — the tier policy's device-side veto
   // over a served /file (Dolby Vision profile, MP4 index budget). Null until
   // the native probe answers; the policy only withholds on facts it has.
   const dolbyVisionProfiles = useDolbyVisionProfiles();
+  const formatSupport = useVideoFormatSupport(directPlayInfo);
   const caps = useMemo<DeviceDecodeCapabilities>(
-    () => ({ dolbyVisionProfiles }),
-    [dolbyVisionProfiles],
+    () => ({
+      dolbyVisionProfiles,
+      fileVideoSupport: formatSupport.file,
+      originalVideoSupport: formatSupport.original,
+    }),
+    [dolbyVisionProfiles, formatSupport.file, formatSupport.original],
   );
   const capsRef = useRef(caps);
   capsRef.current = caps;
+
+  // The range the ABR masters ask for: the per-title resolution from the
+  // screen, overridden once the server refuses one (downgradeRange). Refs,
+  // because the async swaps read it after the render that set it.
+  const videoRangeRef = useRef<StreamVideoRange | null>(videoRange);
+  videoRangeRef.current = videoRange;
+  const rangeOverrideRef = useRef<StreamVideoRange | null | undefined>(
+    undefined,
+  );
+  const effectiveRange = useCallback(
+    (): StreamVideoRange | null =>
+      rangeOverrideRef.current !== undefined
+        ? rangeOverrideRef.current
+        : videoRangeRef.current,
+    [],
+  );
 
   const hasHydrated = useQualityPreferencesStore((s) => s.hasHydrated);
   const globalDefault = useQualityPreferencesStore((s) => s.globalDefault);
@@ -160,9 +211,35 @@ export function useQualityTier({
     return () => clearTimeout(timer);
   }, [hasHydrated, needsVerdict, directPlayInfo]);
 
+  // A pinned preference is also gated on the device's decoder answer for
+  // the verdict's exact format (DeviceDecodeCapabilities), so once the
+  // verdict is in, wait for that answer too — bounded, like the verdict.
+  const needsProbe = useMemo(() => {
+    if (!needsVerdict || !directPlayInfo) return false;
+    const specs = videoFormatOf(directPlayInfo);
+    return !!specs.file || !!specs.original;
+  }, [needsVerdict, directPlayInfo]);
+  const probeAnswered = useMemo(() => {
+    if (!directPlayInfo) return false;
+    const specs = videoFormatOf(directPlayInfo);
+    return (
+      (!specs.file || formatSupport.file !== undefined) &&
+      (!specs.original || formatSupport.original !== undefined)
+    );
+  }, [directPlayInfo, formatSupport.file, formatSupport.original]);
+  const [probeWaitExpired, setProbeWaitExpired] = useState(false);
+  useEffect(() => {
+    if (!hasHydrated || !needsProbe || probeAnswered) return;
+    const timer = setTimeout(() => setProbeWaitExpired(true), PROBE_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [hasHydrated, needsProbe, probeAnswered]);
+
   const sourceReady =
     hasHydrated &&
-    (!needsVerdict || directPlayInfo !== undefined || verdictWaitExpired);
+    (!needsVerdict ||
+      verdictWaitExpired ||
+      (directPlayInfo !== undefined &&
+        (!needsProbe || probeAnswered || probeWaitExpired)));
 
   // Freeze the initial tier at the first sourceReady render — the same
   // pin-once idiom as useOptimizedVideoPlayer's pinnedSourceRef. A verdict
@@ -221,6 +298,7 @@ export function useQualityTier({
       directPlayInfo,
       platformClass,
       caps,
+      effectiveRange(),
     );
   }
   const [overrideSourceURL, setOverrideSourceURL] = useState<string | null>(
@@ -228,8 +306,13 @@ export function useQualityTier({
   );
   const activeSourceURL = overrideSourceURL ?? pinnedSourceRef.current;
 
+  // The canonical id of an item the engine pinned ahead of the loader's
+  // `videoURL` (an episode switch): the catch-up effect must not chase the
+  // stale prop back while it lasts.
+  const pendingMasterRef = useRef<string | null>(null);
+
   const applyEpisodeSource = useCallback(
-    (masterURL: string): string => {
+    (masterURL: string, range: StreamVideoRange | null = null): string => {
       // The verdict is per FILE — the previous episode's verdict cannot
       // authorize the next one's /file tier. Master-level tiers (Apple,
       // auto, transcode) carry over; Android "original" demotes to auto for
@@ -240,7 +323,19 @@ export function useQualityTier({
         tier = "auto";
         setSelectedTier("auto");
       }
-      const target = resolveTierSourceURL(masterURL, tier, null, platformClass);
+      // A range refusal belonged to the previous item; the new one starts
+      // from its own resolution.
+      rangeOverrideRef.current = undefined;
+      videoRangeRef.current = range;
+      pendingMasterRef.current = canonicalVideoId(masterURL);
+      const target = resolveTierSourceURL(
+        masterURL,
+        tier,
+        null,
+        platformClass,
+        null,
+        range,
+      );
       setOverrideSourceURL(target);
       return target;
     },
@@ -254,10 +349,17 @@ export function useQualityTier({
   useEffect(() => {
     if (!sourceReady || !videoURL) return;
     const current = overrideSourceURL ?? pinnedSourceRef.current;
-    if (!current || canonicalVideoId(current) === canonicalVideoId(videoURL)) {
+    if (!current) return;
+    const currentId = canonicalVideoId(current);
+    if (currentId === canonicalVideoId(videoURL)) {
+      pendingMasterRef.current = null;
       return;
     }
-    applyEpisodeSource(videoURL);
+    // An episode switch pinned the next item before the loader's videoURL
+    // caught up: for a render or two the prop is still the OLD item, and
+    // chasing it would flip the player back and forth. Wait for the prop.
+    if (pendingMasterRef.current === currentId) return;
+    applyEpisodeSource(videoURL, videoRangeRef.current);
   }, [sourceReady, videoURL, overrideSourceURL, applyEpisodeSource]);
 
   const positionHintRef = useRef(0);
@@ -273,30 +375,21 @@ export function useQualityTier({
     }
   }, []);
 
-  const selectTierInternal = useCallback(
+  // The position-preserving source swap behind every in-session transition
+  // (a tier pick, a descent, a withdrawn verdict, a range downgrade):
+  // capture the position, swap, re-apply the audio track (Apple selection
+  // is per-AVPlayerItem and dies with the old item), re-seek (tier and
+  // range timelines are identical), resume, watchdog.
+  const swapSource = useCallback(
     async (
+      target: string,
       tier: QualityTierId,
-      { remember = true }: { remember?: boolean } = {},
-    ): Promise<void> => {
-      if (switchBusyRef.current) return;
+      remember: boolean,
+      label: string,
+    ): Promise<boolean> => {
+      if (switchBusyRef.current) return false;
       const player = playerRef.current;
-      const masterURL = videoURLRef.current;
-      if (!player || !masterURL) return;
-
-      if (tier === activeTierRef.current) {
-        // Still record an explicit re-selection as the remembered choice —
-        // picking "Auto" after a descent must stick for next time.
-        if (remember && mediaKey) rememberTier(mediaKey, tier);
-        return;
-      }
-
-      const target = resolveTierSourceURL(
-        masterURL,
-        tier,
-        infoRef.current,
-        platformClass,
-        capsRef.current,
-      );
+      if (!player) return false;
 
       switchBusyRef.current = true;
       setIsSwitching(true);
@@ -309,10 +402,10 @@ export function useQualityTier({
         const currentTime = observed > 0 ? observed : positionHintRef.current;
         const audioTrack = player.audioTrack;
         console.log(
-          `[useQualityTier] Switching to "${tier}" at ${currentTime.toFixed(1)}s (player reported ${observed.toFixed(1)}s)`,
+          `[useQualityTier] ${label} at ${currentTime.toFixed(1)}s (player reported ${observed.toFixed(1)}s)`,
         );
 
-        await player.replaceAsync({ uri: target });
+        await player.replaceAsync(videoSourceFor(target));
         notifySourceReplacedRef.current?.(target);
 
         // Apple audio selection is per-AVPlayerItem — re-apply on the new
@@ -346,24 +439,83 @@ export function useQualityTier({
             descendRef.current();
           }
         }, SWITCH_WATCHDOG_MS);
+        return true;
       } catch (error) {
-        console.error("[useQualityTier] Tier switch failed:", error);
+        console.error("[useQualityTier] Source swap failed:", error);
         // Leave the previous tier state intact; the player still holds
         // whatever replaceAsync left it with, and the fallback hook's error
         // handling picks it up from here.
+        return false;
       } finally {
         switchBusyRef.current = false;
         setIsSwitching(false);
       }
     },
-    [mediaKey, platformClass, rememberTier, clearWatchdog],
+    [mediaKey, rememberTier, clearWatchdog],
   );
+
+  const selectTierInternal = useCallback(
+    async (
+      tier: QualityTierId,
+      { remember = true }: { remember?: boolean } = {},
+    ): Promise<void> => {
+      if (switchBusyRef.current) return;
+      const masterURL = videoURLRef.current;
+      if (!playerRef.current || !masterURL) return;
+
+      if (tier === activeTierRef.current) {
+        // Still record an explicit re-selection as the remembered choice —
+        // picking "Auto" after a descent must stick for next time.
+        if (remember && mediaKey) rememberTier(mediaKey, tier);
+        return;
+      }
+
+      const target = resolveTierSourceURL(
+        masterURL,
+        tier,
+        infoRef.current,
+        platformClass,
+        capsRef.current,
+        effectiveRange(),
+      );
+      await swapSource(target, tier, remember, `Switching to "${tier}"`);
+    },
+    [mediaKey, platformClass, rememberTier, swapSource, effectiveRange],
+  );
+
+  // The server refused the range the active master asked for (406 nothing
+  // left in that range, 400 invalid): step down pq → sdr → no range and
+  // re-open the SAME tier at position. Nothing is remembered — the tier
+  // preference stays the user's, and the range is per title anyway.
+  const downgradeRange = useCallback(async (): Promise<boolean> => {
+    const next = nextRangeFallback(effectiveRange());
+    if (next === undefined) return false;
+    const masterURL = videoURLRef.current;
+    if (!masterURL) return false;
+    rangeOverrideRef.current = next;
+    const tier = activeTierRef.current;
+    const target = resolveTierSourceURL(
+      masterURL,
+      tier,
+      infoRef.current,
+      platformClass,
+      capsRef.current,
+      next,
+    );
+    return swapSource(
+      target,
+      tier,
+      false,
+      `Range refused — reopening "${tier}" with ${next ? `range=${next}` : "no range"}`,
+    );
+  }, [platformClass, swapSource, effectiveRange]);
 
   const descendTierInternal = useCallback(async (): Promise<boolean> => {
     const next = descentTierFor(
       activeTierRef.current,
       platformClass,
       infoRef.current,
+      capsRef.current,
     );
     if (!next) return false;
     await selectTierInternal(next, { remember: false });
@@ -412,8 +564,16 @@ export function useQualityTier({
     activeTier,
     selectTier: selectTierInternal,
     descendTier: descendTierInternal,
-    descentTarget: descentTierFor(activeTier, platformClass, directPlayInfo),
+    descentTarget: descentTierFor(
+      activeTier,
+      platformClass,
+      directPlayInfo,
+      caps,
+    ),
     isSwitching,
     hasDescended,
+    isBusy: () => switchBusyRef.current,
+    activeVideoRange: effectiveRange(),
+    downgradeRange,
   };
 }
