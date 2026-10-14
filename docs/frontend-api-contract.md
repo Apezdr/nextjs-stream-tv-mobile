@@ -1123,9 +1123,10 @@ display fields so all client surfaces share one mapping.
 {
   hls: {
     offered: boolean;              // Original-over-HLS copy rung exists on ?direct=1
-    reason?: string;               // withhold reason when offered=false (open-gop-avc, …)
+    reason?: string;               // withhold reason when offered=false (open-gop-avc, …,
+                                   //   codec-unsupported, unmappable-codec)
     variantIndex?: number;
-    codecs?: string;
+    codecs?: string;               // RFC 6381, "video,audio" ("avc1.640028" …)
     bandwidth?: number;
     averageBandwidth?: number;
     videoRange?: string;           // "PQ" on HDR10/DV base layers
@@ -1135,12 +1136,48 @@ display fields so all client surfaces share one mapping.
     available: boolean;            // GET /stream/{key}/file serves original bytes
     sizeBytes?: number;
     container?: string;
-    videoCodec?: string;
+    videoCodec?: string;           // ffprobe name ("av1", "h264", "hevc")
+    // Exact source facts (jit-transcoder, live 2026-10-14) — what the app
+    // asks the device's decoder about before offering a pinned tier:
+    videoCodecs?: string;          // RFC 6381 string of the video stream
+                                   //   ("av01.0.12M.10"); ONE string despite the name
+    width?: number;
+    height?: number;
+    frameRate?: number;            // 23.976
+    bitDepth?: number;             // 8 | 10
   };
   badgeLabel?: string;             // enriched: "Original (Dolby Vision)" | "Original (HDR10)" | "Original"
   reasonCopy?: string;             // enriched: user copy for `reason`
 }
 ```
+
+Withhold reasons and the app's fallback copy (the enriched `reasonCopy` wins
+when present; `src/utils/qualityTiers.ts` `reasonToUserCopy`):
+
+| `hls.reason` | Meaning | App copy |
+|---|---|---|
+| `open-gop-avc` | Recovery-point random access | "This file's format can't stream reliably without processing. Playing in high-quality transcode." |
+| `segment-floor`, `segment-budget` | Keyframe spacing / segment count outside limits | "This file's structure exceeds streaming limits." |
+| `unscannable` | Probe failed | "The original stream couldn't be analyzed." |
+| `ineligible-source`, `unmappable-codec` | Structural refusal / no codec string | "This format can't be streamed unmodified." |
+| `codec-unsupported` | The copy rung does not handle this codec (AV1 today). Split out of `ineligible-source` 2026-10-14 | "This file's video codec can't be streamed unmodified." |
+| `poisoned` | Disabled after a playback fault | "Original streaming was disabled for this title after a playback fault." |
+| `disabled` / absent | Feature off / pre-deploy server | (no Original row) |
+
+**Device-side codec gate (app, Android).** The server never rules on a codec
+name; the app asks the device's decoder about the exact format and withholds
+only on its answer. From `file.videoCodecs` (fallback `file.videoCodec`),
+`file.width`, `file.height` and `file.frameRate` the app builds the raw
+file's format, and from `hls.codecs` the Original rung's (same size and
+rate), then asks the patched expo-video probe (`isVideoFormatSupported`,
+media3's own `MediaCodecInfo.isFormatSupported`) or, on an unpatched
+runtime, react-native-video's MIME + size check. `unsupported` (no decoder
+at all — media3 would play audio over a black screen) and `exceeds` (a
+decoder, but not for this profile, size or rate) grey the Direct Play and
+Original rows with "This device can't decode AV1 10-bit video at
+3840×2160."; `hardware`, `software` and `unknown` do not. Apple platforms
+are never gated (the probe cannot be asked). Audio is never pre-judged:
+DTS/TrueHD/E-AC-3 play through HDMI passthrough, which only the sink knows.
 
 Client behavior (both watch screens, `useDirectPlayInfo`):
 
@@ -1194,6 +1231,46 @@ cannot be expressed now reports `offered: false, reason: "unmappable-codec"` (tr
 `ineligible-source`) instead of `offered: true` with a null `variantIndex`.
 
 Still open with the transcoder side: the `indexClass` enum and its thresholds.
+
+#### 12.4.2 Range-filtered masters and `streamFeatures` (live 2026-10-14)
+
+The transcoder advertises `master-video-range-filter-v1` in its
+`/health.features`; the flat `/api/authenticated/media` response relays that
+list verbatim as `streamFeatures: string[]` whenever `playbackSource` is
+`"jit"` (the `isTVdevice=true` shapes do not carry it; the player only reads
+the flat shape). With it, a master can be filtered to one dynamic range:
+
+- `GET /stream/{key}/master.m3u8?range=pq` → only the PQ (HDR10 / DV base
+  layer) variants; `?range=sdr` → only the SDR ones. `range` is written
+  BEFORE `direct` (`…?range=sdr&direct=1`), lowercase, once.
+- **406** `range_unavailable` when the filter leaves nothing (a sub-4K HDR
+  source has no PQ transcode rungs; a Dolby Vision profile 5 source has no
+  PQ base); **400** `invalid_range` for an empty, unknown, uppercase or
+  repeated value; **400** `range_with_original` for `direct=only` + `range`.
+  All are answered before the source is probed. A refusal is a negotiation
+  answer, never retried on the same URL.
+- The pinned tiers (`?direct=only`, `/file`) never carry `range`.
+
+Client rule (`src/utils/videoRange.ts` `resolveVideoRange`, Android /
+Android TV only in this pass — Apple keeps the mixed master): no `range`
+unless `streamFeatures` lists the feature and the device's "HDR and 4K
+Auto" preference is on; `sdr` for a non-PQ source (`mediaQuality.
+transferCharacteristics` is not `PQ` / `SMPTE 2084`) or a PQ source below
+4K-class (`dimensions` width ≥ 3600, height ≥ 2160 or ≥ 6.5 Mpx); `pq` for
+a 4K-class PQ source on an HDR10-capable display (`getDisplayHdrTypes`);
+`sdr` on an SDR display; no `range` when the display cannot be asked (an
+unpatched runtime), so HDR viewers keep the PQ rungs of the mixed master.
+On a refusal the app re-opens the same tier at position one step down,
+`pq → sdr → none` (`useQualityTier.downgradeRange`), and only descends a
+tier when nothing is left to ask for.
+
+Why the app wants it: media3's track selector never adapts across video
+MIME types by default, so on the mixed master the lone HEVC 2160 rung is
+unreachable under Auto (the AVC rungs win on count). The app enables
+mixed-codec adaptation (`allowMixedCodecAdaptation` on the expo-video source,
+patched) ONLY on an `sdr`-filtered master, where every rung shares one
+dynamic range; never on `pq` (it can carry a Dolby Vision rung with its
+own MIME type) and never on the unfiltered master.
 
 ## 13. Player support assets
 

@@ -318,6 +318,26 @@ the decisions made where the doc left them open, and the work items that now sit
 6. **Quality preferences are device-local** (global default + implicit remember-last-choice
    per title + cellular data-saver on phones). No server preferences API is required for v1;
    the store shape can sync later if cross-device preferences become a goal.
+7. **Device-side codec gate (2026-10-14).** The server describes the source exactly
+   (`file.videoCodecs`, `width`, `height`, `frameRate`, `bitDepth`; `hls.codecs` for the copy
+   rung) and never rules on a codec name; the Android app asks its own decoder about that
+   format (media3's `MediaCodecInfo.isFormatSupported` through the patched expo-video probe)
+   and greys Direct Play and Original only on `unsupported` (no decoder) or `exceeds` (a
+   decoder, but not for this profile, size or rate). `codec-unsupported` is the copy rung's
+   own refusal, with its own copy. Audio is never pre-judged: it reaches the HDMI sink.
+8. **Silent-failure guard (2026-10-14).** media3 drops a track it has no decoder for without
+   an error; the app watches the player after readyToPlay (listed vs selected tracks, first
+   frame rendered, playback clock) and, on a verdict, reports with severity `error`, descends
+   on the pinned tiers and shows the card on the ladder tiers; audio tries a supported
+   sibling track first. Thresholds are measured in playback clock so pauses, seeks and the
+   background add nothing.
+9. **Range-filtered masters and cross-codec Auto (2026-10-14).** With
+   `master-video-range-filter-v1` advertised in `streamFeatures`, Android asks `?range=sdr`
+   (or `?range=pq` for a 4K-class PQ source on an HDR10 display), treats 406/400 as a
+   negotiation answer (`pq → sdr → none`, same tier, at position) and enables media3's
+   mixed-MIME adaptation only on the `sdr` master, so Auto can reach the HEVC 2160 rung.
+   Behind a device-local "HDR and 4K Auto" preference (on by default); Apple keeps the mixed
+   master in this pass. Dolby Vision under Auto (preferred MIME on `pq`) follows separately.
 
 ### 11.2 Work items for the Next.js backend
 

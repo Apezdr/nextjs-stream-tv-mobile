@@ -149,8 +149,48 @@ interface PlaybackErrorDetails {
     height: number;
     support: "hardware" | "software" | "unsupported" | "unknown";
   }[];
+
+  /**
+   * Present when the report records an automatic delivery-tier descent
+   * (FRONTEND_PLAYBACK_REQUIREMENTS.md §8): which tier failed, where
+   * playback fell to, and at what position (seconds).
+   */
+  tierDescent?: { from: string; to: string; position: number };
+
+  /**
+   * Present when the silent-failure guard raised the report rather than a
+   * player error (2026-10-14). media3 raises nothing when a track has no
+   * decoder — it leaves the track unselected and plays the rest — so the
+   * app watches what the player reports after readyToPlay. Sent with
+   * severity "error" (the guard acted: descent or card) or "warning"
+   * (telemetry only), never "fatal": playback did not stop, it showed
+   * nothing. `clockAdvancedSec` is how far the playback clock ran while
+   * the condition held; `tier` is the delivery tier that was playing
+   * ("file", "hls:direct=only", "hls:direct=1,range=sdr", …).
+   */
+  silentFailure?: {
+    verdict:
+      | "video-unsupported"    // every listed video track lacks a decoder
+      | "video-not-rendering"  // no frame drawn after 8 s of running clock
+      | "video-unselected"     // supported tracks listed, none selected (report-only)
+      | "audio-unselected";    // audio tracks listed, none selected
+    action: "descend-or-card" | "audio-retry" | "report-only";
+    clockAdvancedSec: number;
+    firstFrameSeen: boolean;
+    tier: string;
+    videoTracks: { id: string | null; mimeType: string | null; width: number | null; height: number | null; isSupported: boolean | null }[];
+    selectedVideoTrack: string | null;
+    audioTracks: { id: string | null; sampleMimeType: string | null; isSupported: boolean | null }[];
+    selectedAudioTrack: string | null;
+  };
 }
 ```
+
+Severity, for playback: a player `statusChange` error is `fatal` (playback
+stopped; pages the admin). A silent failure is `error` or `warning` as above.
+A refused `?range=` master (406/400, see the API contract §12.4.2) is a
+`warning` with message `Range negotiation (<tier>): …` — the app re-opens
+the same tier one range down and no playback is lost.
 
 ## Example payload (illustrative Bravia HEVC/DV failure)
 
