@@ -2,6 +2,7 @@ import type { VideoPlayer, StatusChangeEventPayload } from "expo-video";
 import { useEffect, useRef, useState } from "react";
 
 import { logPlaybackError } from "@/src/utils/videoDiagnostics";
+import { rangeNegotiationFailure } from "@/src/utils/videoRange";
 
 interface Options {
   player: VideoPlayer;
@@ -105,7 +106,22 @@ export function useVideoErrorHandling({
 
       // Any player error: emit a full diagnostic report (raw ExoPlayer
       // message + device model + decoder capability probe), logged locally
-      // and sent to the connected server's client-error endpoint.
+      // and sent to the connected server's client-error endpoint. One
+      // exception: the server refusing a `?range=` master (406/400) is a
+      // negotiation answer that useVideoTierFallback resolves by re-opening
+      // the same tier one range down, and reports as a warning itself — a
+      // fatal report here would page the admin for playback that never
+      // stopped.
+      if (
+        e &&
+        rangeNegotiationFailure(contextRef.current.videoURL, e.message)
+      ) {
+        console.log(
+          "[useVideoErrorHandling] Range negotiation, reported by the tier fallback:",
+          e.message,
+        );
+        return;
+      }
       if (e) {
         const ctx = contextRef.current;
         logPlaybackError({
