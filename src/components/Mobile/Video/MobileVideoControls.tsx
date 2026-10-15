@@ -33,6 +33,7 @@ import {
 } from "@/src/hooks/useAudioTracks";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useSubtitlePreferencesStore } from "@/src/stores/subtitlePreferencesStore";
+import { getMobileControlsLayout } from "@/src/utils/mobileControlsLayout";
 import { QualityTierId, QualityTierOption } from "@/src/utils/qualityTiers";
 import { describeStreamTier } from "@/src/utils/streamUrls";
 
@@ -109,6 +110,13 @@ const MobileVideoControls = memo(
     const { window } = useDimensions();
     const windowWidth = window.width;
     const insets = useSafeAreaInsets();
+    // Landscape gets a tighter chrome: see getMobileControlsLayout for why
+    // the portrait paddings left the play glyph with no height to draw in.
+    const isLandscape = window.width > window.height;
+    const layout = useMemo(
+      () => getMobileControlsLayout(isLandscape, insets),
+      [isLandscape, insets],
+    );
 
     // Use expo-video's useEvent hook for player state
     const { isPlaying: isPlayingEvent } = useEvent(player, "playingChange", {
@@ -680,14 +688,26 @@ const MobileVideoControls = memo(
 
         {/* Controls overlay */}
         <Animated.View
-          style={[styles.controlsOverlay, { opacity: fadeAnim }]}
+          style={[
+            styles.controlsOverlay,
+            {
+              opacity: fadeAnim,
+              // The scrim stays full-bleed; the chrome inside keeps clear of
+              // the punch-hole cutout, which lands on a side edge in landscape.
+              paddingLeft: insets.left,
+              paddingRight: insets.right,
+            },
+          ]}
           pointerEvents={
             isControlsVisible || isDoubleTapSeeking ? "box-none" : "none"
           }
         >
           {/* Top controls */}
           <Animated.View
-            style={[styles.topControls, { opacity: topControlsOpacity }]}
+            style={[
+              styles.topControls,
+              { opacity: topControlsOpacity, paddingTop: layout.topPadding },
+            ]}
             pointerEvents="box-none"
           >
             <TouchableOpacity
@@ -718,7 +738,17 @@ const MobileVideoControls = memo(
 
           {/* Center controls with skip buttons */}
           <Animated.View
-            style={[styles.centerControls, { opacity: centerControlsOpacity }]}
+            style={[
+              styles.centerControls,
+              {
+                opacity: centerControlsOpacity,
+                // Never let the column squeeze this row below its buttons:
+                // a squeezed row measures its icon-font Texts at the
+                // leftover height, and RN Android draws nothing for a glyph
+                // clamped to ~0 pt.
+                minHeight: layout.centerMinHeight,
+              },
+            ]}
             pointerEvents="box-none"
           >
             {/* Skip back button */}
@@ -726,18 +756,25 @@ const MobileVideoControls = memo(
               style={styles.centerSkipButton}
               onPress={() => handleSeekBy(-10)}
             >
-              <Ionicons name="play-back" size={32} color="#FFFFFF" />
+              <Ionicons
+                name="play-back"
+                size={layout.skipIconSize}
+                color="#FFFFFF"
+              />
               <Text style={styles.centerSkipText}>10s</Text>
             </TouchableOpacity>
 
             {/* Play/pause button */}
             <TouchableOpacity
-              style={styles.playPauseButton}
+              style={[
+                styles.playPauseButton,
+                { padding: layout.playButtonPadding },
+              ]}
               onPress={handleTogglePlay}
             >
               <Ionicons
                 name={isPlaying ? "pause" : "play"}
-                size={60}
+                size={layout.playIconSize}
                 color="#FFFFFF"
               />
             </TouchableOpacity>
@@ -747,22 +784,32 @@ const MobileVideoControls = memo(
               style={styles.centerSkipButton}
               onPress={() => handleSeekBy(10)}
             >
-              <Ionicons name="play-forward" size={32} color="#FFFFFF" />
+              <Ionicons
+                name="play-forward"
+                size={layout.skipIconSize}
+                color="#FFFFFF"
+              />
               <Text style={styles.centerSkipText}>10s</Text>
             </TouchableOpacity>
           </Animated.View>
 
           {/* Bottom controls */}
-          <View style={styles.bottomControls} pointerEvents="box-none">
+          <View
+            style={[
+              styles.bottomControls,
+              { paddingBottom: layout.bottomPadding },
+            ]}
+            pointerEvents="box-none"
+          >
             {/* Video title */}
             <Animated.View
               style={[
                 styles.titleSection,
-                { opacity: titleOpacity, marginLeft: insets.left },
+                { opacity: titleOpacity, marginBottom: layout.sectionGap },
               ]}
               pointerEvents="box-none"
             >
-              <Text style={styles.videoTitle} numberOfLines={2}>
+              <Text style={styles.videoTitle} numberOfLines={layout.titleLines}>
                 {videoInfo?.title || ""}
               </Text>
               {/* Delivery-tier badge from direct.json — facts only, never
@@ -773,14 +820,17 @@ const MobileVideoControls = memo(
                 </View>
               )}
               {videoInfo?.description && (
-                <Text style={styles.videoDescription} numberOfLines={5}>
+                <Text
+                  style={styles.videoDescription}
+                  numberOfLines={layout.descriptionLines}
+                >
                   {videoInfo.description}
                 </Text>
               )}
             </Animated.View>
 
             {/* Seek bar with touch support - always visible */}
-            <View style={styles.seekSection}>
+            <View style={{ marginBottom: layout.sectionGap }}>
               <View style={styles.timeRow}>
                 <Text style={styles.timeText}>
                   {formatTime(isSeeking ? seekTime : currentTime)}
@@ -945,7 +995,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingTop: 50,
   },
   topButton: {
     alignItems: "center",
@@ -976,7 +1025,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.6)",
     borderRadius: 50,
     justifyContent: "center",
-    padding: 20,
     zIndex: 4,
   },
   centerSkipButton: {
@@ -1002,12 +1050,16 @@ const styles = StyleSheet.create({
     // (with captions present, their flex: 1 container fills the row anyway).
     justifyContent: "flex-end",
   },
+  // The bottom block, then the title block, then the description are the
+  // only things allowed to give way when the column is still too tall for
+  // the screen (a short landscape phone with a logo): the pills and the seek
+  // bar must never be pushed off the bottom edge.
   bottomControls: {
-    paddingBottom: 40,
+    flexShrink: 1,
     paddingHorizontal: 20,
   },
   titleSection: {
-    marginBottom: 20,
+    flexShrink: 1,
   },
   videoTitle: {
     color: "#FFFFFF",
@@ -1020,6 +1072,7 @@ const styles = StyleSheet.create({
   },
   videoDescription: {
     color: "#CCCCCC",
+    flexShrink: 1,
     fontSize: 14,
     textShadowColor: "rgba(0, 0, 0, 0.8)",
     textShadowOffset: { width: 1, height: 1 },
@@ -1027,9 +1080,6 @@ const styles = StyleSheet.create({
   },
 
   // Seek controls
-  seekSection: {
-    marginBottom: 20,
-  },
   timeRow: {
     flexDirection: "row",
     justifyContent: "space-between",

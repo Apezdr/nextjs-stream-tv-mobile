@@ -220,7 +220,7 @@ export default function MobileWatchPage() {
 
   // Create optimized player. The source stays null until the quality
   // preference has resolved — the hook pins its first URL for the mount.
-  const { player, notifySourceReplaced } = useOptimizedVideoPlayer(
+  const { player, notifySourceReplaced, isFocused } = useOptimizedVideoPlayer(
     quality.sourceReady ? playbackSourceURL : null,
     (p) => {
       p.timeUpdateEventInterval = 1;
@@ -849,6 +849,15 @@ export default function MobileWatchPage() {
 
   return (
     <View style={styles.container}>
+      {/* Immersive playback. The mount effect above hides both bars once;
+          this entry keeps them hidden for as long as the screen is focused.
+          react-native-edge-to-edge merges every mounted <SystemBars> into one
+          verdict whenever any of them mounts, unmounts or re-renders (a colour
+          scheme flip, for one), and the root layout's entry says nothing about
+          `hidden`, so the merge falls back to "shown" and would undo the
+          imperative call. Scoped to focus so a screen pushed on top (media
+          info) gets its bars back. */}
+      {isFocused ? <SystemBars hidden style="light" /> : null}
       <VideoView
         style={styles.video}
         player={player}
