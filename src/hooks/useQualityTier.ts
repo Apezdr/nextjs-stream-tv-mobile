@@ -30,9 +30,20 @@ import {
   tierUsable,
 } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
-import { StreamVideoRange, canonicalVideoId } from "@/src/utils/streamUrls";
+import {
+  StreamVideoRange,
+  canonicalVideoId,
+  describeStreamTier,
+} from "@/src/utils/streamUrls";
+import { getDisplayHdrTypes } from "@/src/utils/videoDiagnostics";
 import { videoFormatOf } from "@/src/utils/videoFormat";
-import { nextRangeFallback, videoSourceFor } from "@/src/utils/videoRange";
+import {
+  dolbyVisionPreference,
+  hasDolbyVisionPreference,
+  nextRangeFallback,
+  setSourcePolicy,
+  videoSourceFor,
+} from "@/src/utils/videoRange";
 
 // How long an Android session holding a remembered "original" preference
 // waits for the verdict before starting on Auto anyway. A remembered choice
@@ -133,6 +144,12 @@ export interface QualityTierController {
    * nothing is left to ask for.
    */
   downgradeRange: () => Promise<boolean>;
+  /**
+   * Leave the Dolby Vision Original rung Auto was pinned to (the first step
+   * of a descent from such a source): re-open the same master without the
+   * DV preference so ABR runs the HEVC PQ ladder. False when none was set.
+   */
+  dropDolbyVisionPreference: () => Promise<boolean>;
 }
 
 export function useQualityTier({
@@ -177,6 +194,29 @@ export function useQualityTier({
         : videoRangeRef.current,
     [],
   );
+
+  // Dolby Vision under Auto: before a pq master is handed to the player,
+  // register the DV preference for its URL when the verdict offers a DV
+  // Original rung this display and decoder can take. Once a descent dropped
+  // it for this item, it stays dropped until the item changes.
+  const dvDroppedRef = useRef(false);
+  const registerSourcePolicy = useCallback((url: string) => {
+    const policy = dvDroppedRef.current
+      ? null
+      : dolbyVisionPreference({
+          url,
+          originalOffered: !!infoRef.current?.hls?.offered,
+          supplementalCodecs: infoRef.current?.hls?.supplementalCodecs,
+          dolbyVisionProfiles: capsRef.current.dolbyVisionProfiles,
+          displayHdrTypes: getDisplayHdrTypes(),
+        });
+    setSourcePolicy(url, policy);
+    if (policy) {
+      console.log(
+        `[useQualityTier] Preferring Dolby Vision on ${describeStreamTier(url)}`,
+      );
+    }
+  }, []);
 
   const hasHydrated = useQualityPreferencesStore((s) => s.hasHydrated);
   const globalDefault = useQualityPreferencesStore((s) => s.globalDefault);
@@ -300,6 +340,8 @@ export function useQualityTier({
       caps,
       effectiveRange(),
     );
+    // The player builds its source from this URL in the same render.
+    registerSourcePolicy(pinnedSourceRef.current);
   }
   const [overrideSourceURL, setOverrideSourceURL] = useState<string | null>(
     null,
@@ -327,6 +369,7 @@ export function useQualityTier({
       // from its own resolution.
       rangeOverrideRef.current = undefined;
       videoRangeRef.current = range;
+      dvDroppedRef.current = false;
       pendingMasterRef.current = canonicalVideoId(masterURL);
       const target = resolveTierSourceURL(
         masterURL,
@@ -336,6 +379,9 @@ export function useQualityTier({
         null,
         range,
       );
+      // No verdict for the new item yet, so no DV preference can apply here;
+      // clearing keeps a stale one for a reused URL from leaking in.
+      setSourcePolicy(target, null);
       setOverrideSourceURL(target);
       return target;
     },
@@ -405,6 +451,7 @@ export function useQualityTier({
           `[useQualityTier] ${label} at ${currentTime.toFixed(1)}s (player reported ${observed.toFixed(1)}s)`,
         );
 
+        registerSourcePolicy(target);
         await player.replaceAsync(videoSourceFor(target));
         notifySourceReplacedRef.current?.(target);
 
@@ -451,7 +498,7 @@ export function useQualityTier({
         setIsSwitching(false);
       }
     },
-    [mediaKey, rememberTier, clearWatchdog],
+    [mediaKey, rememberTier, clearWatchdog, registerSourcePolicy],
   );
 
   const selectTierInternal = useCallback(
@@ -510,7 +557,28 @@ export function useQualityTier({
     );
   }, [platformClass, swapSource, effectiveRange]);
 
+  // The active source URL as the swaps see it (state lags the swap).
+  const activeSourceURLRef = useRef<string | null>(null);
+
+  const dropDolbyVisionPreference = useCallback(async (): Promise<boolean> => {
+    const url = activeSourceURLRef.current;
+    if (!url || !hasDolbyVisionPreference(url)) return false;
+    dvDroppedRef.current = true;
+    setSourcePolicy(url, null);
+    const swapped = await swapSource(
+      url,
+      activeTierRef.current,
+      false,
+      "Leaving the Dolby Vision rung — reopening the PQ ladder",
+    );
+    if (swapped) setHasDescended(true);
+    return swapped;
+  }, [swapSource]);
+
   const descendTierInternal = useCallback(async (): Promise<boolean> => {
+    // A source pinned to the DV Original rung first falls back to the PQ
+    // ladder of the same master; only then does the tier chain apply.
+    if (await dropDolbyVisionPreference()) return true;
     const next = descentTierFor(
       activeTierRef.current,
       platformClass,
@@ -521,7 +589,7 @@ export function useQualityTier({
     await selectTierInternal(next, { remember: false });
     setHasDescended(true);
     return true;
-  }, [platformClass, selectTierInternal]);
+  }, [platformClass, selectTierInternal, dropDolbyVisionPreference]);
   descendRef.current = descendTierInternal;
 
   // A verdict that later withdraws a pinned tier (poisoned, a server rollback
@@ -555,6 +623,8 @@ export function useQualityTier({
     [directPlayInfo, platformClass, caps, playbackSource],
   );
 
+  activeSourceURLRef.current = activeSourceURL;
+
   return {
     sourceReady,
     activeSourceURL,
@@ -575,5 +645,6 @@ export function useQualityTier({
     isBusy: () => switchBusyRef.current,
     activeVideoRange: effectiveRange(),
     downgradeRange,
+    dropDolbyVisionPreference,
   };
 }

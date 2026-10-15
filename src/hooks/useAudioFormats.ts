@@ -6,6 +6,7 @@ import {
   effectiveAudioLanguage,
   normalizeLanguageTag,
 } from "@/src/hooks/useAudioTracks";
+import { playerUserAgent } from "@/src/utils/deviceInfo";
 import {
   HlsAudioGroupInfo,
   cacheAudioGroups,
@@ -128,9 +129,14 @@ export function useAudioFormats(
     (async () => {
       for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
         try {
+          const userAgent = playerUserAgent();
           const response = await fetch(videoURL, {
             signal: controller.signal,
-            headers: { "Cache-Control": "no-cache" },
+            headers: {
+              "Cache-Control": "no-cache",
+              // Name the device like the player does (deviceInfo.playerUserAgent).
+              ...(userAgent ? { "User-Agent": userAgent } : {}),
+            },
           });
           if (!response.ok) {
             console.warn(

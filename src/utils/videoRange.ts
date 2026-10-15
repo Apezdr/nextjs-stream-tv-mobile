@@ -8,7 +8,7 @@
 import type { VideoSourceObject } from "expo-video";
 
 import { STREAM_FEATURE_RANGE_FILTER } from "@/src/data/types/content.types";
-import type { PlatformClass } from "@/src/utils/deviceInfo";
+import { PlatformClass, playerUserAgent } from "@/src/utils/deviceInfo";
 import {
   StreamVideoRange,
   isDirectOnlyURL,
@@ -180,10 +180,67 @@ export function allowsMixedCodecAdaptation(url: string): boolean {
  */
 export function videoSourceFor(url: string): AppVideoSource {
   const source: AppVideoSource = { uri: url };
+  // On Android the player's default agent cannot tell devices apart in the
+  // transcoder's log; name the device (deviceInfo.playerUserAgent).
+  const userAgent = playerUserAgent();
+  if (userAgent) source.headers = { "User-Agent": userAgent };
   if (allowsMixedCodecAdaptation(url)) source.allowMixedCodecAdaptation = true;
   const policy = sourcePolicyFor(url);
   if (policy?.preferredVideoMimeTypes?.length) {
     source.preferredVideoMimeTypes = [...policy.preferredVideoMimeTypes];
   }
   return source;
+}
+
+/** True when the engine registered a Dolby Vision preference for this URL. */
+export function hasDolbyVisionPreference(
+  url: string | null | undefined,
+): boolean {
+  if (!url) return false;
+  return !!sourcePolicyFor(url)?.preferredVideoMimeTypes?.includes(
+    "video/dolby-vision",
+  );
+}
+
+/** The profile number in a DV codec string: "dvh1.08.06" → 8, "dvhe.05.06" → 5. */
+export function dolbyVisionProfileOf(
+  supplementalCodecs: string | null | undefined,
+): number | null {
+  const first = (supplementalCodecs ?? "").split(",")[0]?.trim() ?? "";
+  const match = first.match(/^dv(?:h1|he|a1|av)\.(\d{2})/i);
+  if (!match) return null;
+  const profile = parseInt(match[1], 10);
+  return Number.isFinite(profile) ? profile : null;
+}
+
+export interface DolbyVisionPreferenceInput {
+  url: string;
+  /** `hls.offered` and `hls.supplementalCodecs` of the verdict. */
+  originalOffered: boolean;
+  supplementalCodecs: string | null | undefined;
+  /** The decoders' advertised DV profiles; null until probed. */
+  dolbyVisionProfiles: number[] | null | undefined;
+  /** `getDisplayHdrTypes()`; null when unknown. */
+  displayHdrTypes: number[] | null | undefined;
+}
+
+/**
+ * Dolby Vision under Auto: on a `pq` master that carries a DV Original rung,
+ * on a display that shows DV, with a decoder that advertises the rung's
+ * profile, prefer the DV MIME type. media3 then picks the single DV rung
+ * (a non-quality preference outranks the rung count) and never adapts out of
+ * it, since mixed-codec adaptation stays off on pq masters — so the TV
+ * switches to DV once and stays. Null everywhere else.
+ */
+export function dolbyVisionPreference(
+  input: DolbyVisionPreferenceInput,
+): SourcePolicy | null {
+  if (rangeParamOf(input.url) !== "pq") return null;
+  if (isDirectOnlyURL(input.url) || isFileTierURL(input.url)) return null;
+  if (!input.originalOffered) return null;
+  const profile = dolbyVisionProfileOf(input.supplementalCodecs);
+  if (profile === null) return null;
+  if (!input.displayHdrTypes?.includes(HDR_TYPE_DOLBY_VISION)) return null;
+  if (!input.dolbyVisionProfiles?.includes(profile)) return null;
+  return { preferredVideoMimeTypes: ["video/dolby-vision"] };
 }

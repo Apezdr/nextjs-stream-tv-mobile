@@ -22,6 +22,7 @@ import {
 } from "@/src/utils/streamUrls";
 import { logPlaybackError } from "@/src/utils/videoDiagnostics";
 import {
+  hasDolbyVisionPreference,
   rangeNegotiationFailure,
   videoSourceFor,
 } from "@/src/utils/videoRange";
@@ -37,7 +38,8 @@ const LOAD_STALL_MS = 20000;
 
 // A pinned tier (the ?direct=only master, the raw file) has no ABR: a weak
 // link rebuffers instead of stepping down, so a mid-playback stall this long
-// descends. ABR tiers are left to the player.
+// descends. So does an Auto master pinned to its Dolby Vision rung (the
+// descent first drops that preference). ABR tiers are left to the player.
 const REBUFFER_STALL_MS = 20000;
 
 // Errors that a same-source retry cannot fix, so the retry only costs a
@@ -186,7 +188,7 @@ export function useVideoTierFallback({
           status === "loading" &&
           src &&
           everReadyForSourceRef.current === src &&
-          isPinnedTierURL(src) &&
+          (isPinnedTierURL(src) || hasDolbyVisionPreference(src)) &&
           !rebufferTimerRef.current
         ) {
           rebufferTimerRef.current = setTimeout(() => {

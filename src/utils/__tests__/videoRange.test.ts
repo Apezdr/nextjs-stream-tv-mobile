@@ -1,4 +1,7 @@
 import {
+  dolbyVisionPreference,
+  dolbyVisionProfileOf,
+  hasDolbyVisionPreference,
   allowsMixedCodecAdaptation,
   hdr10Capable,
   isFourKClass,
@@ -10,6 +13,13 @@ import {
   setSourcePolicy,
   videoSourceFor,
 } from "@/src/utils/videoRange";
+
+// The player user-agent is a device fact; tests run without one.
+const mockPlayerUserAgent = jest.fn<string | null, []>(() => null);
+jest.mock("@/src/utils/deviceInfo", () => ({
+  ...jest.requireActual("@/src/utils/deviceInfo"),
+  playerUserAgent: () => mockPlayerUserAgent(),
+}));
 
 const FEATURES = ["multi-language-audio", "master-video-range-filter-v1"];
 const MASTER = "https://t.example.com/stream/abc/master.m3u8";
@@ -218,5 +228,101 @@ describe("videoSourceFor", () => {
     });
     setSourcePolicy(pq, null);
     expect(videoSourceFor(pq)).toEqual({ uri: pq });
+  });
+});
+
+describe("videoSourceFor user-agent", () => {
+  afterEach(() => mockPlayerUserAgent.mockReturnValue(null));
+
+  it("names the device in the player's User-Agent when the platform has one", () => {
+    mockPlayerUserAgent.mockReturnValue(
+      "NextJS Stream TV/1.0.3 (Linux;Android 11; NVIDIA SHIELD Android TV; tv)",
+    );
+    expect(videoSourceFor(`${MASTER}?direct=1`)).toEqual({
+      uri: `${MASTER}?direct=1`,
+      headers: {
+        "User-Agent":
+          "NextJS Stream TV/1.0.3 (Linux;Android 11; NVIDIA SHIELD Android TV; tv)",
+      },
+    });
+  });
+});
+
+describe("Dolby Vision preference", () => {
+  const PQ = `${MASTER}?range=pq&direct=1`;
+  const base = {
+    url: PQ,
+    originalOffered: true,
+    supplementalCodecs: "dvh1.08.06/db1p",
+    dolbyVisionProfiles: [4, 5, 8, 9],
+    displayHdrTypes: [1, 2, 3],
+  };
+
+  afterEach(() => setSourcePolicy(PQ, null));
+
+  it("parses the profile out of the DV codec string", () => {
+    expect(dolbyVisionProfileOf("dvh1.08.06/db1p")).toBe(8);
+    expect(dolbyVisionProfileOf("dvhe.05.06")).toBe(5);
+    expect(dolbyVisionProfileOf("dvh1.08.06,ec-3")).toBe(8);
+    expect(dolbyVisionProfileOf("hvc1.2.4.L153.B0")).toBeNull();
+    expect(dolbyVisionProfileOf(undefined)).toBeNull();
+    expect(dolbyVisionProfileOf("")).toBeNull();
+  });
+
+  it("prefers the DV rung on a pq master when display and decoder both take it", () => {
+    expect(dolbyVisionPreference(base)).toEqual({
+      preferredVideoMimeTypes: ["video/dolby-vision"],
+    });
+  });
+
+  it("never applies off pq masters, on the pinned tiers, or without a DV Original", () => {
+    expect(
+      dolbyVisionPreference({ ...base, url: `${MASTER}?range=sdr&direct=1` }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, url: `${MASTER}?direct=1` }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, url: `${MASTER}?direct=only` }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, originalOffered: false }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, supplementalCodecs: undefined }),
+    ).toBeNull();
+  });
+
+  it("needs a DV display and a decoder that advertises the profile", () => {
+    expect(
+      dolbyVisionPreference({ ...base, displayHdrTypes: [2, 3] }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, displayHdrTypes: null }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, dolbyVisionProfiles: [4, 5, 9] }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, dolbyVisionProfiles: null }),
+    ).toBeNull();
+    expect(
+      dolbyVisionPreference({ ...base, supplementalCodecs: "dvhe.05.06" }),
+    ).toEqual({
+      preferredVideoMimeTypes: ["video/dolby-vision"],
+    });
+  });
+
+  it("is visible to the fallback through the registry", () => {
+    expect(hasDolbyVisionPreference(PQ)).toBe(false);
+    setSourcePolicy(PQ, dolbyVisionPreference(base));
+    expect(hasDolbyVisionPreference(PQ)).toBe(true);
+    expect(videoSourceFor(PQ)).toEqual({
+      uri: PQ,
+      preferredVideoMimeTypes: ["video/dolby-vision"],
+    });
+    setSourcePolicy(PQ, null);
+    expect(hasDolbyVisionPreference(PQ)).toBe(false);
+    expect(hasDolbyVisionPreference(null)).toBe(false);
   });
 });

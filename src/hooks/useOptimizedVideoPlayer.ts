@@ -1,7 +1,7 @@
 import { useIsFocused } from "expo-router/react-navigation";
 import { useVideoPlayer, VideoPlayer } from "expo-video";
 import { useRef, useEffect, useCallback, useState } from "react";
-import { AppState, AppStateStatus } from "react-native";
+import { AppState, AppStateStatus, Platform } from "react-native";
 
 import { videoSourceFor } from "@/src/utils/videoRange";
 
@@ -413,8 +413,13 @@ export function useOptimizedVideoPlayer(
     }
   }, [videoURL]);
 
-  // Track app state changes to detect PiP mode
+  // Track app state changes to detect PiP mode. Not on TV: there is no
+  // picture-in-picture there (the watch screen mounts its view with
+  // allowsPictureInPicture={false}), and an Activity re-delivered intent — a
+  // deep link, a launcher resume — bounces AppState the same way, which read
+  // as "PiP" and left a blurred screen's player running underneath the next.
   useEffect(() => {
+    if (Platform.isTV) return;
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       const previousState = appStateRef.current;
       appStateRef.current = nextAppState;
