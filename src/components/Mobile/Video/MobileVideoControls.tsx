@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEvent } from "expo";
+import { Image } from "expo-image";
 import { VideoPlayer } from "expo-video";
 import { memo, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
@@ -248,6 +249,21 @@ const MobileVideoControls = memo(
       },
       [setSubtitlesEnabled, setPreferredLanguage],
     );
+
+    // Title logo, as the TV chrome draws it: the response's `logo` image
+    // replaces the text title for a movie, and names the show above the
+    // episode title for a series. Text is the fallback when the response has
+    // no logo or the image fails to load (keyed by URL so a later title with
+    // a working logo is not written off by an earlier failure).
+    const [failedLogoURL, setFailedLogoURL] = useState<string | null>(null);
+    const logoURL = videoInfo?.logo || undefined;
+    const showLogo = !!logoURL && failedLogoURL !== logoURL;
+    const showTextTitle = !showLogo || videoInfo?.type === "tv";
+    const showTitleFallback =
+      !showLogo && videoInfo?.type === "tv" && !!videoInfo?.showTitle;
+    const onLogoError = useCallback(() => {
+      if (logoURL) setFailedLogoURL(logoURL);
+    }, [logoURL]);
 
     // Subtitle style state
     const [selectedSubtitleStyle, setSelectedSubtitleStyle] =
@@ -809,9 +825,38 @@ const MobileVideoControls = memo(
               ]}
               pointerEvents="box-none"
             >
-              <Text style={styles.videoTitle} numberOfLines={layout.titleLines}>
-                {videoInfo?.title || ""}
-              </Text>
+              {showLogo && (
+                <Image
+                  source={{ uri: logoURL }}
+                  style={[
+                    styles.logo,
+                    {
+                      height: layout.logoHeight,
+                      // Logos are wide; cap by height and by half the window
+                      // so a long one never crowds the badge and description.
+                      width: Math.min(windowWidth * 0.5, layout.logoHeight * 5),
+                    },
+                  ]}
+                  contentFit="contain"
+                  contentPosition="left"
+                  transition={200}
+                  onError={onLogoError}
+                  accessibilityLabel={videoInfo?.showTitle || videoInfo?.title}
+                />
+              )}
+              {showTitleFallback && (
+                <Text style={styles.showTitle} numberOfLines={1}>
+                  {videoInfo?.showTitle}
+                </Text>
+              )}
+              {showTextTitle && (
+                <Text
+                  style={styles.videoTitle}
+                  numberOfLines={layout.titleLines}
+                >
+                  {videoInfo?.title || ""}
+                </Text>
+              )}
               {/* Delivery-tier badge from direct.json — facts only, never
                   derived from client probing. */}
               {qualityBadge && (
@@ -1060,6 +1105,21 @@ const styles = StyleSheet.create({
   },
   titleSection: {
     flexShrink: 1,
+  },
+  logo: {
+    alignSelf: "flex-start",
+    marginBottom: 6,
+  },
+  showTitle: {
+    color: "#CCCCCC",
+    fontSize: 13,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    marginBottom: 2,
+    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+    textTransform: "uppercase",
   },
   videoTitle: {
     color: "#FFFFFF",
