@@ -67,7 +67,7 @@ describe("decideSilentFailure (video)", () => {
     });
   });
 
-  it("acts on nothing rendered after eight seconds only when no decoder took a format", () => {
+  it("reports, never acts on, nothing rendered after eight seconds (a DV rung can play with both signals missing)", () => {
     const base = { videoTracks: [AVC_OK], clockAdvancedSec: 8 };
     expect(
       decideSilentFailure(snapshot({ ...base, videoTrackSelected: true })),
@@ -76,7 +76,7 @@ describe("decideSilentFailure (video)", () => {
       decideSilentFailure(snapshot({ ...base, videoTrackSelected: false })),
     ).toEqual({
       verdict: "video-not-rendering",
-      action: "descend-or-card",
+      action: "report-only",
     });
   });
 
@@ -147,7 +147,7 @@ describe("decideSilentFailure (video)", () => {
           alreadyDecided: new Set(["video-unsupported"]),
         }),
       ),
-    ).toEqual({ verdict: "video-not-rendering", action: "descend-or-card" });
+    ).toEqual({ verdict: "video-not-rendering", action: "report-only" });
     expect(
       decideSilentFailure(
         snapshot({
