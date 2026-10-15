@@ -10,6 +10,10 @@ import {
   TouchableOpacity,
   Animated,
   Pressable,
+  Modal,
+  ScrollView,
+  NativeSyntheticEvent,
+  TextLayoutEventData,
 } from "react-native";
 import { GestureDetector, Gesture } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -275,6 +279,29 @@ const MobileVideoControls = memo(
       if (logoURL) setFailedLogoURL(logoURL);
     }, [logoURL]);
 
+    // Description clamp. The visible text is cut to a few lines; it turns
+    // pressable (opening the full text in a modal) only when the clamp has
+    // actually cut something. That is measured with an invisible, unclamped
+    // twin of the text at the same width: onTextLayout on a clamped Text
+    // reports only the lines that survived the clamp on both platforms, so
+    // it cannot tell "fits" from "cut" on its own.
+    const description = videoInfo?.description;
+    const [descriptionLineCount, setDescriptionLineCount] = useState(0);
+    const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
+    const isDescriptionTruncated =
+      descriptionLineCount > layout.descriptionLines;
+    const handleDescriptionTextLayout = useCallback(
+      (event: NativeSyntheticEvent<TextLayoutEventData>) => {
+        setDescriptionLineCount(event.nativeEvent.lines.length);
+      },
+      [],
+    );
+    useEffect(() => {
+      // A new title's text is unmeasured until its twin reports in.
+      setDescriptionLineCount(0);
+      setIsDescriptionExpanded(false);
+    }, [description]);
+
     // Subtitle style state
     const [selectedSubtitleStyle, setSelectedSubtitleStyle] =
       useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
@@ -381,16 +408,40 @@ const MobileVideoControls = memo(
       setQualityPickerOpen(true);
       showControls();
     }, [showControls]);
+    const openDescription = useCallback(() => {
+      setIsDescriptionExpanded(true);
+      showControls();
+    }, [showControls]);
+    const closeDescription = useCallback(() => {
+      setIsDescriptionExpanded(false);
+      // Restart the auto-hide window so the controls are still there when
+      // the modal goes away, instead of vanishing under the user's finger.
+      showControls();
+    }, [showControls]);
 
     // Watchdog: while the controls are visible, the video is playing, and the
     // user isn't dragging the seek bar, a hide is always pending. Replaces an
     // imperatively-scheduled timer that could read a stale isControlsVisible
-    // in the same tick and never get scheduled at all.
+    // in the same tick and never get scheduled at all. Paused while the
+    // description modal is up: hiding underneath it would strand the user.
     useEffect(() => {
-      if (!isControlsVisible || !isPlaying || isSeeking) return;
+      if (
+        !isControlsVisible ||
+        !isPlaying ||
+        isSeeking ||
+        isDescriptionExpanded
+      ) {
+        return;
+      }
       const id = setTimeout(() => setIsControlsVisible(false), 5000);
       return () => clearTimeout(id);
-    }, [isControlsVisible, isPlaying, isSeeking, interactionTick]);
+    }, [
+      isControlsVisible,
+      isPlaying,
+      isSeeking,
+      isDescriptionExpanded,
+      interactionTick,
+    ]);
 
     // Controls visibility animation
     useEffect(() => {
@@ -896,14 +947,44 @@ const MobileVideoControls = memo(
                   <Text style={styles.qualityBadgeText}>{qualityBadge}</Text>
                 </Pressable>
               )}
-              {videoInfo?.description && (
-                <Text
-                  style={styles.videoDescription}
-                  numberOfLines={layout.descriptionLines}
-                >
-                  {videoInfo.description}
-                </Text>
-              )}
+              {description ? (
+                <View style={styles.descriptionBlock}>
+                  {/* Invisible, unclamped twin: reports how many lines the
+                      full text needs at this width (see isDescriptionTruncated). */}
+                  <Text
+                    style={[styles.videoDescription, styles.descriptionMeasure]}
+                    onTextLayout={handleDescriptionTextLayout}
+                    pointerEvents="none"
+                    importantForAccessibility="no-hide-descendants"
+                    accessibilityElementsHidden
+                  >
+                    {description}
+                  </Text>
+                  <Pressable
+                    onPress={openDescription}
+                    disabled={!isDescriptionTruncated}
+                    hitSlop={4}
+                    style={({ pressed }) =>
+                      pressed ? styles.descriptionPressed : undefined
+                    }
+                    accessibilityRole={
+                      isDescriptionTruncated ? "button" : "text"
+                    }
+                    accessibilityHint={
+                      isDescriptionTruncated
+                        ? "Shows the full description"
+                        : undefined
+                    }
+                  >
+                    <Text
+                      style={styles.videoDescription}
+                      numberOfLines={layout.descriptionLines}
+                    >
+                      {description}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </Animated.View>
 
             {/* Seek bar with touch support - always visible */}
@@ -1032,6 +1113,48 @@ const MobileVideoControls = memo(
             </View>
           </Animated.View>
         )}
+
+        {/* Full description. A tap off the card or the hardware back button
+            (onRequestClose) closes it; the card itself claims its touches so
+            a tap on the text does not fall through to the backdrop. */}
+        <Modal
+          visible={isDescriptionExpanded}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={closeDescription}
+        >
+          <Pressable
+            style={styles.descriptionModalBackdrop}
+            onPress={closeDescription}
+            accessibilityRole="button"
+            accessibilityLabel="Close description"
+          >
+            <View
+              style={[
+                styles.descriptionModalCard,
+                {
+                  maxHeight: window.height * 0.8,
+                  width: Math.min(window.width - 48, 560),
+                },
+              ]}
+              onStartShouldSetResponder={() => true}
+            >
+              {videoInfo?.title ? (
+                <Text style={styles.descriptionModalTitle} numberOfLines={2}>
+                  {videoInfo.title}
+                </Text>
+              ) : null}
+              <ScrollView
+                style={styles.descriptionModalScroll}
+                contentContainerStyle={styles.descriptionModalScrollContent}
+              >
+                <Text style={styles.descriptionModalText}>{description}</Text>
+              </ScrollView>
+            </View>
+          </Pressable>
+        </Modal>
       </View>
     );
   },
@@ -1171,6 +1294,50 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.8)",
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 3,
+  },
+  descriptionBlock: {
+    flexShrink: 1,
+  },
+  // Same font and width as the visible text, out of the flow and unseen.
+  descriptionMeasure: {
+    left: 0,
+    opacity: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  descriptionPressed: {
+    opacity: 0.6,
+  },
+  descriptionModalBackdrop: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.8)",
+    flex: 1,
+    justifyContent: "center",
+    padding: 24,
+  },
+  descriptionModalCard: {
+    backgroundColor: "rgba(30, 30, 30, 0.98)",
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+  },
+  descriptionModalTitle: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "600",
+    marginBottom: 10,
+  },
+  descriptionModalScroll: {
+    flexGrow: 0,
+  },
+  descriptionModalScrollContent: {
+    paddingBottom: 4,
+  },
+  descriptionModalText: {
+    color: "#E6E6E6",
+    fontSize: 15,
+    lineHeight: 22,
   },
 
   // Seek controls
