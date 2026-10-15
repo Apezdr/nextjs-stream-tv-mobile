@@ -13,6 +13,7 @@ import {
 } from "react";
 import { View, StyleSheet, Text, BackHandler, Pressable } from "react-native";
 
+import { FullScreenNotice } from "@/src/components/TV/FullScreenNotice";
 import StandaloneVideoControls from "@/src/components/Video/StandaloneVideoControls";
 import { Colors } from "@/src/constants/Colors";
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
@@ -36,6 +37,7 @@ import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useQualityTier } from "@/src/hooks/useQualityTier";
 import { useVideoRange, videoRangeFor } from "@/src/hooks/useVideoRange";
+import { useWatchContentLoader } from "@/src/hooks/useWatchContentLoader";
 import { useWatchHistoryApplication } from "@/src/hooks/useWatchHistoryApplication";
 import {
   qualityPrefMediaKey,
@@ -48,75 +50,6 @@ import { isAdaptiveStreamURL } from "@/src/utils/streamType";
 import { canonicalVideoId, isFileTierURL } from "@/src/utils/streamUrls";
 import { videoSourceFor } from "@/src/utils/videoRange";
 import { patchWatchHistoryPosition } from "@/src/utils/watchProgress";
-
-function parseNumericParam(value: string | undefined): number | undefined {
-  if (!value || value === "") return undefined;
-  const parsed = parseInt(value, 10);
-  return isNaN(parsed) ? undefined : parsed;
-}
-
-// Custom hook to handle content loading logic
-function useContentLoader(
-  params: {
-    id: string;
-    type: "tv" | "movie";
-    season?: string;
-    episode?: string;
-  },
-  skipLoading = false,
-) {
-  const [videoURL, setVideoURL] = useState<string | null>(null);
-  const [videoData, setVideoData] = useState<MediaDetailsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [contentError, setContentError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      if (!params.id || !params.type || skipLoading) return;
-
-      setLoading(true);
-      setContentError(null);
-
-      try {
-        const md = await contentService.getMediaDetails({
-          mediaType: params.type,
-          mediaId: params.id,
-          // Parse season and episode as numbers directly from route params
-          season: parseNumericParam(params.season),
-          episode: parseNumericParam(params.episode),
-          // Include watch history for resume functionality
-          includeWatchHistory: true,
-        });
-
-        if (!cancelled) {
-          setVideoURL(md?.videoURL ?? null);
-          setVideoData(md ?? null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setContentError(
-            error instanceof Error ? error.message : "Failed to load content",
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [params.id, params.type, params.season, params.episode, skipLoading]);
-
-  return {
-    videoURL,
-    videoData,
-    loading,
-    contentError,
-  };
-}
 
 export default function WatchPage() {
   const params = useLocalSearchParams<{
@@ -149,10 +82,11 @@ export default function WatchPage() {
 
   // Content loading (abstracted) - skip loading during episode switching
   // Use ref to ensure we block loading even during React state update timing issues
-  const { videoURL, videoData, loading, contentError } = useContentLoader(
-    params,
-    isEpisodeSwitching || isEpisodeSwitchingRef.current,
-  );
+  const { videoURL, videoData, loading, contentError, retryContent } =
+    useWatchContentLoader(
+      params,
+      isEpisodeSwitching || isEpisodeSwitchingRef.current,
+    );
 
   // Enhanced episode switching state
   const [currentEpisodeData, setCurrentEpisodeData] =
@@ -1047,35 +981,28 @@ export default function WatchPage() {
   if (finalError) {
     return (
       <View style={styles.container}>
-        <View style={styles.messageContainer}>
-          <Text style={styles.errorText}>Error: {finalError}</Text>
-          {/* A silent failure (no frame drawn, no track selected) can be
-              retried in place; player errors have their own paths. */}
-          {silentGuard.error ? (
-            <Pressable
-              focusable
-              hasTVPreferredFocus
-              style={({ focused }) => [
-                styles.clickableText,
-                focused && styles.clickableTextFocused,
-              ]}
-              onPress={silentGuard.retry}
-            >
-              <Text style={styles.messageText}>Try again</Text>
-            </Pressable>
-          ) : null}
-          <Pressable
-            focusable
-            hasTVPreferredFocus={!silentGuard.error}
-            style={({ focused }) => [
-              styles.clickableText,
-              focused && styles.clickableTextFocused,
-            ]}
-            onPress={handleExit}
-          >
-            <Text style={styles.messageText}>Go back to browse</Text>
-          </Pressable>
-        </View>
+        <FullScreenNotice
+          title={contentError ? "Couldn't load this title" : "Playback stopped"}
+          message={finalError}
+          actions={[
+            // A failed content load can be retried here, and retries itself
+            // once the server is back; a silent failure (no frame drawn, no
+            // track selected) retries in place; other player errors have
+            // their own paths.
+            ...(contentError
+              ? [{ label: "Try again", onPress: retryContent, preferred: true }]
+              : silentGuard.error
+                ? [
+                    {
+                      label: "Try again",
+                      onPress: silentGuard.retry,
+                      preferred: true,
+                    },
+                  ]
+                : []),
+            { label: "Go back to browse", onPress: handleExit },
+          ]}
+        />
       </View>
     );
   }

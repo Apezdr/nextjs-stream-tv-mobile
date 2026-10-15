@@ -428,7 +428,9 @@ export const contentService = {
   updateValidationStatus: async (
     params: SyncValidationUpdateRequest,
   ): Promise<void> => {
-    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.SYNC_VALIDATION, params);
+    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.SYNC_VALIDATION, params, {
+      retries: 2,
+    });
   },
 
   /**
@@ -444,6 +446,9 @@ export const contentService = {
       headers: {
         "User-Agent": userAgent,
       },
+      // Nothing above this call retries it, and a lost write here is a lost
+      // resume position.
+      retries: 2,
     });
   },
 
@@ -452,9 +457,11 @@ export const contentService = {
    * Idempotent — safe to call even if the session is already gone.
    */
   endPlaybackPresence: async (sessionId: string): Promise<void> => {
-    await enhancedApiClient.post(API_ENDPOINTS.SYSTEM.PRESENCE_END, {
-      sessionId,
-    });
+    await enhancedApiClient.post(
+      API_ENDPOINTS.SYSTEM.PRESENCE_END,
+      { sessionId },
+      { retries: 2 },
+    );
   },
 
   /**

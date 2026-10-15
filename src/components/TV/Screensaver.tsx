@@ -22,11 +22,16 @@ import Reanimated, {
   cancelAnimation,
 } from "react-native-reanimated";
 
+import { ScreensaverUnavailable } from "@/src/components/TV/ScreensaverUnavailable";
 import { Colors } from "@/src/constants/Colors";
 import { useScreensaver } from "@/src/context/ScreensaverContext";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import { ScreensaverResponse } from "@/src/data/types/content.types";
 import { useDimensions } from "@/src/hooks/useDimensions";
+import {
+  selectHealthNotice,
+  useServerHealthStore,
+} from "@/src/stores/serverHealthStore";
 import { resolveShowWatchTarget } from "@/src/utils/nextUpEpisode";
 
 // Fixed timing constants that don't depend on dimensions
@@ -61,6 +66,11 @@ const INSTRUCTION_POSITIONS = [
   "bottom-center",
 ] as const;
 type InstructionPosition = (typeof INSTRUCTION_POSITIONS)[number];
+
+// How long the current slide stays up once the server is unreachable. The
+// slide can no longer change (every refresh fails), so past this it is a
+// static backdrop zooming on an OLED; after it, black plus the moving notice.
+const OUTAGE_BLACKOUT_MS = 120_000;
 
 const SCREENSAVER_BUTTONS = [
   { action: "watch", label: "Watch Now", icon: "▶️" },
@@ -118,6 +128,24 @@ export const Screensaver: React.FC = () => {
   const fadeOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstLoadRef = useRef<boolean>(true);
 
+  // The server is down, per the health store — whether or not the context's
+  // 15 s refresh has failed yet. Drives the drifting notice over the current
+  // slide and, after OUTAGE_BLACKOUT_MS, drops the slide.
+  const healthNotice = useServerHealthStore(selectHealthNotice);
+  const [outageSince, setOutageSince] = useState<number | null>(null);
+  const [outageNow, setOutageNow] = useState(() => Date.now());
+  useEffect(() => {
+    setOutageSince((since) => (healthNotice ? (since ?? Date.now()) : null));
+  }, [healthNotice]);
+  useEffect(() => {
+    if (outageSince === null) return;
+    setOutageNow(Date.now());
+    const timer = setInterval(() => setOutageNow(Date.now()), 10_000);
+    return () => clearInterval(timer);
+  }, [outageSince]);
+  const outageHidesContent =
+    outageSince !== null && outageNow - outageSince >= OUTAGE_BLACKOUT_MS;
+
   // Transition pause state for user interaction
   const pauseStartTimeRef = useRef<number>(0);
 
@@ -141,18 +169,20 @@ export const Screensaver: React.FC = () => {
     });
   }, [isScreensaverActive, isPlaying, currentMode, playerState, error]);
 
-  // Handle error state - auto-clear errors after display
+  // Clear a load error once content is on screen. While there is none, the
+  // error IS the screen ("unavailable / retrying"); clearing it after 5 s
+  // used to drop into the `return null` below and leave the TV black for the
+  // rest of an outage. The context clears it on the next successful load.
   useEffect(() => {
-    if (error) {
+    if (error && displayedContent) {
       console.warn("[Screensaver] Error detected:", error);
-      // Auto-clear error after a delay to prevent permanent error states
       const errorClearTimer = setTimeout(() => {
         clearError();
       }, 5000);
 
       return () => clearTimeout(errorClearTimer);
     }
-  }, [error, clearError]);
+  }, [error, displayedContent, clearError]);
 
   // Function to start zoom animation from current value
   const startZoomAnimation = React.useCallback(
@@ -1132,14 +1162,22 @@ export const Screensaver: React.FC = () => {
     return null;
   }
 
-  // Show error state if there's an error and no content
-  if (error && !displayedContent) {
+  // No content to show, or a slide that has been frozen by an outage for
+  // OUTAGE_BLACKOUT_MS: a dim notice that keeps moving (burn-in), on black.
+  if (
+    (error && !displayedContent) ||
+    (displayedContent && outageHidesContent)
+  ) {
     return (
       <View style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Screensaver content unavailable</Text>
-          <Text style={styles.errorSubtext}>Retrying automatically...</Text>
-        </View>
+        {healthNotice ? (
+          <ScreensaverUnavailable
+            title="Can't reach the server"
+            subtitle="The screensaver resumes when it's back"
+          />
+        ) : (
+          <ScreensaverUnavailable />
+        )}
       </View>
     );
   }
@@ -1329,6 +1367,15 @@ export const Screensaver: React.FC = () => {
             </Reanimated.View>
           )}
 
+          {/* The server is down: say so, dimly and on the move, over a slide
+              that can no longer change. */}
+          {healthNotice && (
+            <ScreensaverUnavailable
+              title="Can't reach the server"
+              subtitle="Showing the last title loaded"
+            />
+          )}
+
           {/* Burn-in protection dimming overlay */}
           <Reanimated.View
             style={[styles.dimOverlay, dimStyle]}
@@ -1402,34 +1449,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     backgroundColor: "black",
     zIndex: 9999,
-  },
-
-  errorContainer: {
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-    flex: 1,
-    justifyContent: "center",
-    padding: 40,
-  },
-
-  errorSubtext: {
-    color: "#ccc",
-    fontSize: 24,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.75)",
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
-  },
-
-  errorText: {
-    color: Colors.dark.whiteText,
-    fontSize: 36,
-    fontWeight: "bold",
-    marginBottom: 16,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.75)",
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 5,
   },
 
   exitText: {

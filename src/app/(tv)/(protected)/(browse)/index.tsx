@@ -11,6 +11,7 @@ import {
 
 import TVBanner from "@/src/components/TV/Banner/TVBanner";
 import ContentRow from "@/src/components/TV/Pages/ContentRow";
+import { RetryNotice } from "@/src/components/TV/RetryNotice";
 import { Colors } from "@/src/constants/Colors";
 import { useTVAppState } from "@/src/context/TVAppStateContext";
 import {
@@ -147,11 +148,21 @@ export default function TVHomePage() {
       const now = Date.now();
       const timeSinceLastRefresh = now - lastRefreshRef.current;
 
-      // Refresh data if enough time has passed and we have existing data
+      // Refresh rows that already have data. Not rows still on their first
+      // load (refetch() cancels and restarts an in-flight fetch), and not
+      // errored rows: this callback is rebuilt whenever any row starts or
+      // stops fetching, so a refetch of an errored row from here would start
+      // over the moment its last attempt failed, seven requests at a time.
+      // Errored rows get the Retry button, the 60 s refresh below, and the
+      // recovery refetch in AuthProvider.
+      //
+      // The debounce stamp is set once, before the branches: stamping only
+      // inside the first one left the other rows undebounced for as long as
+      // Continue Watching was still on its first load.
       if (timeSinceLastRefresh >= REFRESH_DEBOUNCE_MS) {
+        lastRefreshRef.current = now;
         if (recentlyWatched.data && refreshCallbacks.recentlyWatched) {
           logDebug("Refreshing recently watched data (debounced)");
-          lastRefreshRef.current = now;
           refreshCallbacks.recentlyWatched();
         }
         if (recentlyAdded.data && refreshCallbacks.recentlyAdded) {
@@ -257,17 +268,23 @@ export default function TVHomePage() {
           logDebug("Periodic refresh triggered");
           lastRefreshRef.current = now;
 
-          // Refresh all data sources
-          if (recentlyWatched.data && recentlyWatched.refetch) {
+          // Refresh rows with data or in error; never a row still loading.
+          if (
+            (recentlyWatched.data || recentlyWatched.isError) &&
+            recentlyWatched.refetch
+          ) {
             recentlyWatched.refetch();
           }
-          if (recentlyAdded.data && recentlyAdded.refetch) {
+          if (
+            (recentlyAdded.data || recentlyAdded.isError) &&
+            recentlyAdded.refetch
+          ) {
             recentlyAdded.refetch();
           }
-          if (tvShows.data && tvShows.refetch) {
+          if ((tvShows.data || tvShows.isError) && tvShows.refetch) {
             tvShows.refetch();
           }
-          if (movies.data && movies.refetch) {
+          if ((movies.data || movies.isError) && movies.refetch) {
             movies.refetch();
           }
         }
@@ -292,12 +309,16 @@ export default function TVHomePage() {
   }, [
     isFocused,
     recentlyWatched.data,
+    recentlyWatched.isError,
     recentlyWatched.refetch,
     recentlyAdded.data,
+    recentlyAdded.isError,
     recentlyAdded.refetch,
     tvShows.data,
+    tvShows.isError,
     tvShows.refetch,
     movies.data,
+    movies.isError,
     movies.refetch,
   ]);
 
@@ -541,15 +562,22 @@ export default function TVHomePage() {
         </View>
 
         {/* Recently Watched Section */}
+        {/* isLoading here is useInfiniteContentList's, not React Query's: true
+            until the first page arrives, including while that fetch is paused
+            for lack of network. The raw flag is false while paused and would
+            fall through to an empty row. */}
         {recentlyWatched.isLoading ? (
           <View style={styles.loadingSection}>
             <Text style={styles.sectionTitle}>Continue Watching</Text>
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : recentlyWatched.error ? (
-          <View style={styles.errorSection}>
+          <View style={styles.errorSection} scrollSnapOffset={ROW_SNAP_INSET}>
             <Text style={styles.sectionTitle}>Continue Watching</Text>
-            <Text style={styles.errorText}>Failed to load content</Text>
+            <RetryNotice
+              onRetry={() => recentlyWatched.refetch()}
+              isRetrying={recentlyWatched.isFetching}
+            />
           </View>
         ) : transformedRecentlyWatched.length ? (
           <View
@@ -581,9 +609,12 @@ export default function TVHomePage() {
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : recentlyAdded.error ? (
-          <View style={styles.errorSection}>
+          <View style={styles.errorSection} scrollSnapOffset={ROW_SNAP_INSET}>
             <Text style={styles.sectionTitle}>Recently Added</Text>
-            <Text style={styles.errorText}>Failed to load content</Text>
+            <RetryNotice
+              onRetry={() => recentlyAdded.refetch()}
+              isRetrying={recentlyAdded.isFetching}
+            />
           </View>
         ) : transformedRecentlyAdded.length ? (
           <View
@@ -615,9 +646,12 @@ export default function TVHomePage() {
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : tvShows.error ? (
-          <View style={styles.errorSection}>
+          <View style={styles.errorSection} scrollSnapOffset={ROW_SNAP_INSET}>
             <Text style={styles.sectionTitle}>TV Shows</Text>
-            <Text style={styles.errorText}>Failed to load content</Text>
+            <RetryNotice
+              onRetry={() => tvShows.refetch()}
+              isRetrying={tvShows.isFetching}
+            />
           </View>
         ) : transformedTVShows.length ? (
           <View
@@ -649,9 +683,12 @@ export default function TVHomePage() {
             <ActivityIndicator color="#FFFFFF" />
           </View>
         ) : movies.error ? (
-          <View style={styles.errorSection}>
+          <View style={styles.errorSection} scrollSnapOffset={ROW_SNAP_INSET}>
             <Text style={styles.sectionTitle}>Movies</Text>
-            <Text style={styles.errorText}>Failed to load content</Text>
+            <RetryNotice
+              onRetry={() => movies.refetch()}
+              isRetrying={movies.isFetching}
+            />
           </View>
         ) : transformedMovies.length ? (
           <View
@@ -698,11 +735,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     minHeight: 280, // Consistent section height for stepped scrolling
     paddingVertical: 20,
-  },
-  errorText: {
-    color: "#E50914",
-    fontSize: 16,
-    textAlign: "center",
   },
   loadingSection: {
     alignItems: "center",

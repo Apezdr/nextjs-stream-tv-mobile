@@ -1,6 +1,8 @@
 // app/(mobile)/_layout.tsx
 import { Redirect, Stack } from "expo-router";
+import { StyleSheet, View } from "react-native";
 
+import { OfflineNotice } from "@/src/components/Mobile/OfflineNotice";
 import { useAuth } from "@/src/providers/AuthProvider";
 
 export default function MobileLayout() {
@@ -25,12 +27,21 @@ export default function MobileLayout() {
 
   // logged in → render protected routes
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-      }}
-    >
-      <Stack.Screen name="(protected)" />
-    </Stack>
+    <View style={styles.container}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+        }}
+      >
+        <Stack.Screen name="(protected)" />
+      </Stack>
+      <OfflineNotice />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+});

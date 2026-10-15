@@ -9,6 +9,7 @@ import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileConte
 import MobileContentList from "@/src/components/Mobile/Lists/MobileContentList";
 import { Colors } from "@/src/constants/Colors";
 import { queryKeys } from "@/src/data/query/queryKeys";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
@@ -51,7 +52,9 @@ export default function GenreScreen() {
 
   const {
     data,
-    isLoading,
+    isPending,
+    isFetching,
+    isPaused,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -81,6 +84,9 @@ export default function GenreScreen() {
       lastPage?.nextItem ? allPages.length : undefined,
     enabled: !!genreName,
   });
+
+  // Paused-aware first-load flag (see queryState.ts).
+  const isLoading = isAwaitingFirstData({ isPending, isFetching, isPaused });
 
   const items = useMemo(
     () => data?.pages.flatMap((page) => page.currentItems || []) ?? [],

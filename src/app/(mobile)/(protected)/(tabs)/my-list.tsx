@@ -13,6 +13,7 @@ import {
   getFlattenedInfiniteWatchlistData,
   useInfiniteWatchlistContent,
 } from "@/src/data/hooks/queries/useInfiniteContentQueries";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
@@ -58,7 +59,9 @@ export default function MobileMyListPage() {
 
   const {
     data: playlistsData,
-    isLoading: isLoadingPlaylists,
+    isPending: isPlaylistsPending,
+    isFetching: isPlaylistsFetching,
+    isPaused: isPlaylistsPaused,
     error: playlistsError,
     refetch: refetchPlaylists,
   } = useQuery({
@@ -70,6 +73,14 @@ export default function MobileMyListPage() {
       }),
     refetchInterval: isScreenFocused ? WATCHLIST_POLL_INTERVAL_MS : false,
     refetchIntervalInBackground: true,
+  });
+
+  // Paused-aware first-load flags (see queryState.ts): a first fetch paused
+  // for lack of network must still read as loading, not as an empty list.
+  const isLoadingPlaylists = isAwaitingFirstData({
+    isPending: isPlaylistsPending,
+    isFetching: isPlaylistsFetching,
+    isPaused: isPlaylistsPaused,
   });
 
   const playlists = useMemo(
@@ -122,7 +133,9 @@ export default function MobileMyListPage() {
 
   const {
     data: watchlistContent,
-    isLoading: isLoadingContent,
+    isPending: isContentPending,
+    isFetching: isContentFetching,
+    isPaused: isContentPaused,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -143,6 +156,11 @@ export default function MobileMyListPage() {
       refetchIntervalInBackground: true,
     },
   );
+  const isLoadingContent = isAwaitingFirstData({
+    isPending: isContentPending,
+    isFetching: isContentFetching,
+    isPaused: isContentPaused,
+  });
 
   const watchlistItems = useMemo(
     () => getFlattenedInfiniteWatchlistData(watchlistContent),

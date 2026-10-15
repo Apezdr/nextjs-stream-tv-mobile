@@ -13,6 +13,8 @@ interface FocusableButtonProps {
   hasTVPreferredFocus?: boolean;
   leftIcon?: React.ComponentType<SvgProps>;
   iconSize?: number;
+  /** Rendered after the title: a spinner, a check, a count. */
+  accessory?: React.ReactNode;
 }
 
 const FocusableButton: React.FC<FocusableButtonProps> = ({
@@ -24,6 +26,7 @@ const FocusableButton: React.FC<FocusableButtonProps> = ({
   hasTVPreferredFocus = false,
   leftIcon: LeftIcon,
   iconSize = 24,
+  accessory,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
 
@@ -43,7 +46,12 @@ const FocusableButton: React.FC<FocusableButtonProps> = ({
           </View>
         )}
         <View style={[styles.textContainer, LeftIcon && styles.textWithIcon]}>
-          <Text style={[styles.buttonText, textStyle]}>{title}</Text>
+          <View style={styles.labelRow}>
+            <Text style={[styles.buttonText, textStyle]}>{title}</Text>
+            {accessory ? (
+              <View style={styles.accessory}>{accessory}</View>
+            ) : null}
+          </View>
         </View>
       </View>
     </Pressable>
@@ -51,6 +59,9 @@ const FocusableButton: React.FC<FocusableButtonProps> = ({
 };
 
 const styles = StyleSheet.create({
+  accessory: {
+    marginLeft: 10,
+  },
   button: {
     alignItems: "center",
     backgroundColor: Colors.light.link,
@@ -66,14 +77,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     position: "relative",
   },
-  textContainer: {
-    alignItems: "center",
-    flex: 1,
-    justifyContent: "center",
-  },
-  textWithIcon: {
-    paddingLeft: 0, // Space for icon (24px icon + 12px margin)
-  },
   buttonText: {
     color: Colors.light.videoControlText,
     fontSize: 18,
@@ -86,6 +89,18 @@ const styles = StyleSheet.create({
     left: -33,
     position: "absolute",
     width: 24,
+  },
+  labelRow: {
+    alignItems: "center",
+    flexDirection: "row",
+  },
+  textContainer: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+  },
+  textWithIcon: {
+    paddingLeft: 0, // Space for icon (24px icon + 12px margin)
   },
 });
 

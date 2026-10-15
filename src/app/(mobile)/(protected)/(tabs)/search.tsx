@@ -19,6 +19,7 @@ import MobileContentCard, {
   MobileContentCardData,
 } from "@/src/components/Mobile/Cards/MobileContentCard";
 import { Colors } from "@/src/constants/Colors";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import {
@@ -154,7 +155,9 @@ export default function SearchPage() {
   // Fetch search results
   const {
     data: searchResults,
-    isLoading,
+    isPending,
+    isFetching,
+    isPaused,
     error,
   } = useQuery({
     queryKey: ["search", debouncedQuery],
@@ -166,6 +169,11 @@ export default function SearchPage() {
       ),
     enabled: true,
   });
+
+  // Paused-aware "no results yet": a first fetch paused for lack of network
+  // is not loading to React Query, and the screen would otherwise say "No
+  // results found" with nothing searched.
+  const isLoading = isAwaitingFirstData({ isPending, isFetching, isPaused });
 
   // Transform results
   const transformedResults = useMemo((): MobileContentCardData[] => {

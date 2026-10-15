@@ -8,6 +8,10 @@ import { useCallback } from "react";
 import { API_ENDPOINTS, buildQueryParams } from "@/src/data/api/endpoints";
 import { enhancedApiClient } from "@/src/data/api/enhancedClient";
 import { queryKeys } from "@/src/data/query/queryKeys";
+import {
+  isAwaitingFirstData,
+  shouldRetryQuery,
+} from "@/src/data/query/queryState";
 import type {
   ContentListResponse,
   HorizontalListParams,
@@ -107,10 +111,9 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
     },
     initialPageParam: 0,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, _error: Error & { status?: number }) => {
-      // retry 6 times for network/server errors
-      return failureCount < 6;
-    },
+    // Up to six tries for network/server errors; none after a 4xx or once the
+    // server is known to be down (shouldRetryQuery).
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 6),
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff, max 10s
     // Stale time is configured in queryClient
   });
@@ -199,6 +202,12 @@ export function useInfiniteContentList(params: HorizontalListParams = {}) {
 
   return {
     ...query,
+    // Paused-aware, unlike React Query's own flag: true until the first page
+    // arrives, including while that first fetch is paused for lack of
+    // network. The raw isLoading is false while paused, which left every row
+    // keyed on it empty, with "nothing found" wording, when the app started
+    // offline.
+    isLoading: isAwaitingFirstData(query),
     prefetchNext,
     prefetchMultiple,
     prefetchBulk,
@@ -258,10 +267,9 @@ export function useInfiniteGenreContent(params: GenresContentParams) {
     initialPageParam: 0,
     enabled: !!genre,
     // Enhanced retry logic for infinite queries
-    retry: (failureCount, _error: Error & { status?: number }) => {
-      // retry 6 times for network/server errors
-      return failureCount < 6;
-    },
+    // Up to six tries for network/server errors; none after a 4xx or once the
+    // server is known to be down (shouldRetryQuery).
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 6),
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff, max 10s
   });
 
@@ -334,7 +342,7 @@ export function useInfiniteWatchlistContent(
     enabled: enabled && !!playlistId,
     refetchInterval,
     refetchIntervalInBackground,
-    retry: (failureCount) => failureCount < 6,
+    retry: (failureCount, error) => shouldRetryQuery(failureCount, error, 6),
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
   });
 

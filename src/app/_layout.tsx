@@ -18,6 +18,7 @@ import { getDeviceType } from "../utils/deviceInfo";
 
 import { PortalProvider } from "@/src/components/common/Portal";
 import { useAutoUpdates } from "@/src/hooks/useAutoUpdates";
+import { useNetworkStatus } from "@/src/hooks/useNetworkStatus";
 import { AuthProvider, useAuth } from "@/src/providers/AuthProvider";
 import { QueryProvider } from "@/src/providers/QueryProvider";
 
@@ -93,6 +94,7 @@ export default function RootLayout() {
   const isTV = getDeviceType() === "tv";
   console.log("theme", useColorScheme());
   useAutoUpdates();
+  useNetworkStatus();
   return (
     <SafeAreaProvider>
       <QueryProvider>

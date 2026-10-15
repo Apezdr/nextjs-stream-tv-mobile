@@ -23,7 +23,6 @@ import { useSilentTrackGuard } from "@/src/data/hooks/useSilentTrackGuard";
 import { useVideoErrorHandling } from "@/src/data/hooks/useVideoErrorHandling";
 import { useVideoTierFallback } from "@/src/data/hooks/useVideoTierFallback";
 import { contentService } from "@/src/data/services/contentService";
-import { MediaDetailsResponse } from "@/src/data/types/content.types";
 import { useActiveVideoTrack } from "@/src/hooks/useActiveVideoTrack";
 import { setVerdictAudioTracks } from "@/src/hooks/useAudioTracks";
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
@@ -31,6 +30,7 @@ import { useOptimizedVideoPlayer } from "@/src/hooks/useOptimizedVideoPlayer";
 import { usePlaybackPresenceTracking } from "@/src/hooks/usePlaybackPresenceTracking";
 import { useQualityTier } from "@/src/hooks/useQualityTier";
 import { useVideoRange } from "@/src/hooks/useVideoRange";
+import { useWatchContentLoader } from "@/src/hooks/useWatchContentLoader";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
 import { navigationHelper } from "@/src/utils/navigationHelper";
@@ -43,66 +43,6 @@ function parseNumericParam(value: string | undefined): number | undefined {
   if (!value || value === "") return undefined;
   const parsed = parseInt(value, 10);
   return isNaN(parsed) ? undefined : parsed;
-}
-
-// Custom hook to handle content loading logic
-function useContentLoader(params: {
-  id: string;
-  type: "tv" | "movie";
-  season?: string;
-  episode?: string;
-}) {
-  const [videoURL, setVideoURL] = useState<string | null>(null);
-  const [videoData, setVideoData] = useState<MediaDetailsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [contentError, setContentError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      if (!params.id || !params.type) return;
-
-      setLoading(true);
-      setContentError(null);
-
-      try {
-        const md = await contentService.getMediaDetails({
-          mediaType: params.type,
-          mediaId: params.id,
-          // Parse season and episode as numbers directly from route params
-          season: parseNumericParam(params.season),
-          episode: parseNumericParam(params.episode),
-          // Include watch history for resume functionality
-          includeWatchHistory: true,
-        });
-
-        if (!cancelled) {
-          setVideoURL(md?.videoURL ?? null);
-          setVideoData(md ?? null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setContentError(
-            error instanceof Error ? error.message : "Failed to load content",
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [params.id, params.type, params.season, params.episode]);
-
-  return {
-    videoURL,
-    videoData,
-    loading,
-    contentError,
-  };
 }
 
 export default function MobileWatchPage() {
@@ -139,8 +79,8 @@ export default function MobileWatchPage() {
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
   // Content loading (abstracted)
-  const { videoURL, videoData, loading, contentError } =
-    useContentLoader(params);
+  const { videoURL, videoData, loading, contentError, retryContent } =
+    useWatchContentLoader(params);
 
   // Current episode and season from params
   const currentEpisodeNumber = params.episode
@@ -841,10 +781,16 @@ export default function MobileWatchPage() {
     return (
       <View style={styles.container}>
         <View style={styles.messageContainer}>
-          <Text style={styles.errorText}>Error: {finalError}</Text>
-          {/* A silent failure (no frame drawn, no track selected) can be
-              retried in place; player errors have their own paths. */}
-          {silentGuard.error ? (
+          <Text style={styles.errorText}>{finalError}</Text>
+          {/* A failed content load can be retried here, and retries itself
+              once the server is back; a silent failure (no frame drawn, no
+              track selected) retries in place; other player errors have
+              their own paths. */}
+          {contentError ? (
+            <TouchableOpacity style={styles.errorButton} onPress={retryContent}>
+              <Text style={styles.errorButtonText}>Try again</Text>
+            </TouchableOpacity>
+          ) : silentGuard.error ? (
             <TouchableOpacity
               style={styles.errorButton}
               onPress={silentGuard.retry}

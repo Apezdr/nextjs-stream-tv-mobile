@@ -9,23 +9,22 @@ import {
   setAxiosBaseURL,
   setAxiosAuthToken,
   setTokenRefreshFunction,
-  setServerStatusCheckFunction,
   ApiError as AxiosApiError,
 } from "@/src/data/api/axiosClient";
-import { API_ENDPOINTS } from "@/src/data/api/endpoints";
-import type {
-  ServerStatusResponse,
-  ServerStatusSummary,
-} from "@/src/data/types/serverStatus.types";
 
 export interface RequestOptions {
   headers?: HeadersInit;
   skipAuth?: boolean;
   signal?: AbortSignal; // For request cancellation
   // Statuses the caller treats as a normal outcome: not retried by the
-  // transport and not counted against the endpoint's circuit breaker. The
-  // request still rejects with an ApiError carrying the status.
+  // transport and not reported to the server-health store. The request
+  // still rejects with an ApiError carrying the status.
   expectedStatuses?: number[];
+  // Transport-level retries. Default 0 — React Query retries what it fetches;
+  // only fire-and-forget writes nobody else retries should ask for these.
+  retries?: number;
+  // Per-request override of the client's default timeout (axiosClient).
+  timeout?: number;
 }
 
 export interface CacheOptions {
@@ -91,14 +90,6 @@ export class EnhancedApiClient {
     setTokenRefreshFunction(callback);
   }
 
-  setServerStatusCheckCallback(callback: (() => Promise<void>) | null) {
-    this.logDebug(
-      `Setting server status check callback: ${callback ? "provided" : "null"}`,
-    );
-    // Set it in the axios client for server error handling
-    setServerStatusCheckFunction(callback);
-  }
-
   getBaseUrl(): string | null {
     return this.baseUrl;
   }
@@ -126,6 +117,8 @@ export class EnhancedApiClient {
       headers: options.headers as Record<string, string>,
       signal: options.signal,
       expectedStatuses: options.expectedStatuses,
+      retries: options.retries,
+      ...(options.timeout !== undefined && { timeout: options.timeout }),
     };
 
     // Handle skipAuth option
@@ -193,111 +186,6 @@ export class EnhancedApiClient {
       `Legacy requestWithCache called for ${endpoint} - delegating to request`,
     );
     return this.request<T>(endpoint, method, undefined, options);
-  }
-
-  /**
-   * Check server status with retries
-   * Returns server status summary or null if NextJS app is completely down
-   */
-  async checkServerStatus(
-    maxRetries: number = 3,
-    retryDelay: number = 2000,
-  ): Promise<ServerStatusSummary | null> {
-    if (!this.baseUrl) {
-      this.logDebug("Cannot check server status: no base URL set");
-      return null;
-    }
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        this.logDebug(
-          `Checking server status (attempt ${attempt}/${maxRetries})`,
-        );
-
-        // Create a React Native-compatible timeout using Promise.race
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("Request timeout")), 5000);
-        });
-
-        // Use skipAuth option to avoid authentication issues during server status checks
-        const requestPromise = this.request<ServerStatusResponse>(
-          API_ENDPOINTS.SYSTEM.STATUS,
-          "GET",
-          undefined,
-          { skipAuth: true }, // Skip auth for server status checks
-        );
-
-        const response = await Promise.race([requestPromise, timeoutPromise]);
-
-        this.logDebug("Server status check successful");
-        return this.parseServerStatus(response);
-      } catch (error) {
-        this.logDebug(
-          `Server status check failed (attempt ${attempt}):`,
-          error,
-        );
-
-        // If this is the last attempt, NextJS app is down
-        if (attempt === maxRetries) {
-          this.logDebug(
-            "NextJS app marked as down after all retry attempts failed",
-          );
-          return {
-            isNextJSAppDown: true,
-            hasServerIssues: false,
-            overallLevel: "error",
-            message:
-              "NextJS application is currently unavailable. Please try again later.",
-            serverIssues: [],
-          };
-        }
-
-        // Wait before retrying
-        if (attempt < maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Parse server status response and determine issues
-   */
-  private parseServerStatus(
-    response: ServerStatusResponse,
-  ): ServerStatusSummary {
-    const serverIssues = response.servers.filter(
-      (server) => server.level === "error" || server.level === "warning",
-    );
-
-    const hasServerIssues = serverIssues.length > 0;
-    const isNextJSAppDown = false; // If we got a response, NextJS is up
-
-    let message = response.overall.message;
-    if (hasServerIssues) {
-      const errorCount = serverIssues.filter((s) => s.level === "error").length;
-      const warningCount = serverIssues.filter(
-        (s) => s.level === "warning",
-      ).length;
-
-      if (errorCount > 0 && warningCount > 0) {
-        message = `${errorCount} server(s) down, ${warningCount} server(s) with warnings`;
-      } else if (errorCount > 0) {
-        message = `${errorCount} server(s) experiencing issues`;
-      } else {
-        message = `${warningCount} server(s) with warnings`;
-      }
-    }
-
-    return {
-      isNextJSAppDown,
-      hasServerIssues,
-      overallLevel: response.overall.level,
-      message,
-      serverIssues,
-    };
   }
 }
 

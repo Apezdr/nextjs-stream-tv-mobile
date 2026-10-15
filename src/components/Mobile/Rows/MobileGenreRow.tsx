@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 import { MobileContentCardData } from "@/src/components/Mobile/Cards/MobileContentCard";
 import MobileContentRow from "@/src/components/Mobile/Rows/MobileContentRow";
 import { queryKeys } from "@/src/data/query/queryKeys";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 
@@ -50,7 +51,9 @@ export default function MobileGenreRow({
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    isLoading,
+    isPending,
+    isFetching,
+    isPaused,
     refetch,
   } = useInfiniteQuery({
     queryKey: queryKeys.genreContent({
@@ -101,6 +104,10 @@ export default function MobileGenreRow({
     },
     enabled: enabled && !!genre,
   });
+
+  // Paused-aware first-load flag (see queryState.ts); false while the row is
+  // disabled, as the raw isLoading was.
+  const isLoading = isAwaitingFirstData({ isPending, isFetching, isPaused });
 
   // Transform MediaItem to MobileContentCardData
   const transformMediaItems = useCallback(

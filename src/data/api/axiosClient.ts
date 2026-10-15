@@ -4,6 +4,8 @@
  */
 import axios, { AxiosInstance, AxiosError } from "axios";
 
+import { serverHealth } from "@/src/stores/serverHealthStore";
+
 // Define common API error response structure
 const AXIOS_DEBUG_ENABLED =
   __DEV__ && process.env.AXIOS_DEBUG?.toLowerCase() === "true";
@@ -21,17 +23,10 @@ interface ApiErrorResponse {
 let globalAuthToken: string | null = null;
 // Global token refresh function - will be set by EnhancedApiClient
 let globalTokenRefreshFunction: (() => Promise<boolean>) | null = null;
-// Global server status check function - will be set by AuthProvider
-let globalServerStatusCheckFunction: (() => Promise<void>) | null = null;
 
 export function setAxiosAuthToken(token: string | null) {
   globalAuthToken = token;
 }
-
-// Debouncing for server status checks to prevent excessive requests
-let serverStatusCheckTimeout: ReturnType<typeof setTimeout> | null = null;
-let lastServerStatusCheck = 0;
-const SERVER_STATUS_CHECK_DEBOUNCE = 5000; // 5 seconds minimum between checks
 
 export function setTokenRefreshFunction(
   refreshFn: (() => Promise<boolean>) | null,
@@ -39,58 +34,20 @@ export function setTokenRefreshFunction(
   globalTokenRefreshFunction = refreshFn;
 }
 
-export function setServerStatusCheckFunction(
-  checkFn: (() => Promise<void>) | null,
-) {
-  globalServerStatusCheckFunction = checkFn;
-}
-
-// Debounced server status check to prevent excessive requests
-function debouncedServerStatusCheck(): void {
-  if (!globalServerStatusCheckFunction) return;
-
-  const now = Date.now();
-
-  // If we've checked recently, don't check again
-  if (now - lastServerStatusCheck < SERVER_STATUS_CHECK_DEBOUNCE) {
-    if (AXIOS_DEBUG_ENABLED) {
-      console.log("[Axios] Server status check skipped - too recent");
-    }
-    return;
-  }
-
-  // Clear any pending timeout
-  if (serverStatusCheckTimeout) {
-    clearTimeout(serverStatusCheckTimeout);
-  }
-
-  // Set a timeout to perform the check
-  serverStatusCheckTimeout = setTimeout(async () => {
-    if (globalServerStatusCheckFunction) {
-      try {
-        lastServerStatusCheck = Date.now();
-        if (AXIOS_DEBUG_ENABLED) {
-          console.log("[Axios] Performing debounced server status check");
-        }
-        await globalServerStatusCheckFunction();
-      } catch (error) {
-        if (AXIOS_DEBUG_ENABLED) {
-          console.warn("[Axios] Debounced server status check failed:", error);
-        }
-      }
-    }
-    serverStatusCheckTimeout = null;
-  }, 1000); // Wait 1 second before actually checking
-}
-
 // Extend Axios types to include our custom metadata and retry properties
 declare module "axios" {
   export interface AxiosRequestConfig {
     // Statuses the CALLER handles as a normal outcome (e.g. direct-info's 504
-    // "still deriving, Retry-After: 30"). They are neither retried here nor
-    // counted against the endpoint's circuit breaker — a caller polling on
-    // its own schedule must not be locked out for doing so.
+    // "still deriving, Retry-After: 30"). They are not retried here, and they
+    // are not reported to the server-health store — a caller polling on its
+    // own schedule is not evidence of an outage.
     expectedStatuses?: number[];
+    // Transport-level retries for THIS request. Default 0: React Query owns
+    // retries for everything it fetches, and two retry layers multiplied — a
+    // hanging search used to spin for eight minutes (4 axios tries × 4 React
+    // Query attempts × 30 s). Only fire-and-forget writes that nothing else
+    // retries (playback progress, presence) ask for these.
+    retries?: number;
   }
   export interface InternalAxiosRequestConfig {
     metadata?: {
@@ -99,6 +56,7 @@ declare module "axios" {
     _retry?: boolean;
     _retryCount?: number;
     expectedStatuses?: number[];
+    retries?: number;
   }
 }
 
@@ -141,11 +99,10 @@ export class ApiError extends Error {
 
 // Configuration for retry logic
 const RETRY_CONFIG = {
-  retries: 3,
   retryDelay: (retryCount: number) => Math.pow(2, retryCount) * 1000, // Exponential backoff
   retryCondition: (error: AxiosError) => {
     // A cancelled request has no `error.response`, so without this it would
-    // fall into the network-error branch below and be retried 3x with backoff —
+    // fall into the network-error branch below and be retried with backoff —
     // the exact opposite of what cancelling means. This matters now that
     // React Query forwards its AbortSignal into these requests.
     if (axios.isCancel(error)) return false;
@@ -164,72 +121,18 @@ const RETRY_CONFIG = {
   },
 };
 
-// Circuit breaker configuration
-interface CircuitBreakerState {
-  failures: number;
-  lastFailureTime: number;
-  state: "CLOSED" | "OPEN" | "HALF_OPEN";
-}
-
-class CircuitBreaker {
-  private states: Map<string, CircuitBreakerState> = new Map();
-  private readonly threshold = 5; // Open circuit after 5 failures
-  private readonly timeout = 60000; // 60 seconds before trying again
-  private readonly resetTime = 300000; // Reset failure count after 5 minutes of success
-
-  isOpen(endpoint: string): boolean {
-    const state = this.states.get(endpoint);
-    if (!state) return false;
-
-    if (state.state === "OPEN") {
-      // Check if we should transition to HALF_OPEN
-      if (Date.now() - state.lastFailureTime > this.timeout) {
-        state.state = "HALF_OPEN";
-        return false;
-      }
-      return true;
-    }
-
-    return false;
-  }
-
-  recordSuccess(endpoint: string): void {
-    const state = this.states.get(endpoint);
-    if (state) {
-      if (Date.now() - state.lastFailureTime > this.resetTime) {
-        this.states.delete(endpoint);
-      } else if (state.state === "HALF_OPEN") {
-        state.state = "CLOSED";
-        state.failures = 0;
-      }
-    }
-  }
-
-  recordFailure(endpoint: string): void {
-    const state = this.states.get(endpoint) || {
-      failures: 0,
-      lastFailureTime: 0,
-      state: "CLOSED" as const,
-    };
-
-    state.failures++;
-    state.lastFailureTime = Date.now();
-
-    if (state.failures >= this.threshold) {
-      state.state = "OPEN";
-    }
-
-    this.states.set(endpoint, state);
-  }
-}
+// Default per-request timeout. The slowest request this app makes in normal
+// use is a media-details fetch, at a few seconds; this is already several
+// times that. It matters when requests hang (packets dropped, no RST): the
+// timeout is what ends each attempt, so it bounds how long a screen can
+// spin. A request that legitimately needs longer passes its own `timeout`.
+export const DEFAULT_TIMEOUT_MS = 15000;
 
 // Create Axios instance factory
 export function createAxiosClient(baseURL?: string): AxiosInstance {
-  const circuitBreaker = new CircuitBreaker();
-
   const client = axios.create({
     baseURL,
-    timeout: 30000, // 30 second timeout
+    timeout: DEFAULT_TIMEOUT_MS,
     headers: {
       "Content-Type": "application/json",
     },
@@ -242,9 +145,9 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
     redact: ["authorization", "cookie"],
     transitional: {
       // A per-request `validateStatus: undefined` would otherwise make settle()
-      // resolve EVERY status, silently bypassing the 401 refresh interceptor
-      // and the circuit breaker. With this, `undefined` falls back to the
-      // instance default and only an explicit `null` accepts all statuses.
+      // resolve EVERY status, silently bypassing the 401 refresh interceptor.
+      // With this, `undefined` falls back to the instance default and only an
+      // explicit `null` accepts all statuses.
       validateStatusUndefinedResolves: false,
     },
   });
@@ -252,12 +155,6 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
   // Request interceptor
   client.interceptors.request.use(
     async (config) => {
-      // Check circuit breaker
-      const endpoint = config.url || "";
-      if (circuitBreaker.isOpen(endpoint)) {
-        throw new Error(`Circuit breaker is open for ${endpoint}`);
-      }
-
       // Add authentication headers
       if (globalAuthToken && !config.headers.Authorization) {
         config.headers.Authorization = `Bearer ${globalAuthToken}`;
@@ -286,8 +183,10 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
   // Response interceptor
   client.interceptors.response.use(
     (response) => {
-      const endpoint = response.config.url || "";
-      circuitBreaker.recordSuccess(endpoint);
+      // Any answer from the server is proof it can be reached. This is what
+      // clears the "can't reach the server" banner the moment anything works,
+      // instead of waiting for the next scheduled probe.
+      serverHealth.noteSuccess();
 
       if (AXIOS_DEBUG_ENABLED && response.config.metadata) {
         const duration = Date.now() - response.config.metadata.startTime;
@@ -301,46 +200,42 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
     async (error: AxiosError) => {
       // Cancellation is not a failure — bail out before ANY of the handling
       // below. A CanceledError carries no `error.response`, so it would
-      // otherwise trip the network-error branch, fire a server-status check,
-      // and (via retryCondition) get retried with backoff. React Query cancels
-      // in-flight queries on navigation, so on TV this would turn every screen
-      // change into a burst of pointless requests and false server-down
-      // signals.
+      // otherwise look like a network error, be reported as a possible
+      // outage, and (via retryCondition) get retried with backoff. React
+      // Query cancels in-flight queries on navigation, so on TV this would
+      // turn every screen change into a burst of pointless requests and
+      // false server-down signals.
       if (axios.isCancel(error)) {
         return Promise.reject(error);
       }
 
       const originalRequest = error.config;
       const endpoint = originalRequest?.url || "";
+      const status = error.response?.status;
       const isExpectedStatus =
-        error.response?.status !== undefined &&
-        !!originalRequest?.expectedStatuses?.includes(error.response.status);
+        status !== undefined &&
+        !!originalRequest?.expectedStatuses?.includes(status);
 
-      // Record failure for circuit breaker
+      // No response at all, or a 5xx: the server MAY be unreachable. The
+      // health store decides that with its own probe; this only hands it the
+      // facts. A 4xx is an answer, and an expected status is the caller's.
       if (
-        error.response?.status &&
-        error.response.status >= 500 &&
-        !isExpectedStatus
+        !isExpectedStatus &&
+        (!error.response || (status !== undefined && status >= 500))
       ) {
-        circuitBreaker.recordFailure(endpoint);
-
-        // Check server status for 5xx errors (debounced)
         if (AXIOS_DEBUG_ENABLED) {
           console.log(
-            `[Axios] Server error ${error.response.status} detected, scheduling server status check`,
+            `[Axios] ${status ?? error.code ?? "no response"} on ${endpoint}, reported to server-health`,
           );
         }
-        debouncedServerStatusCheck();
-      }
-
-      // Also check server status for network errors (debounced)
-      if (!error.response) {
-        if (AXIOS_DEBUG_ENABLED) {
-          console.log(
-            "[Axios] Network error detected, scheduling server status check",
-          );
-        }
-        debouncedServerStatusCheck();
+        serverHealth.noteFailure({
+          url: endpoint,
+          ...(status !== undefined && { status }),
+          ...(error.code && { code: error.code }),
+          ...(error.response && {
+            viaCloudflare: !!error.response.headers?.["cf-ray"],
+          }),
+        });
       }
 
       // Handle an authentication failure on a content request.
@@ -425,7 +320,8 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
         }
       }
 
-      // Implement retry logic
+      // Transport-level retry, only for requests that asked for it.
+      const maxRetries = originalRequest?.retries ?? 0;
       if (
         !isExpectedStatus &&
         RETRY_CONFIG.retryCondition(error) &&
@@ -434,13 +330,13 @@ export function createAxiosClient(baseURL?: string): AxiosInstance {
       ) {
         const retryCount = originalRequest._retryCount || 0;
 
-        if (retryCount < RETRY_CONFIG.retries) {
+        if (retryCount < maxRetries) {
           originalRequest._retryCount = retryCount + 1;
 
           const delay = RETRY_CONFIG.retryDelay(retryCount);
           if (AXIOS_DEBUG_ENABLED) {
             console.log(
-              `[Axios] Retrying request (${retryCount + 1}/${RETRY_CONFIG.retries}) after ${delay}ms`,
+              `[Axios] Retrying request (${retryCount + 1}/${maxRetries}) after ${delay}ms`,
             );
           }
 

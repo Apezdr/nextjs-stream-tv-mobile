@@ -16,7 +16,9 @@ import OptimizedImage from "@/src/components/common/OptimizedImage";
 import ContentItem, {
   ContentItemData,
 } from "@/src/components/TV/Pages/ContentRow/ContentItem";
+import { RetryNotice } from "@/src/components/TV/RetryNotice";
 import { Colors } from "@/src/constants/Colors";
+import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
 import { useSearchPreferencesStore } from "@/src/stores/searchPreferencesStore";
@@ -261,8 +263,11 @@ export default function SearchPage() {
   // Fetch search results using React Query
   const {
     data: searchResults,
-    isLoading,
+    isPending,
+    isFetching,
+    isPaused,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["search", debouncedQuery],
     queryFn: () =>
@@ -272,6 +277,15 @@ export default function SearchPage() {
         true,
       ),
     enabled: true,
+  });
+
+  // Paused-aware "no results yet": a first fetch paused for lack of network
+  // is not loading to React Query, and the screen would otherwise say "No
+  // results found" with nothing searched.
+  const isAwaitingResults = isAwaitingFirstData({
+    isPending,
+    isFetching,
+    isPaused,
   });
 
   // Transform MediaItem to ContentItemData
@@ -442,7 +456,7 @@ export default function SearchPage() {
                   ? `Results for "${searchQuery}"`
                   : "Recently Added"}
               </Text>
-              {!isLoading && transformedResults.length > 0 && (
+              {!isAwaitingResults && transformedResults.length > 0 && (
                 <Text style={styles.resultCount}>
                   {transformedResults.length}{" "}
                   {transformedResults.length === 1 ? "result" : "results"}
@@ -464,7 +478,7 @@ export default function SearchPage() {
           </View>
 
           {/* Results grid */}
-          {isLoading ? (
+          {isAwaitingResults ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator
                 color={Colors.dark.brandPrimary}
@@ -476,9 +490,11 @@ export default function SearchPage() {
             </View>
           ) : error ? (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                Failed to load results. Please try again.
-              </Text>
+              <RetryNotice
+                message="Failed to load results."
+                onRetry={() => refetch()}
+                isRetrying={isFetching}
+              />
             </View>
           ) : transformedResults.length === 0 ? (
             <View style={styles.emptyContainer}>
