@@ -9,6 +9,7 @@ import {
   Text,
   TouchableOpacity,
   Animated,
+  Pressable,
 } from "react-native";
 import { GestureDetector, Gesture } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -214,6 +215,15 @@ const MobileVideoControls = memo(
       !!onSelectQualityTier && (qualityTiers?.length ?? 0) >= 2,
       videoURL,
     );
+    // The quality chip beside the title opens the same tier sheet as the
+    // options button, so the sheet's visibility is owned here. The chip is
+    // only pressable while that sheet exists (2+ tiers and a handler).
+    const [qualityPickerOpen, setQualityPickerOpen] = useState(false);
+    const canOpenQualityPicker =
+      qualityButtonVisible && !!qualityTiers && !!onSelectQualityTier;
+    useEffect(() => {
+      if (!canOpenQualityPicker) setQualityPickerOpen(false);
+    }, [canOpenQualityPicker]);
 
     // Subtitle preferences (persisted)
     const subtitlesEnabled = useSubtitlePreferencesStore(
@@ -364,6 +374,13 @@ const MobileVideoControls = memo(
         setTotalSkipAmount(0);
       }
     }, [isDoubleTapSeeking]);
+
+    // Declared after showControls (a const: referencing it earlier would hit
+    // the temporal dead zone on first render).
+    const openQualityPicker = useCallback(() => {
+      setQualityPickerOpen(true);
+      showControls();
+    }, [showControls]);
 
     // Watchdog: while the controls are visible, the video is playing, and the
     // user isn't dragging the seek bar, a hide is always pending. Replaces an
@@ -860,9 +877,24 @@ const MobileVideoControls = memo(
               {/* Delivery-tier badge from direct.json — facts only, never
                   derived from client probing. */}
               {qualityBadge && (
-                <View style={styles.qualityBadge}>
+                <Pressable
+                  onPress={openQualityPicker}
+                  disabled={!canOpenQualityPicker}
+                  hitSlop={8}
+                  style={({ pressed }) => [
+                    styles.qualityBadge,
+                    pressed && styles.qualityBadgePressed,
+                  ]}
+                  accessibilityRole={canOpenQualityPicker ? "button" : "text"}
+                  accessibilityLabel={`Quality: ${qualityBadge}`}
+                  accessibilityHint={
+                    canOpenQualityPicker
+                      ? "Opens the quality picker"
+                      : undefined
+                  }
+                >
                   <Text style={styles.qualityBadgeText}>{qualityBadge}</Text>
-                </View>
+                </Pressable>
               )}
               {videoInfo?.description && (
                 <Text
@@ -969,6 +1001,8 @@ const MobileVideoControls = memo(
                   isSwitching={isQualitySwitching}
                   hasDescended={hasQualityDescended}
                   onShowControls={showControls}
+                  open={qualityPickerOpen}
+                  onOpenChange={setQualityPickerOpen}
                 />
               )}
             </View>
@@ -1159,6 +1193,9 @@ const styles = StyleSheet.create({
     marginTop: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
+  },
+  qualityBadgePressed: {
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
   },
   qualityBadgeText: {
     color: "rgba(255, 255, 255, 0.85)",

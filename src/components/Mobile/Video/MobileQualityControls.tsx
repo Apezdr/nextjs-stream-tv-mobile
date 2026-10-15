@@ -26,6 +26,11 @@ interface MobileQualityControlsProps {
   // tier is not what the user picked.
   hasDescended?: boolean;
   onShowControls?: () => void; // Mobile-specific: show controls when user interacts
+  // Optional controlled visibility of the tier sheet, so chrome elsewhere
+  // (the quality chip beside the title) can open the same picker. Left
+  // undefined, the sheet keeps its own state as before.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const MobileQualityControls = memo(
@@ -36,15 +41,25 @@ const MobileQualityControls = memo(
     isSwitching = false,
     hasDescended = false,
     onShowControls,
+    open,
+    onOpenChange,
   }: MobileQualityControlsProps) => {
-    const [showTiers, setShowTiers] = useState(false);
+    const [showTiersInternal, setShowTiersInternal] = useState(false);
+    const showTiers = open ?? showTiersInternal;
+    const setShowTiers = useCallback(
+      (next: boolean) => {
+        setShowTiersInternal(next);
+        onOpenChange?.(next);
+      },
+      [onOpenChange],
+    );
     const { window } = useDimensions();
     const screenHeight = window.height;
 
     const openTiers = useCallback(() => {
       setShowTiers(true);
       onShowControls?.();
-    }, [onShowControls]);
+    }, [onShowControls, setShowTiers]);
 
     const handleSelect = useCallback(
       (tier: QualityTierOption) => {
@@ -54,7 +69,7 @@ const MobileQualityControls = memo(
         setShowTiers(false);
         onShowControls?.();
       },
-      [isSwitching, onSelectTier, onShowControls],
+      [isSwitching, onSelectTier, onShowControls, setShowTiers],
     );
 
     return (
