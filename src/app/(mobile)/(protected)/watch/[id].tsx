@@ -34,6 +34,7 @@ import { useWatchContentLoader } from "@/src/hooks/useWatchContentLoader";
 import { qualityPrefMediaKey } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
 import { navigationHelper } from "@/src/utils/navigationHelper";
+import { createPipExitArbiter } from "@/src/utils/pipExit";
 import { describeActiveQuality } from "@/src/utils/qualityTiers";
 import { applyResumePosition } from "@/src/utils/resumeGuard";
 import { isAdaptiveStreamURL } from "@/src/utils/streamType";
@@ -67,9 +68,10 @@ export default function MobileWatchPage() {
   // Track PiP state
   const pipActiveRef = useRef(false);
   const pipWasPlayingRef = useRef(false);
-  const lastPipStopAtRef = useRef<number | null>(null);
-  // Tunable: how soon after PiP stop we consider "restore"
-  const PIP_RESTORE_WINDOW_MS = 1500;
+  // How long after a PiP stop we wait for the Activity to resume before
+  // treating the stop as a dismissal (see createPipExitArbiter). An expand
+  // resumes well inside this; a dismissal never does.
+  const PIP_DISMISS_GRACE_MS = 1500;
 
   // Use the backdrop manager
   const { show: showBackdrop, hide: hideBackdrop } = useBackdropManager();
@@ -546,32 +548,73 @@ export default function MobileWatchPage() {
     };
   }, [player]);
 
-  // Handle app state changes - only used to resume on restore
+  // PiP exit arbitration. `onPictureInPictureStop` fires both when the PiP
+  // window is expanded back into the app and when it is dismissed with its
+  // close button; only the dismissal should pause. The old handler paused
+  // on every stop (after an awaited progress flush), and raced the AppState
+  // "active" resume that follows an expand — the pause landed last, so
+  // expanding PiP always came back paused. The arbiter reads the Activity
+  // lifecycle instead: an expand resumes the Activity (AppState "active"),
+  // a dismissal leaves it stopped. Latest player/flush are read through refs
+  // so the arbiter is created once.
+  const flushCurrentProgressRef = useRef(flushCurrentProgress);
+  flushCurrentProgressRef.current = flushCurrentProgress;
+  const pipExitArbiter = useMemo(
+    () =>
+      createPipExitArbiter({
+        graceMs: PIP_DISMISS_GRACE_MS,
+        onOutcome: (outcome) => {
+          const currentPlayer = playerRef.current;
+          if (outcome === "expanded") {
+            console.log(
+              "[MobileWatchPage] PiP expanded back into the app -> keep playing",
+            );
+            try {
+              if (
+                pipWasPlayingRef.current &&
+                currentPlayer &&
+                !currentPlayer.playing
+              ) {
+                currentPlayer.play();
+              }
+            } catch (error) {
+              console.warn(
+                "[MobileWatchPage] Error resuming after PiP expand:",
+                error,
+              );
+            }
+            return;
+          }
+
+          console.log("[MobileWatchPage] PiP dismissed -> pausing");
+          (async () => {
+            try {
+              await flushCurrentProgressRef.current();
+            } catch (error) {
+              console.warn(
+                "[MobileWatchPage] flushCurrentProgress failed on PiP dismiss:",
+                error,
+              );
+            }
+            try {
+              playerRef.current?.pause();
+            } catch (error) {
+              console.warn(
+                "[MobileWatchPage] player.pause failed on PiP dismiss:",
+                error,
+              );
+            }
+            deactivateKeepAwake();
+          })();
+        },
+      }),
+    [PIP_DISMISS_GRACE_MS],
+  );
+
+  // The resume that follows a PiP expand arrives here.
   useEffect(() => {
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
-      if (!player) return;
-
-      if (nextAppState === "active") {
-        const stoppedAt = lastPipStopAtRef.current;
-        const withinRestoreWindow =
-          typeof stoppedAt === "number" &&
-          Date.now() - stoppedAt < PIP_RESTORE_WINDOW_MS;
-
-        if (withinRestoreWindow && pipWasPlayingRef.current) {
-          console.log("[MobileWatchPage] Likely PiP restore -> resuming");
-          try {
-            player.play();
-          } catch (error) {
-            console.warn("[MobileWatchPage] Error resuming on restore:", error);
-          }
-        }
-
-        // Clear the marker either way so we don't auto-resume later
-        lastPipStopAtRef.current = null;
-      }
-
-      // Note: Removed "if background then player.play()" logic that was causing
-      // video to keep playing after PiP close
+      pipExitArbiter.onAppStateChange(nextAppState);
     };
 
     const subscription = AppState.addEventListener(
@@ -581,8 +624,9 @@ export default function MobileWatchPage() {
 
     return () => {
       subscription?.remove();
+      pipExitArbiter.cancel();
     };
-  }, [player, PIP_RESTORE_WINDOW_MS]);
+  }, [pipExitArbiter]);
 
   // Mobile-optimized exit handler
   const handleExit = useCallback(async () => {
@@ -649,7 +693,7 @@ export default function MobileWatchPage() {
   const handlePiPStart = useCallback(() => {
     pipActiveRef.current = true;
     pipWasPlayingRef.current = !!player?.playing;
-    lastPipStopAtRef.current = null;
+    pipExitArbiter.cancel();
 
     console.log(
       "[MobileWatchPage] Entered PiP, wasPlaying:",
@@ -664,33 +708,16 @@ export default function MobileWatchPage() {
     } catch (error) {
       console.warn("[MobileWatchPage] Error resuming on PiP start:", error);
     }
-  }, [player]);
+  }, [player, pipExitArbiter]);
 
-  // Handle PiP stop - pause immediately (no timer)
-  const handlePiPStop = useCallback(async () => {
+  // Handle PiP stop: expand or dismiss is decided by the arbiter above; the
+  // pause (dismiss only) happens in its outcome handler.
+  const handlePiPStop = useCallback(() => {
     pipActiveRef.current = false;
-    lastPipStopAtRef.current = Date.now();
-
-    console.log("[MobileWatchPage] Exited PiP -> pausing immediately");
-
-    // Pause immediately (no setTimeout)
-    try {
-      await flushCurrentProgress();
-    } catch (error) {
-      console.warn(
-        "[MobileWatchPage] flushCurrentProgress failed on PiP stop:",
-        error,
-      );
-    }
-
-    try {
-      player?.pause();
-    } catch (error) {
-      console.warn("[MobileWatchPage] player.pause failed on PiP stop:", error);
-    }
-
-    deactivateKeepAwake();
-  }, [player, flushCurrentProgress]);
+    const appState = AppState.currentState;
+    console.log("[MobileWatchPage] Exited PiP, app state:", appState);
+    pipExitArbiter.onPipStop(appState);
+  }, [pipExitArbiter]);
 
   // Back handler for Android
   useEffect(() => {
