@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import { Platform } from "react-native";
 
 interface DeviceInfo {
@@ -77,7 +78,8 @@ export function getDeviceType(): "tv" | "mobile" | "tablet" | "desktop" {
   return "mobile";
 }
 
-export type PlatformClass = "apple-tv" | "ios" | "android-tv" | "android" | "web";
+export type PlatformClass =
+  "apple-tv" | "ios" | "android-tv" | "android" | "web";
 
 /**
  * Apple platforms (iOS AND tvOS — react-native-tvos reports "ios" for Apple
@@ -109,6 +111,26 @@ export function getPlatformClass(): PlatformClass {
 /**
  * Generate a user agent string with platform information for API requests
  */
+/**
+ * The User-Agent the native player sends for stream requests on Android.
+ * media3's default is "<app>/<version> (Linux;Android <release>)", identical
+ * on every Android device, so the transcoder's access log could not tell the
+ * SHIELD from a phone. This keeps that prefix (existing log filters still
+ * match) and appends the device and form factor:
+ *   NextJS Stream TV/1.0.3 (Linux;Android 11; NVIDIA SHIELD Android TV; tv)
+ * Null off Android, where the platform player sets its own agent.
+ */
+export function playerUserAgent(): string | null {
+  if (Platform.OS !== "android") return null;
+  const constants = Platform.constants as Record<string, unknown>;
+  const version = Constants.expoConfig?.version ?? "0";
+  const release = String(constants.Release ?? Platform.Version ?? "");
+  const brand = String(constants.Brand ?? "").trim();
+  const model = String(constants.Model ?? "").trim();
+  const device = [brand, model].filter(Boolean).join(" ") || "unknown";
+  return `NextJS Stream TV/${version} (Linux;Android ${release}; ${device}; ${Platform.isTV ? "tv" : "mobile"})`;
+}
+
 export function generateUserAgent(): string {
   const deviceInfo = getDeviceInfo();
   const deviceType = getDeviceType();
