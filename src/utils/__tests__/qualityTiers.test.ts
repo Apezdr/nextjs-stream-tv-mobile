@@ -578,6 +578,50 @@ describe("describeActiveQuality (the chrome badge)", () => {
     ).toBe("Transcode · 1080p");
   });
 
+  it("recognises the copy rung by the peak and average the master declares (Widow's Bay on the SHIELD)", () => {
+    const widowsBay: DirectPlayInfo = {
+      hls: {
+        offered: true,
+        bandwidth: 33_917_101,
+        averageBandwidth: 24_786_855,
+        videoRange: "PQ",
+        supplementalCodecs: "dvh1.08.06/db1p",
+      },
+      file: { available: true, container: "mp4" },
+    };
+    // expo-video's `bitrate` is the average when one is known.
+    const dvRung = {
+      size: { width: 3840, height: 2076 },
+      videoRange: "PQ",
+      bitrate: 24_914_855,
+      averageBitrate: 24_914_855,
+      peakBitrate: 34_051_501,
+    };
+    const hevcRung = {
+      size: { width: 3840, height: 2076 },
+      videoRange: "PQ",
+      bitrate: 19_128_000,
+      averageBitrate: 19_128_000,
+      peakBitrate: 22_144_400,
+    };
+    expect(
+      describeActiveQuality({
+        tier: "auto",
+        info: widowsBay,
+        platformClass: "android-tv",
+        videoTrack: dvRung,
+      }),
+    ).toBe("Original (Dolby Vision)");
+    expect(
+      describeActiveQuality({
+        tier: "auto",
+        info: widowsBay,
+        platformClass: "android-tv",
+        videoTrack: hevcRung,
+      }),
+    ).toBe("Auto · 4K · HDR");
+  });
+
   it("on Auto says Original only when ABR is on the copy rung, on either platform", () => {
     expect(
       describeActiveQuality({

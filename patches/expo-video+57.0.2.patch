@@ -284,15 +284,18 @@ index 0000000..ca60998
 +}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/HlsFormatIds.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/HlsFormatIds.kt
 new file mode 100644
-index 0000000..cd61c2e
+index 0000000..7f33f35
 --- /dev/null
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/HlsFormatIds.kt
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,88 @@
 +package expo.modules.video.player
 +
++import androidx.media3.common.C
 +import androidx.media3.common.Format
++import androidx.media3.common.MimeTypes
 +import androidx.media3.common.Tracks
 +import androidx.media3.common.util.UnstableApi
++import androidx.media3.common.util.Util
 +import androidx.media3.exoplayer.hls.HlsManifest
 +
 +/**
@@ -305,8 +308,10 @@ index 0000000..cd61c2e
 + * null without one, so every HLS track list came back empty). Recover the
 + * playlist id — the variant index, the "GROUP-ID:NAME" rendition id — by
 + * matching the multivariant playlist's formats after the same normalisation
-+ * the group key applies, then by a looser identity when the exposed format
-+ * was enriched by sample data; fall back to "<track group id>:<index>".
++ * the group key applies; for video variants by the playlist fields the
++ * exposed track keeps (see [variantKey]); then by a looser identity when the
++ * exposed format was enriched by sample data; fall back to
++ * "<track group id>:<index>".
 + */
 +@OptIn(UnstableApi::class)
 +object HlsFormatIds {
@@ -325,6 +330,20 @@ index 0000000..cd61c2e
 +    format.averageBitrate
 +  )
 +
++  /**
++   * The playlist fields a video variant keeps through media3's rebuilds: the
++   * group key drops id and metadata, and the exposed track is derived from
++   * the variant's codecs (video part), size and bitrates on top of whichever
++   * chunk's sample format was loaded first. Null for anything that is not a
++   * video variant; audio and subtitle renditions keep their own identities.
++   */
++  fun variantKey(format: Format): List<Any?>? {
++    val videoCodecs = Util.getCodecsOfType(format.codecs, C.TRACK_TYPE_VIDEO)
++    val isVideo = videoCodecs != null || MimeTypes.isVideo(format.sampleMimeType) || format.height > 0
++    if (!isVideo) return null
++    return listOf(videoCodecs ?: format.codecs, format.width, format.height, format.averageBitrate, format.peakBitrate)
++  }
++
 +  private fun playlistFormats(manifest: HlsManifest?): List<Format> {
 +    val playlist = manifest?.multivariantPlaylist ?: return emptyList()
 +    return buildList {
@@ -338,11 +357,17 @@ index 0000000..cd61c2e
 +  /** The playlist format id this exposed format corresponds to, or null. */
 +  fun playlistId(format: Format, manifest: HlsManifest?): String? {
 +    format.id?.let { return it }
++    val playlist = manifest?.multivariantPlaylist ?: return null
 +    val candidates = playlistFormats(manifest).filter { it.id != null }
 +    if (candidates.isEmpty()) return null
 +    val key = keyOf(format)
 +    val exact = candidates.filter { keyOf(it) == key }.mapNotNull { it.id }.distinct()
 +    if (exact.size == 1) return exact[0]
++    // First match, not a unique one: redundant streams (the same variant
++    // under another URL) share a key by definition and are one track.
++    variantKey(format)?.let { wanted ->
++      playlist.variants.firstOrNull { variantKey(it.format) == wanted }?.format?.id?.let { return it }
++    }
 +    val loose = looseKey(format)
 +    val relaxed = candidates.filter { looseKey(it) == loose }.mapNotNull { it.id }.distinct()
 +    return if (relaxed.size == 1) relaxed[0] else null
@@ -568,7 +593,7 @@ index 0000000..09e55b1
 +  }
 +}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-index 8bae522..817e606 100644
+index 8bae522..b9d7d7f 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 @@ -2,6 +2,7 @@ package expo.modules.video.player
@@ -579,7 +604,15 @@ index 8bae522..817e606 100644
  import androidx.media3.common.C
  import android.webkit.URLUtil
  import androidx.annotation.OptIn
-@@ -60,7 +61,7 @@ import kotlin.time.DurationUnit
+@@ -21,6 +22,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
+ import androidx.media3.exoplayer.ExoPlayer
+ import androidx.media3.exoplayer.analytics.AnalyticsListener
+ import androidx.media3.exoplayer.hls.HlsManifest
++import androidx.media3.exoplayer.source.MediaLoadData
+ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+ import androidx.media3.session.MediaSession
+ import androidx.media3.ui.PlayerView
+@@ -60,7 +62,7 @@ import kotlin.time.DurationUnit
  @UnstableApi
  class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSource?, playerBuilderOptions: expo.modules.video.records.PlayerBuilderOptions? = null) : AutoCloseable, SharedObject(appContext), IntervalUpdateEmitter {
    // This improves the performance of playing DRM-protected content
@@ -588,7 +621,7 @@ index 8bae522..817e606 100644
      .forceEnableMediaCodecAsynchronousQueueing()
      .setEnableDecoderFallback(true)
    private val listeners: MutableList<WeakReference<VideoPlayerListener>> = mutableListOf()
-@@ -78,6 +79,13 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -78,6 +80,13 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
      .apply {
        setLooper(context.mainLooper)
        setLoadControl(loadControl)
@@ -602,7 +635,7 @@ index 8bae522..817e606 100644
        playerBuilderOptions?.seekBackwardIncrement?.let {
          setSeekBackIncrementMs((it).toLong(DurationUnit.MILLISECONDS).coerceIn(1, 999_000))
        }
-@@ -128,9 +136,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -128,9 +137,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
    var duration = 0f
    var isLive = false
  
@@ -619,7 +652,35 @@ index 8bae522..817e606 100644
      }
      userVolume = volume
      sendEvent(PlayerEvent.VolumeChanged(new, old))
-@@ -319,7 +334,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -208,9 +224,18 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+     private set(value) {
+       val old = field
+       field = value
+-      sendEvent(PlayerEvent.VideoTrackChanged(value, old))
++      if (!old.describesSameTrackAs(value)) {
++        sendEvent(PlayerEvent.VideoTrackChanged(value, old))
++      }
+     }
+ 
++  // What media3 last said about the video it feeds the decoder: the
++  // playlist-side format of the chunk being read (HLS) and the decoder's own
++  // input format. Kept so the listed track can be re-resolved when the track
++  // list arrives after the first chunk, which it regularly does.
++  private var lastVideoChunkFormat: Format? = null
++  private var lastVideoInputFormat: Format? = null
++
+   var seekTolerance: SeekTolerance = SeekTolerance()
+     set(value) {
+       field = value
+@@ -252,6 +277,7 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+       val newCurrentAudioTrack = audioTracks.currentAudioTrack
+       val hlsManifest = player.currentManifest as? HlsManifest
+       availableVideoTracks = tracks.toVideoTracks(hlsManifest)
++      resolveCurrentVideoTrack()
+       refreshPlaybackInfo()
+ 
+       if (isLoadingNewSource) {
+@@ -319,7 +345,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
      }
  
      override fun onVolumeChanged(volume: Float) {
@@ -637,26 +698,87 @@ index 8bae522..817e606 100644
          this@VideoPlayer.volume = volume
        }
      }
-@@ -343,7 +367,17 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -342,12 +377,70 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+   }
  
    private val analyticsListener = object : AnalyticsListener {
++    // The variant whose chunk the renderer started reading. On HLS media3
++    // hands the playlist-side format (the 1.11 group-key copy: no id, but the
++    // variant's codecs, size and bitrates intact), the one signal that names
++    // the playing rung exactly. The decoder input format below describes the
++    // sample instead: its codecs string is spelt from the file (a dvvC box
++    // reads "dvhe.08.06" where the playlist says "dvh1.08.06") and its size
++    // is the coded size, so it never matched a Dolby Vision rung by shape.
++    override fun onDownstreamFormatChanged(eventTime: AnalyticsListener.EventTime, mediaLoadData: MediaLoadData) {
++      val format = mediaLoadData.trackFormat ?: return
++      val isVideo = when (mediaLoadData.trackType) {
++        C.TRACK_TYPE_VIDEO -> true
++        C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_TEXT -> false
++        else -> HlsFormatIds.variantKey(format) != null
++      }
++      if (!isVideo) return
++      lastVideoChunkFormat = format
++      resolveCurrentVideoTrack()
++    }
++
      override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
 -      currentVideoTrack = availableVideoTracks.firstOrNull { it.format?.id == format.id }
-+      // The decoder input format carries no id on HLS (media3 1.11), so match
-+      // the listed track by id when both sides have one, else by the playlist
-+      // id recovered for it, else by shape.
-+      val manifest = player.currentManifest as? HlsManifest
-+      val recoveredId = HlsFormatIds.playlistId(format, manifest)
-+      currentVideoTrack = availableVideoTracks.firstOrNull { track ->
-+        (format.id != null && track.id == format.id) ||
-+          (recoveredId != null && track.id == recoveredId)
-+      } ?: availableVideoTracks.firstOrNull { track ->
-+        track.format?.let { f -> f.width == format.width && f.height == format.height && f.codecs == format.codecs } == true
-+      }
++      lastVideoInputFormat = format
++      resolveCurrentVideoTrack()
        super.onVideoInputFormatChanged(eventTime, format, decoderReuseEvaluation)
      }
    }
-@@ -418,18 +452,40 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+ 
++  /**
++   * The listed track the renderer is playing: matched from the chunk's
++   * playlist format first (it shares the listed track's playlist fields), then
++   * from the decoder input format. While video is decoding and nothing listed
++   * matches, the input format itself is reported: a null here reads as "no
++   * video" to the app, which treats that as a playback failure.
++   */
++  private fun resolveCurrentVideoTrack() {
++    val chunk = lastVideoChunkFormat
++    val input = lastVideoInputFormat
++    currentVideoTrack = chunk?.let { matchListedVideoTrack(it, sampleSide = false) }
++      ?: input?.let { matchListedVideoTrack(it, sampleSide = true) }
++      ?: input?.let { VideoTrack.fromFormat(it, true, null, it.id ?: "input:${it.width}x${it.height}") }
++  }
++
++  private fun matchListedVideoTrack(format: Format, sampleSide: Boolean): VideoTrack? {
++    val tracks = availableVideoTracks
++    if (tracks.isEmpty()) return null
++    HlsFormatIds.playlistId(format, player.currentManifest as? HlsManifest)?.let { id ->
++      tracks.firstOrNull { it.id == id }?.let { return it }
++    }
++    HlsFormatIds.variantKey(format)?.let { key ->
++      tracks.firstOrNull { it.format?.let(HlsFormatIds::variantKey) == key }?.let { return it }
++    }
++    if (!sampleSide) return null
++    // Sample-side formats inherit the variant's bitrates from the chunk when
++    // the container declares none, which identifies the rung regardless of
++    // how the codecs string is spelt; size plus MIME type is the last resort.
++    val peak = format.peakBitrate.takeIf { it != Format.NO_VALUE }
++    val average = format.averageBitrate.takeIf { it != Format.NO_VALUE }
++    if (peak != null || average != null) {
++      tracks.firstOrNull { it.peakBitrate == peak && it.averageBitrate == average }?.let { return it }
++    }
++    return tracks.firstOrNull {
++      it.size.width == format.width && it.size.height == format.height && it.mimeType == format.sampleMimeType
++    }
++  }
++
+   init {
+     player.addListener(playerListener)
+     player.addAnalyticsListener(analyticsListener)
+@@ -412,24 +505,48 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+ 
+   fun prepare() {
+     availableVideoTracks = listOf()
++    lastVideoChunkFormat = null
++    lastVideoInputFormat = null
+     currentVideoTrack = null
+ 
+     val newSource = uncommittedSource
      val mediaSource = newSource?.toMediaSource(context)
  
      mediaSource?.let {
@@ -698,7 +820,20 @@ index 8bae522..817e606 100644
    private fun applyPitchCorrection(playbackParameters: PlaybackParameters): PlaybackParameters {
      val speed = playbackParameters.speed
      val pitch = if (preservesPitch) 1f else speed
-@@ -578,21 +634,23 @@ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack>
+@@ -572,27 +689,36 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+ // Extension functions
+ 
+ @OptIn(UnstableApi::class)
++private fun VideoTrack?.describesSameTrackAs(other: VideoTrack?): Boolean {
++  if (this === other) return true
++  if (this == null || other == null) return false
++  return id == other.id && size == other.size && mimeType == other.mimeType &&
++    averageBitrate == other.averageBitrate && peakBitrate == other.peakBitrate && videoRange == other.videoRange
++}
++
+ private fun Tracks.toVideoTracks(sourceManifest: HlsManifest?): List<VideoTrack> {
+   val videoTracks = mutableListOf<VideoTrack?>()
+   for (group in this.groups) {
      for (i in 0 until group.length) {
        val format = group.getTrackFormat(i)
        val isSupported = group.isTrackSupported(i)

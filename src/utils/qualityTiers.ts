@@ -506,6 +506,7 @@ export interface ActiveVideoTrackFacts {
   videoRange?: string | null;
   bitrate?: number | null;
   averageBitrate?: number | null;
+  peakBitrate?: number | null;
 }
 
 export interface ActiveQualityInput {
@@ -550,9 +551,10 @@ function isOriginalRung(
   if (!info?.hls?.offered) return false;
   const declared = info.hls.bandwidth;
   const declaredAverage = info.hls.averageBandwidth;
-  if (declared && track.bitrate && within(track.bitrate, declared, 0.02)) {
-    return true;
-  }
+  // BANDWIDTH is a peak; expo-video's deprecated `bitrate` is the average
+  // whenever one is known, so only the peak field compares like for like.
+  const peak = track.peakBitrate ?? track.bitrate;
+  if (declared && peak && within(peak, declared, 0.02)) return true;
   return !!(
     declaredAverage &&
     track.averageBitrate &&
