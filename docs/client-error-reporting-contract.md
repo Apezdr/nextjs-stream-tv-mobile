@@ -171,7 +171,7 @@ interface PlaybackErrorDetails {
   silentFailure?: {
     verdict:
       | "video-unsupported"    // every listed video track lacks a decoder
-      | "video-not-rendering"  // no frame drawn after 8 s of running clock
+      | "video-not-rendering"  // no frame drawn after 8 s of running clock (acts on Android only when no video track is reported either; report-only on Apple)
       | "video-unselected"     // supported tracks listed, none selected (report-only)
       | "audio-unselected";    // audio tracks listed, none selected
     action: "descend-or-card" | "audio-retry" | "report-only";

@@ -67,8 +67,11 @@ describe("decideSilentFailure (video)", () => {
     });
   });
 
-  it("reports, never acts on, nothing rendered after eight seconds (a DV rung can play with both signals missing)", () => {
+  it("acts on nothing rendered after eight seconds only when no video track is reported either", () => {
     const base = { videoTracks: [AVC_OK], clockAdvancedSec: 8 };
+    // A reported track means the decoder has input: a Dolby Vision rung on
+    // the SHIELD once rendered with the track unmatched, and expo-video now
+    // reports the input format itself in that case. No verdict.
     expect(
       decideSilentFailure(snapshot({ ...base, videoTrackSelected: true })),
     ).toBeNull();
@@ -76,7 +79,7 @@ describe("decideSilentFailure (video)", () => {
       decideSilentFailure(snapshot({ ...base, videoTrackSelected: false })),
     ).toEqual({
       verdict: "video-not-rendering",
-      action: "report-only",
+      action: "descend-or-card",
     });
   });
 
@@ -147,7 +150,7 @@ describe("decideSilentFailure (video)", () => {
           alreadyDecided: new Set(["video-unsupported"]),
         }),
       ),
-    ).toEqual({ verdict: "video-not-rendering", action: "report-only" });
+    ).toEqual({ verdict: "video-not-rendering", action: "descend-or-card" });
     expect(
       decideSilentFailure(
         snapshot({

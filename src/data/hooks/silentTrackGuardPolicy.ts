@@ -121,20 +121,25 @@ export function decideSilentFailure(
       return { verdict: "video-unsupported", action: "descend-or-card" };
     }
 
-    // Nothing drawn for a long stretch of running clock. Report only, on
-    // every platform: on the SHIELD a Dolby Vision rung played through
-    // OMX.Nvidia.DOVI.decode with BOTH signals missing (no first-frame event
-    // reached JS after a source reload, and expo-video never matched the
-    // decoder's input format to a listed track, so videoTrack stayed null),
-    // and acting on that put the error card over a working picture. Until
-    // those two signals are proven on every rendering path, only the
-    // all-tracks-unsupported verdict above may act.
+    // Nothing drawn for a long stretch of running clock. Android acts only
+    // with BOTH signals missing: no first frame and no video track. The
+    // patched expo-video reports a track whenever the decoder has an input
+    // format (matched to the listed rung from the playing chunk's playlist
+    // format, or described from the input format itself when nothing listed
+    // matches), so a null track after eight seconds of playback means the
+    // renderer never received video. Before that fix a Dolby Vision rung
+    // played through OMX.Nvidia.DOVI.decode with the track unmatched, and
+    // acting put the error card over a working picture. Apple has only the
+    // first-frame signal, so it stays report-only there.
     if (
       clock >= VIDEO_NOT_RENDERING_AFTER_S &&
       (!android || !s.videoTrackSelected) &&
       !s.alreadyDecided.has("video-not-rendering")
     ) {
-      return { verdict: "video-not-rendering", action: "report-only" };
+      return {
+        verdict: "video-not-rendering",
+        action: android ? "descend-or-card" : "report-only",
+      };
     }
 
     // Supported tracks are listed but none was selected: unexpected, so it
