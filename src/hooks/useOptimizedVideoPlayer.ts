@@ -467,7 +467,10 @@ export function useOptimizedVideoPlayer(
   // during that window tears down resources before the screen is ever
   // visible.
   const hasRunFocusEffectRef = useRef(false);
+  // Latched the first time the screen is focused (see the cleanup branch).
+  const hasBeenFocusedRef = useRef(false);
   useEffect(() => {
+    if (isFocused) hasBeenFocusedRef.current = true;
     pdbg("FOCUS-EFFECT", {
       isFocused,
       first: !hasRunFocusEffectRef.current,
@@ -499,6 +502,18 @@ export function useOptimizedVideoPlayer(
     }
 
     if (!isFocused) {
+      // A screen that has never been focused has nothing to clean up: this
+      // effect re-runs whenever `cleanup`/`restore` change identity (the
+      // source arriving), and on a slow transition useIsFocused() is still
+      // false then. Cleaning up at that point strips the source the player
+      // was just handed and the drift effect reloads it bare, losing the
+      // pending resume seek.
+      if (!hasBeenFocusedRef.current) {
+        console.log(
+          "[useOptimizedVideoPlayer] Screen not yet focused - nothing to clean up",
+        );
+        return;
+      }
       // Don't cleanup if we're likely in PiP mode
       if (!isPiPModeRef.current) {
         console.log(

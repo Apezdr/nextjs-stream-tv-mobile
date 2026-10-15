@@ -121,19 +121,20 @@ export function decideSilentFailure(
       return { verdict: "video-unsupported", action: "descend-or-card" };
     }
 
-    // Nothing drawn for a long stretch of running clock. On Android this
-    // also needs "no decoder ever took a format" (videoTrack null), so a
-    // first-frame event lost on the way can never act on its own; on Apple
-    // the first-frame signal is the only one, so it is reported, not acted on.
+    // Nothing drawn for a long stretch of running clock. Report only, on
+    // every platform: on the SHIELD a Dolby Vision rung played through
+    // OMX.Nvidia.DOVI.decode with BOTH signals missing (no first-frame event
+    // reached JS after a source reload, and expo-video never matched the
+    // decoder's input format to a listed track, so videoTrack stayed null),
+    // and acting on that put the error card over a working picture. Until
+    // those two signals are proven on every rendering path, only the
+    // all-tracks-unsupported verdict above may act.
     if (
       clock >= VIDEO_NOT_RENDERING_AFTER_S &&
       (!android || !s.videoTrackSelected) &&
       !s.alreadyDecided.has("video-not-rendering")
     ) {
-      return {
-        verdict: "video-not-rendering",
-        action: android ? "descend-or-card" : "report-only",
-      };
+      return { verdict: "video-not-rendering", action: "report-only" };
     }
 
     // Supported tracks are listed but none was selected: unexpected, so it
