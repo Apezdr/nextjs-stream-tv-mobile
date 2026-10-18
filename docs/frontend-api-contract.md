@@ -1455,8 +1455,11 @@ Response: **iCal string** (`text` / string body).
 
 Defined in `API_ENDPOINTS` for completeness; not primary browse UI:
 
-- `GET /api/authenticated/list` — full file-server dump (admin/webhook)
-- Notifications: `/api/authenticated/notifications`, `.../mark-read`, `.../dismiss` (keys exist; limited UI wiring)
+- Notifications: `/api/authenticated/notifications`, `.../mark-read`, `.../dismiss` (keys exist; no UI yet). Server behaviour to design against, from the frontend's checkpoint-B hand-off (2026-10-17):
+  - A sync run with more than 5 new titles sends one digest instead of per-title notices: `type: 'new_content'`, `subtype: 'new_content_digest'`, `actionUrl: '/list'`, `data.contentType: 'digest'`, `data.movieCount` / `episodeCount` / `showCount`, `data.items` (at most 24, movies first then shows, each sorted by title: `kind` `movie`|`show`, `title` for display, `originalTitle` to navigate on, `posterURL` or null, `newEpisodes` on shows) and `data.moreCount` for the titles left out (show as "+N more"). Build the app route from `kind` + `originalTitle`; `href` is the web app's path. Until a digest view exists, show it like any notification (title, message).
+  - Other new-content notices keep their shape: up to 5 movies per notice, one notice per show. Their movie links are `/list/movie/<originalTitle>`; the old `/list/movies/...` returned 404.
+  - Retention: a read notification is deleted 30 days after `readAt` (set by `mark-read`); an unread new-content notice or digest 90 days after it was sent; any other unread notification never. A list can shrink between refreshes, so never assume a notification still exists.
+  - New-content notices go only to approved accounts without limited access; a title is announced once, when it first becomes visible after the deploy. Details: `NOTIFICATION_FRAMEWORK_DESIGN.md` in the frontend repo.
 - Admin: `/api/authenticated/admin/*` (media, users, radarr, sonarr, sabnzbd, tdarr, servers, sync, wipe-db, etc.)
 
 ---

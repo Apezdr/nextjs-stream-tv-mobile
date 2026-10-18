@@ -158,13 +158,6 @@ export const contentService = {
   },
 
   /**
-   * Fetch all file server data (admin/webhook only)
-   */
-  getAllContent: async (): Promise<Record<string, unknown>> => {
-    return enhancedApiClient.get(API_ENDPOINTS.CONTENT.LIST);
-  },
-
-  /**
    * Get content counts and durations
    */
   getContentCounts: async (

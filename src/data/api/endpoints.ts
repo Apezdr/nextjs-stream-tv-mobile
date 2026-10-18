@@ -15,7 +15,6 @@ export const API_ENDPOINTS = {
   CONTENT: {
     HORIZONTAL_LIST: "/api/authenticated/horizontal-list",
     EPISODE_PICKER: "/api/authenticated/episode-picker",
-    LIST: "/api/authenticated/list",
     COUNT: "/api/authenticated/count",
     MEDIA: "/api/authenticated/media",
     DIRECT_INFO: "/api/authenticated/media/direct-info",

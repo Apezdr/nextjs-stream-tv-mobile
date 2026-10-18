@@ -183,7 +183,10 @@ describe("serverHealth", () => {
 
   it("a 503 shows the database notice and keeps asking", async () => {
     fetchMode = "503";
-    serverHealth.noteFailure({ url: "/api/authenticated/list", status: 503 });
+    serverHealth.noteFailure({
+      url: "/api/authenticated/horizontal-list",
+      status: 503,
+    });
     await advance(PROBE_DEBOUNCE_MS);
     expect(state().reachability).toBe("degraded");
     expect(selectHealthNotice(state())?.kind).toBe("degraded");
@@ -206,7 +209,10 @@ describe("serverHealth", () => {
     // Seen on 2026-10-11 with the app container stopped: Caddy answers 503
     // with its outage page, and the banner wrongly blamed the database.
     fetchMode = "503-html";
-    serverHealth.noteFailure({ url: "/api/authenticated/list", status: 503 });
+    serverHealth.noteFailure({
+      url: "/api/authenticated/horizontal-list",
+      status: 503,
+    });
     await advance(PROBE_DEBOUNCE_MS);
     expect(state().reachability).toBe("suspect");
     await advance(CONFIRM_INTERVAL_MS);
