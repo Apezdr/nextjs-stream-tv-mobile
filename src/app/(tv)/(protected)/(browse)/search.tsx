@@ -518,18 +518,6 @@ export default function SearchPage() {
             <View style={styles.keyboardRow}>
               {SPECIAL_KEYS.map(renderSpecialKey)}
             </View>
-
-            {/* Movies / TV Shows filter */}
-            <View style={styles.typeToggleRow}>
-              {SEARCH_TYPES.map((kind) => (
-                <TypeToggleButton
-                  key={kind}
-                  label={SEARCH_TYPE_LABELS[kind]}
-                  isActive={types.includes(kind)}
-                  onPress={() => toggleType(kind)}
-                />
-              ))}
-            </View>
           </View>
         </View>
 
@@ -550,16 +538,28 @@ export default function SearchPage() {
               )}
             </View>
 
-            {/* Grid toggle */}
-            <View style={styles.gridToggle}>
-              {GRID_OPTIONS.map((cols) => (
-                <GridToggleButton
-                  key={cols}
-                  columns={cols}
-                  isActive={numColumns === cols}
-                  onPress={() => setNumColumns(cols)}
-                />
-              ))}
+            {/* Movies / TV Shows filter, then the grid toggle */}
+            <View style={styles.headerControls}>
+              <View style={styles.typeToggleRow}>
+                {SEARCH_TYPES.map((kind) => (
+                  <TypeToggleButton
+                    key={kind}
+                    label={SEARCH_TYPE_LABELS[kind]}
+                    isActive={types.includes(kind)}
+                    onPress={() => toggleType(kind)}
+                  />
+                ))}
+              </View>
+              <View style={styles.gridToggle}>
+                {GRID_OPTIONS.map((cols) => (
+                  <GridToggleButton
+                    key={cols}
+                    columns={cols}
+                    isActive={numColumns === cols}
+                    onPress={() => setNumColumns(cols)}
+                  />
+                ))}
+              </View>
             </View>
           </View>
 
@@ -666,6 +666,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.dark.brandPrimary,
     borderWidth: 1,
   },
+  headerControls: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 16,
+  },
   key: {
     alignItems: "center",
     backgroundColor: "#2A2A2A",
@@ -755,17 +760,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#2A2A2A",
     borderColor: Colors.light.whiteBg,
     borderRadius: 6,
-    flex: 1,
-    height: 35,
+    height: 34,
     justifyContent: "center",
-    marginHorizontal: 4,
+    paddingHorizontal: 14,
   },
   typeToggleBtnActive: {
     backgroundColor: "#1A1A1A",
   },
   typeToggleRow: {
     flexDirection: "row",
-    marginTop: 12,
+    gap: 6,
   },
   typeToggleText: {
     color: Colors.dark.whiteText,
