@@ -22,6 +22,11 @@ const VALID_WIDTHS = [
   3840,
 ] as const;
 
+// The server's `images.qualities` allow-list: Next 16 rejects any other `q`
+// (the optimizer answers 400 and only the blurhash placeholder ever shows).
+// Mirrors nextjs-stream/src/utils/imageQualities.js.
+const VALID_QUALITIES = [25, 50, 75, 90, 100] as const;
+
 /**
  * Simple wrapper around expo-image that optionally routes images through Next.js optimization
  */
@@ -64,8 +69,12 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
 
     try {
       const validWidth = getValidWidth(width);
+      // The smallest allowed quality at or above the requested one.
+      const validQuality =
+        VALID_QUALITIES.find((q) => q >= quality) ??
+        VALID_QUALITIES[VALID_QUALITIES.length - 1];
       const encodedUri = encodeURIComponent(imageUri);
-      return `${baseURL}/_next/image?url=${encodedUri}&w=${validWidth}&q=${quality}`;
+      return `${baseURL}/_next/image?url=${encodedUri}&w=${validWidth}&q=${validQuality}`;
     } catch {
       return imageUri;
     }

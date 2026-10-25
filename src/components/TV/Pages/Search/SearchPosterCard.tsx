@@ -116,7 +116,7 @@ const SearchPosterCard = ({
           transition={0}
           contentFit="cover"
           width={Math.round(width) * 2}
-          quality={85}
+          quality={75}
           cachePolicy="memory-disk"
           recyclingKey={item.id}
         />

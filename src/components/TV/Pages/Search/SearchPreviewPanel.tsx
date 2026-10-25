@@ -86,8 +86,6 @@ const PanelButton = ({
 
 interface SearchPreviewPanelProps {
   item: SearchPosterItem;
-  /** Programmatic focus on Play (a fresh Up press from the grid's top row). */
-  focusPlay: boolean;
   /** Any button in the panel gained focus. */
   onButtonFocus: () => void;
   onPlay: (item: SearchPosterItem) => void;
@@ -102,7 +100,6 @@ interface SearchPreviewPanelProps {
  */
 const SearchPreviewPanelBase = ({
   item,
-  focusPlay,
   onButtonFocus,
   onPlay,
   onDetails,
@@ -154,7 +151,7 @@ const SearchPreviewPanelBase = ({
           transition={150}
           contentFit="cover"
           width={BACKDROP_WIDTH * 2}
-          quality={80}
+          quality={75}
           cachePolicy="memory-disk"
         />
       </View>
@@ -172,7 +169,6 @@ const SearchPreviewPanelBase = ({
             label="Play"
             icon="play"
             primary
-            hasTVPreferredFocus={focusPlay}
             onFocus={handleButtonFocus}
             onPress={() => onPlay(item)}
           />
@@ -198,8 +194,6 @@ export const SearchPreviewPanel = memo(SearchPreviewPanelBase);
 
 interface SearchEmptyPanelProps {
   query: string;
-  /** Programmatic focus on Clear search (a fresh Up press from the grid's top row). */
-  focusClear: boolean;
   onButtonFocus: () => void;
   onClear: () => void;
 }
@@ -207,7 +201,6 @@ interface SearchEmptyPanelProps {
 /** Takes the preview's place when a query matches nothing. */
 const SearchEmptyPanelBase = ({
   query,
-  focusClear,
   onButtonFocus,
   onClear,
 }: SearchEmptyPanelProps) => (
@@ -228,7 +221,6 @@ const SearchEmptyPanelBase = ({
     <PanelButton
       label="Clear search"
       primary
-      hasTVPreferredFocus={focusClear}
       onFocus={onButtonFocus}
       onPress={onClear}
     />

@@ -1,6 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
-import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -81,11 +80,15 @@ const FILTERS: { id: Filter; label: string; types: SearchType[] }[] = [
 
 type FocusRegion = "keyboard" | "chips" | "suggestions" | "grid" | "preview";
 // Where focus is sent programmatically (rendered as hasTVPreferredFocus).
-type FocusTarget = "firstKey" | "play" | "clear" | null;
+type FocusTarget = "firstKey" | null;
 
-// The key-repeat stop needs Android's key-down / key-up pairs; tvOS reports
-// no key action, so there the focus engine keeps its default up path.
-const GATE_UP_ON_HOLD = Platform.OS === "android";
+// Focus steps closer together than this come from a held key (Android repeats
+// at ~50 ms; a deliberate press is slower), as ContentGrid also assumes.
+const HOLD_REPEAT_MS = 400;
+// How long after the last quick step the upward traps stay on.
+const HOLD_RELEASE_MS = 700;
+// Safety valve for the Up key tracker, in case a key-up never arrives.
+const UP_HELD_MAX_MS = 1500;
 
 // ---------------------------------------------------------------------------
 // Data helpers
@@ -297,12 +300,31 @@ export default function SearchScreen() {
   const [focusTarget, setFocusTarget] = useState<FocusTarget>("firstKey");
   const focusTargetRef = useRef<FocusTarget>("firstKey");
   focusTargetRef.current = focusTarget;
-  // True from an Up key-down until its key-up: the preview guide traps upward
-  // focus while it is set, so a held key stops there instead of running on
-  // into the navigation.
+
+  // The key-repeat stop. Either signal traps upward focus on the grid and on
+  // the preview, so a held Up stops on the grid's top row (or, if it slipped
+  // past, on the preview) instead of running on into the navigation:
+  // - holdBumped: focus has been stepping faster than a human presses, and
+  //   stays set until HOLD_RELEASE_MS after the last quick step;
+  // - upHeld: an Up key is down (Android reports key-down / key-up pairs),
+  //   with a safety valve in case the key-up never arrives.
+  // A fresh press moves focus natively before either flag can change, so a
+  // deliberate press still steps up: grid → preview → nav.
+  const [holdBumped, setHoldBumped] = useState(false);
+  const lastFocusStepAt = useRef(0);
+  const bumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noteFocusStep = useCallback(() => {
+    const now = Date.now();
+    const quick = now - lastFocusStepAt.current < HOLD_REPEAT_MS;
+    lastFocusStepAt.current = now;
+    if (!quick) return;
+    setHoldBumped(true);
+    if (bumpTimer.current) clearTimeout(bumpTimer.current);
+    bumpTimer.current = setTimeout(() => setHoldBumped(false), HOLD_RELEASE_MS);
+  }, []);
   const [upHeld, setUpHeld] = useState(false);
-  const upPressedRef = useRef(false);
-  const screenFocusedRef = useRef(false);
+  const upHeldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const trapUpward = holdBumped || upHeld;
 
   const regionFocus = useCallback((region: FocusRegion) => {
     focusRegionRef.current = region;
@@ -317,17 +339,10 @@ export default function SearchScreen() {
     () => regionFocus("suggestions"),
     [regionFocus],
   );
-  const onPanelFocus = useCallback(() => regionFocus("preview"), [regionFocus]);
-
-  useFocusEffect(
-    useCallback(() => {
-      screenFocusedRef.current = true;
-      return () => {
-        screenFocusedRef.current = false;
-        focusRegionRef.current = null;
-      };
-    }, []),
-  );
+  const onPanelFocus = useCallback(() => {
+    regionFocus("preview");
+    noteFocusStep();
+  }, [regionFocus, noteFocusStep]);
 
   // --- results ----------------------------------------------------------------
   const trimmed = debouncedQuery.trim();
@@ -436,8 +451,6 @@ export default function SearchScreen() {
   loadMoreRef.current = loadMore;
   const gridLengthRef = useRef(0);
   gridLengthRef.current = gridItems.length;
-  const isEmptyRef = useRef(false);
-  isEmptyRef.current = isEmpty;
 
   // Velocity/onEndReached-based loading as the fallback for a held key.
   const smartScroll = useSmartInfiniteScroll({
@@ -451,6 +464,7 @@ export default function SearchScreen() {
   const handleItemFocus = useCallback(
     (index: number) => {
       regionFocus("grid");
+      noteFocusStep();
       focusedGridIndexRef.current = index;
       if (previewTimer.current) clearTimeout(previewTimer.current);
       previewTimer.current = setTimeout(
@@ -461,43 +475,32 @@ export default function SearchScreen() {
         loadMoreRef.current();
       }
     },
-    [regionFocus],
+    [regionFocus, noteFocusStep],
   );
 
   useEffect(
     () => () => {
       if (previewTimer.current) clearTimeout(previewTimer.current);
       if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+      if (bumpTimer.current) clearTimeout(bumpTimer.current);
+      if (upHeldTimer.current) clearTimeout(upHeldTimer.current);
     },
     [],
   );
 
-  // --- the Up-press gate ------------------------------------------------------
-  // The grid guide always traps upward focus, so the focus engine never leaves
-  // the top row on its own. A FRESH Up press (a key-down whose previous Up
-  // event was a key-up) steps up deliberately: to Play, or to Clear search
-  // when there are no results. A held key is a run of key-downs with no key-up
-  // between them, so it never qualifies and stops on the top row. The same
-  // flag traps the preview guide while the key is down, so a hold that began
-  // on Play cannot run on into the navigation; a fresh press from Play still
-  // reaches it through the engine's normal path.
+  // --- Up key tracking (see trapUpward above) --------------------------------
   const handleTVEvent = useCallback((event: HWEvent) => {
-    if (!event || event.eventType !== "up" || !screenFocusedRef.current) return;
+    if (!event || event.eventType !== "up") return;
     const action = Number(event.eventKeyAction);
+    if (upHeldTimer.current) clearTimeout(upHeldTimer.current);
     if (action === 1) {
-      upPressedRef.current = false;
       setUpHeld(false);
       return;
     }
-    if (action !== 0 || upPressedRef.current) return;
-    upPressedRef.current = true;
+    if (action !== 0) return;
+    // Key-down, including every auto-repeat: keep the valve armed while held.
     setUpHeld(true);
-    if (
-      focusRegionRef.current === "grid" &&
-      focusedGridIndexRef.current < NUM_COLUMNS
-    ) {
-      setFocusTarget(isEmptyRef.current ? "clear" : "play");
-    }
+    upHeldTimer.current = setTimeout(() => setUpHeld(false), UP_HELD_MAX_MS);
   }, []);
   useTVEventHandler(handleTVEvent);
 
@@ -702,13 +705,12 @@ export default function SearchScreen() {
         <TVFocusGuideView
           autoFocus
           trapFocusRight
-          trapFocusUp={GATE_UP_ON_HOLD && upHeld}
+          trapFocusUp={trapUpward}
           style={styles.panelGuide}
         >
           {isEmpty ? (
             <SearchEmptyPanel
               query={debouncedQuery}
-              focusClear={focusTarget === "clear"}
               onButtonFocus={onPanelFocus}
               onClear={clearSearch}
             />
@@ -716,7 +718,6 @@ export default function SearchScreen() {
             <SearchPreviewPanel
               key={previewItem.id}
               item={previewItem}
-              focusPlay={focusTarget === "play"}
               onButtonFocus={onPanelFocus}
               onPlay={play}
               onDetails={openDetails}
@@ -729,11 +730,11 @@ export default function SearchScreen() {
         {isEmpty && <Text style={styles.sectionLabel}>Recently added</Text>}
 
         {/* autoFocus returns focus to the last poster when coming back from
-            the keyboard or the panel. Up is trapped: the Up-press gate above
-            steps out of the top row deliberately. */}
+            the keyboard or the panel. Up is trapped only while a key is
+            held (trapUpward), so a deliberate press steps up to the panel. */}
         <TVFocusGuideView
           autoFocus
-          trapFocusUp={GATE_UP_ON_HOLD}
+          trapFocusUp={trapUpward}
           trapFocusDown
           trapFocusRight
           style={styles.gridGuide}
