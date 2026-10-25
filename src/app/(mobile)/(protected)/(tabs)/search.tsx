@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { FlashList } from "@shopify/flash-list";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useCallback, useMemo, useState, useRef } from "react";
 import {
@@ -33,6 +33,14 @@ import { navigationHelper } from "@/src/utils/navigationHelper";
 // Grid layout options
 const GRID_OPTIONS = [1, 2, 3] as const;
 type GridColumns = (typeof GRID_OPTIONS)[number];
+
+// Movies / TV Shows filter; the server takes the same `types` list from any client
+const SEARCH_TYPES = ["movie", "tv"] as const;
+type SearchType = (typeof SEARCH_TYPES)[number];
+const SEARCH_TYPE_LABELS: Record<SearchType, string> = {
+  movie: "Movies",
+  tv: "TV Shows",
+};
 
 // Row item for list view (1-column mode)
 const MobileSearchRowItem = ({
@@ -152,23 +160,53 @@ export default function SearchPage() {
     setDebouncedQuery("");
   }, []);
 
-  // Fetch search results
+  // Movies / TV Shows filter: the last one left on stays on (an empty list is a 400)
+  const [types, setTypes] = useState<SearchType[]>([...SEARCH_TYPES]);
+  const toggleType = useCallback((kind: SearchType) => {
+    setTypes((current) =>
+      current.includes(kind)
+        ? current.length === 1
+          ? current
+          : current.filter((k) => k !== kind)
+        : SEARCH_TYPES.filter((k) => k === kind || current.includes(k)),
+    );
+  }, []);
+
+  // Fetch search results one page at a time; the list asks for the next page
+  // as it nears its end (the same pattern as the Movies tab). The filter is
+  // part of the key, so each choice keeps its own pages.
   const {
-    data: searchResults,
+    data,
     isPending,
     isFetching,
     isPaused,
     error,
-  } = useQuery({
-    queryKey: ["search", debouncedQuery],
-    queryFn: () =>
-      contentService.search(
-        debouncedQuery,
-        debouncedQuery ? undefined : 30,
-        true,
-      ),
-    enabled: true,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ["search", debouncedQuery, types],
+    queryFn: ({ pageParam }) =>
+      contentService.searchPage({
+        query: debouncedQuery,
+        page: pageParam,
+        types,
+        isTVdevice: true,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasNextPage ? allPages.length : undefined,
   });
+
+  const searchResults = useMemo(
+    () => data?.pages.flatMap((page) => page.items),
+    [data],
+  );
+  const totalResults = data?.pages[0]?.total ?? 0;
+
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Paused-aware "no results yet": a first fetch paused for lack of network
   // is not loading to React Query, and the screen would otherwise say "No
@@ -406,15 +444,38 @@ export default function SearchPage() {
         </View>
       </View>
 
+      {/* Movies / TV Shows filter */}
+      <View style={styles.typeFilter}>
+        {SEARCH_TYPES.map((kind) => {
+          const isActive = types.includes(kind);
+          return (
+            <TouchableOpacity
+              key={kind}
+              style={[styles.typeChip, isActive && styles.typeChipActive]}
+              onPress={() => toggleType(kind)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.typeChipText,
+                  isActive && styles.typeChipTextActive,
+                ]}
+              >
+                {SEARCH_TYPE_LABELS[kind]}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       {/* Results header */}
       <View style={styles.resultsHeader}>
         <Text style={styles.resultsTitle}>
           {searchQuery ? `Results for "${searchQuery}"` : "Recently Added"}
         </Text>
-        {!isLoading && transformedResults.length > 0 && (
+        {!isLoading && totalResults > 0 && (
           <Text style={styles.resultCount}>
-            {transformedResults.length}{" "}
-            {transformedResults.length === 1 ? "result" : "results"}
+            {totalResults} {totalResults === 1 ? "result" : "results"}
           </Text>
         )}
       </View>
@@ -457,6 +518,16 @@ export default function SearchPage() {
           showsVerticalScrollIndicator={false}
           keyboardDismissMode="on-drag"
           getItemType={() => (numColumns === 1 ? "row" : "card")}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            isFetchingNextPage ? (
+              <ActivityIndicator
+                color={Colors.dark.brandPrimary}
+                style={styles.listFooter}
+              />
+            ) : null
+          }
         />
       )}
 
@@ -519,6 +590,9 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     paddingHorizontal: 16,
     paddingTop: 8,
+  },
+  listFooter: {
+    paddingVertical: 16,
   },
   loadingContainer: {
     alignItems: "center",
@@ -633,5 +707,30 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 28,
     fontWeight: "bold",
+  },
+  typeChip: {
+    backgroundColor: Colors.dark.cardBackground,
+    borderColor: "transparent",
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  typeChipActive: {
+    borderColor: Colors.dark.brandPrimary,
+  },
+  typeChipText: {
+    color: Colors.dark.videoDescriptionText,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  typeChipTextActive: {
+    color: Colors.dark.whiteText,
+  },
+  typeFilter: {
+    flexDirection: "row",
+    gap: 8,
+    paddingBottom: 10,
+    paddingHorizontal: 16,
   },
 });

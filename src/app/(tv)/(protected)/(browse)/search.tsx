@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState, useRef } from "react";
 import {
   StyleSheet,
@@ -167,6 +167,14 @@ const SearchRowItem = ({
 const GRID_OPTIONS = [1, 2, 3] as const;
 type GridColumns = (typeof GRID_OPTIONS)[number];
 
+// Movies / TV Shows filter; the server takes the same `types` list from any client
+const SEARCH_TYPES = ["movie", "tv"] as const;
+type SearchType = (typeof SEARCH_TYPES)[number];
+const SEARCH_TYPE_LABELS: Record<SearchType, string> = {
+  movie: "Movies",
+  tv: "TV Shows",
+};
+
 // Grid toggle button with focus support
 const GridToggleButton = ({
   columns,
@@ -202,6 +210,43 @@ const GridToggleButton = ({
         size={18}
         color={isActive ? Colors.dark.brandPrimary : Colors.dark.whiteText}
       />
+    </TouchableOpacity>
+  );
+};
+
+// Movies / TV Shows filter button with focus support
+const TypeToggleButton = ({
+  label,
+  isActive,
+  onPress,
+}: {
+  label: string;
+  isActive: boolean;
+  onPress: () => void;
+}) => {
+  const [focused, setFocused] = useState(false);
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.typeToggleBtn,
+        isActive && styles.typeToggleBtnActive,
+        {
+          opacity: focused || isActive ? 1 : 0.4,
+          borderWidth: focused ? 0.82 : 0,
+        },
+      ]}
+      onPress={onPress}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      activeOpacity={0.7}
+      isTVSelectable={Platform.isTV}
+    >
+      <Text
+        style={[styles.typeToggleText, isActive && styles.typeToggleTextActive]}
+      >
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 };
@@ -260,24 +305,54 @@ export default function SearchPage() {
     [searchQuery, updateDebouncedQuery],
   );
 
-  // Fetch search results using React Query
+  // Movies / TV Shows filter: the last one left on stays on (an empty list is a 400)
+  const [types, setTypes] = useState<SearchType[]>([...SEARCH_TYPES]);
+  const toggleType = useCallback((kind: SearchType) => {
+    setTypes((current) =>
+      current.includes(kind)
+        ? current.length === 1
+          ? current
+          : current.filter((k) => k !== kind)
+        : SEARCH_TYPES.filter((k) => k === kind || current.includes(k)),
+    );
+  }, []);
+
+  // Fetch search results one page at a time; moving focus down the grid
+  // scrolls the list, so it asks for the next page as it nears its end. The
+  // filter is part of the key, so each choice keeps its own pages.
   const {
-    data: searchResults,
+    data,
     isPending,
     isFetching,
     isPaused,
     error,
     refetch,
-  } = useQuery({
-    queryKey: ["search", debouncedQuery],
-    queryFn: () =>
-      contentService.search(
-        debouncedQuery,
-        debouncedQuery ? undefined : 30,
-        true,
-      ),
-    enabled: true,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ["search", debouncedQuery, types],
+    queryFn: ({ pageParam }) =>
+      contentService.searchPage({
+        query: debouncedQuery,
+        page: pageParam,
+        types,
+        isTVdevice: true,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasNextPage ? allPages.length : undefined,
   });
+
+  const searchResults = useMemo(
+    () => data?.pages.flatMap((page) => page.items),
+    [data],
+  );
+  const totalResults = data?.pages[0]?.total ?? 0;
+
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Paused-aware "no results yet": a first fetch paused for lack of network
   // is not loading to React Query, and the screen would otherwise say "No
@@ -443,6 +518,18 @@ export default function SearchPage() {
             <View style={styles.keyboardRow}>
               {SPECIAL_KEYS.map(renderSpecialKey)}
             </View>
+
+            {/* Movies / TV Shows filter */}
+            <View style={styles.typeToggleRow}>
+              {SEARCH_TYPES.map((kind) => (
+                <TypeToggleButton
+                  key={kind}
+                  label={SEARCH_TYPE_LABELS[kind]}
+                  isActive={types.includes(kind)}
+                  onPress={() => toggleType(kind)}
+                />
+              ))}
+            </View>
           </View>
         </View>
 
@@ -456,10 +543,9 @@ export default function SearchPage() {
                   ? `Results for "${searchQuery}"`
                   : "Recently Added"}
               </Text>
-              {!isAwaitingResults && transformedResults.length > 0 && (
+              {!isAwaitingResults && totalResults > 0 && (
                 <Text style={styles.resultCount}>
-                  {transformedResults.length}{" "}
-                  {transformedResults.length === 1 ? "result" : "results"}
+                  {totalResults} {totalResults === 1 ? "result" : "results"}
                 </Text>
               )}
             </View>
@@ -517,6 +603,16 @@ export default function SearchPage() {
               maxToRenderPerBatch={9}
               initialNumToRender={12}
               windowSize={5}
+              onEndReached={loadMore}
+              onEndReachedThreshold={0.5}
+              ListFooterComponent={
+                isFetchingNextPage ? (
+                  <ActivityIndicator
+                    color={Colors.dark.brandPrimary}
+                    style={styles.listFooter}
+                  />
+                ) : null
+              }
             />
           )}
         </View>
@@ -597,6 +693,9 @@ const styles = StyleSheet.create({
   keyboardRows: {
     marginTop: 20,
   },
+  listFooter: {
+    paddingVertical: 20,
+  },
   loadingContainer: {
     alignItems: "center",
     flex: 1,
@@ -650,6 +749,31 @@ const styles = StyleSheet.create({
     backgroundColor: "#3A3A3A",
     flex: 1,
     marginHorizontal: 4,
+  },
+  typeToggleBtn: {
+    alignItems: "center",
+    backgroundColor: "#2A2A2A",
+    borderColor: Colors.light.whiteBg,
+    borderRadius: 6,
+    flex: 1,
+    height: 35,
+    justifyContent: "center",
+    marginHorizontal: 4,
+  },
+  typeToggleBtnActive: {
+    backgroundColor: "#1A1A1A",
+  },
+  typeToggleRow: {
+    flexDirection: "row",
+    marginTop: 12,
+  },
+  typeToggleText: {
+    color: Colors.dark.whiteText,
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  typeToggleTextActive: {
+    color: Colors.dark.brandPrimary,
   },
   // Row item styles (list view)
   rowItem: {

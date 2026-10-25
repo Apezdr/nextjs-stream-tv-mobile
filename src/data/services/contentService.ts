@@ -31,6 +31,7 @@ import {
   WatchlistStatusParams,
   WatchlistStatusResponse,
   MediaItem,
+  SearchPage,
 } from "@/src/data/types/content.types";
 import {
   DirectPlayInfo,
@@ -705,43 +706,61 @@ export const contentService = {
   },
 
   /**
-   * Search for media content
+   * One page of search results; page 0 first. An empty query is Recently Added.
+   * The server pages at `limit` (default 30, at most 50) and answers with the
+   * total match count and whether another page follows.
    */
-  search: async (
-    query: string = "",
-    limit?: number,
-    isTVdevice: boolean = false,
-  ): Promise<MediaItem[]> => {
-    const endpoint = API_ENDPOINTS.CONTENT.SEARCH;
-    const baseURL = enhancedApiClient.getBaseUrl();
-
-    console.log(`[contentService.search] Requesting:`, {
-      fullURL: `${baseURL}${endpoint}`,
-      query: query || "(empty - recently added)",
+  searchPage: async ({
+    query = "",
+    page = 0,
+    limit = 30,
+    types,
+    isTVdevice = false,
+  }: {
+    query?: string;
+    page?: number;
+    limit?: number; // the server allows up to 50
+    types?: Array<"movie" | "tv">; // both when absent
+    isTVdevice?: boolean;
+  }): Promise<SearchPage> => {
+    const response = await enhancedApiClient.post<{
+      results: MediaItem[];
+      total?: number;
+      hasNextPage?: boolean;
+    }>(API_ENDPOINTS.CONTENT.SEARCH, {
+      query,
+      page,
       limit,
       isTVdevice,
+      ...(types && { types }),
     });
-
-    const response = await enhancedApiClient.post<{ results: MediaItem[] }>(
-      endpoint,
-      { query, isTVdevice, ...(limit && { limit }) },
-    );
 
     const raw = response.results || [];
 
-    console.log(`[contentService.search] Response:`, {
-      itemsReceived: raw.length,
+    console.log(`[contentService.searchPage] Response:`, {
       query: query || "(recently added)",
+      page,
+      itemsReceived: raw.length,
+      total: response.total,
+      hasNextPage: response.hasNextPage,
     });
 
     // The search API returns `_id` (MongoDB ObjectId) instead of `id`.
     // Normalize so downstream consumers always have `id`.
-    return raw.map((item) => {
+    const items = raw.map((item) => {
       const { _id, ...rest } = item as MediaItem & { _id?: string };
       return {
         ...rest,
         id: (rest.id as string | undefined) ?? _id ?? "",
       } as MediaItem;
     });
+
+    // A server from before the 2026-10-24 release answers with `results` only:
+    // treat that as a single complete page.
+    return {
+      items,
+      total: response.total ?? items.length,
+      hasNextPage: response.hasNextPage ?? false,
+    };
   },
 };

@@ -119,6 +119,7 @@ export interface TVDeviceMetadata {
   vote_average: number; // Popularity rating (0-10 scale)
   releaseDate: string;
   trailer_url: string;
+  // Not sent since the 2026-10-24 server release; read the top-level `cast`
   cast?: Array<{
     id: number;
     name: string;
@@ -231,6 +232,7 @@ export interface MediaDetailsResponse {
       [key: string]: unknown; // Additional cast fields
     },
   ];
+  castCount?: number; // everyone in the cast; `cast` holds the first 24
   // Additional fields that might be returned by the API
   [key: string]: unknown;
 }
@@ -595,4 +597,13 @@ export interface EpisodeSpecificResponse {
     character: string;
     profile_path: string;
   }>;
+  castCount?: number; // everyone in the cast; `cast` holds the first 24
+  guestStarsCount?: number; // every guest star; `guestStars` holds the first 24
+}
+
+// One page of `POST /api/authenticated/search` results (contract §11)
+export interface SearchPage {
+  items: MediaItem[];
+  total: number; // every match, not just this page
+  hasNextPage: boolean;
 }

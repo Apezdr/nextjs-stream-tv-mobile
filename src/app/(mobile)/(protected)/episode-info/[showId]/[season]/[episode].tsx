@@ -267,6 +267,17 @@ export default function EpisodeInfoPage() {
   }
 
   const showData = episode;
+
+  // The server sends at most 24 of each; the counts hold the full totals
+  const moreGuestStars = Math.max(
+    0,
+    (episode.guestStarsCount ?? 0) - (episode.guestStars?.length ?? 0),
+  );
+  const moreCast = Math.max(
+    0,
+    (episode.castCount ?? 0) - (episode.cast?.length ?? 0),
+  );
+
   // Shared rule with every other progress surface (server figure first).
   const progressPercentage =
     (watchProgressPercent(episode?.watchHistory, episode?.duration) ?? 0) / 100;
@@ -510,6 +521,18 @@ export default function EpisodeInfoPage() {
                     </View>
                   </View>
                 ))}
+                {moreGuestStars > 0 && (
+                  <View style={styles.castMember}>
+                    <View
+                      style={[
+                        styles.castImageContainer,
+                        styles.castPlaceholder,
+                      ]}
+                    >
+                      <Text style={styles.castMoreText}>+{moreGuestStars}</Text>
+                    </View>
+                  </View>
+                )}
               </ScrollView>
             </View>
           )}
@@ -563,6 +586,18 @@ export default function EpisodeInfoPage() {
                     </View>
                   </View>
                 ))}
+                {moreCast > 0 && (
+                  <View style={styles.castMember}>
+                    <View
+                      style={[
+                        styles.castImageContainer,
+                        styles.castPlaceholder,
+                      ]}
+                    >
+                      <Text style={styles.castMoreText}>+{moreCast}</Text>
+                    </View>
+                  </View>
+                )}
               </ScrollView>
             </View>
           )}
@@ -878,6 +913,11 @@ const styles = StyleSheet.create({
     color: Colors.dark.videoDescriptionText,
     fontSize: 11,
     textAlign: "center",
+  },
+  castMoreText: {
+    color: Colors.dark.whiteText,
+    fontSize: 18,
+    fontWeight: "bold",
   },
   castPlaceholder: {
     alignItems: "center",
