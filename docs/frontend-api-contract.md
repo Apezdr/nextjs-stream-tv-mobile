@@ -320,7 +320,7 @@ When `true`, the client expects:
 | TV genre / movies / shows pages | `true` |
 | Mobile genre / movies / shows / my-list | often `false` |
 | Banner | always `true` |
-| Search body | `true` or `false` depending on surface |
+| Search body | `true` on both search screens |
 
 ### 3.2 `includeWatchHistory`
 
@@ -432,7 +432,7 @@ Primary home / browse carousels and “all movies/shows” grids.
 | Param | Type | Default (service) | Values |
 |---|---|---|---|
 | `type` | string | `"all"` | `movie` \| `tv` \| `recentlyWatched` \| `recentlyAdded` \| `recommendations` \| `all` |
-| `sort` | string | `"id"` | `id` \| `title` \| `date` |
+| `sort` | string | `"id"` | `id` \| `title` \| `date` — see **Sort** below |
 | `sortOrder` | string | `"desc"` | `asc` \| `desc` |
 | `page` | number | `0` | 0-based |
 | `limit` | number | `30` | Home rows often use **20** |
@@ -444,6 +444,20 @@ Primary home / browse carousels and “all movies/shows” grids.
 ```
 GET /api/authenticated/horizontal-list?type=recentlyWatched&sort=id&sortOrder=desc&page=0&limit=20&isTVdevice=true
 ```
+
+#### Sort (`type=movie` and `type=tv`)
+
+Since the 2026-10-24 server release the sort runs in the database before paging, so each page continues the one before it. Ties end on `_id`.
+
+| `sort` | Order |
+|---|---|
+| `id` | Date added to the library (`initialDiscoveryDate`) |
+| `title` | Title, ignoring case, numbers in numeric order |
+| `date` | Release date; for a show, its latest air date (`last_air_date`) |
+
+`sortOrder` is `asc` or `desc`. Any other `sort` is a 400. The other list types keep their server order.
+
+What that means here: the TV browse Movies and TV rows (`sort=title`) are A-Z across every page, not just within each page of 15, and the mobile Movies and Shows tabs' Newest/Oldest toggle (`sort=id`) orders by the date a title was added, where before `id` did not sort. Nothing in this client sends `sort=date` for `movie` or `tv`.
 
 #### Response
 
@@ -756,6 +770,12 @@ When `isTVdevice` is omitted/false:
 
 `sanitizeTVData` also emits `playbackSource` (how `videoURL` is being delivered: a JIT master, or the raw file because the transcoder cannot take the title), the `mid:` resolved catalog id stamped on presence rows, and `rawVideoURL`. The client reads `playbackSource === "raw"` to label the quality menu when `direct-info` answers 404 for a raw-served title. The web repository's copy of this contract is the tracked source for those fields; this file carries only what the client consumes.
 
+### 7.3 Cast in responses
+
+Since the 2026-10-24 server release every `/media` response carries at most 24 people in `cast`, and at most 24 in an episode's `guestStars`, main cast first. Each person has only `id`, `name`, `character` and `profile_path`. `castCount` and `guestStarsCount` hold the full totals. `metadata.cast`, `metadata.guest_stars` and `metadata.recurring_cast` are not sent. Read `cast` and `guestStars` at the top level.
+
+This client: the info screens read `cast || metadata.cast`, so the first operand wins and the mobile one still shows its first 10. The mobile episode screen shows a "+N" tile after the guest stars (and after the cast) when the count exceeds the people sent.
+
 ---
 
 ## 8. Banner
@@ -1015,17 +1035,25 @@ Query: `tmdbId` / `mediaId`, `mediaType`, optional `playlistId`.
 
 ```ts
 {
-  query: string;           // empty string ⇒ “recently added” style results
+  query: string;                 // matched literally, ignoring case; "" = Recently Added
+  page?: number;                 // 0-based; default 0
+  limit?: number;                // default 30, max 50
+  types?: Array<"movie" | "tv">; // default both; [] or an unknown kind is a 400
   isTVdevice?: boolean;
-  limit?: number;          // omitted if not provided
 }
 ```
 
 #### Response
 
 ```ts
-{ results: MediaItem[] }
+{ results: MediaItem[]; total: number; hasNextPage: boolean }
 ```
+
+Results are ranked best match first: the whole title (leaving out a leading The/A/An), then titles starting with the query as whole words, then titles starting with it, then later words, then anywhere. Within a rank, titles are A-Z. Movies and shows are mixed. Recently Added (empty query) holds at most 100 titles. A query that isn't a string is a 400. Paging, `total`, `hasNextPage` and `types` arrived with the 2026-10-24 server release; an app that sends no `page` gets page 0.
+
+#### How this client calls it
+
+Both search screens fetch through `contentService.searchPage` with `useInfiniteQuery`, keyed on the debounced query and the `types` filter, always with `limit` 30 and `isTVdevice: true`. Page `n` is requested when page `n-1` said `hasNextPage` and the list nears its end (`onEndReached`, threshold 0.5). The Movies / TV Shows toggles send `types`; the last one left on cannot be turned off. The results header shows `total`. Against a server from before that release the response carries only `results`; the service then reports `total = results.length` and `hasNextPage = false`.
 
 Client maps `_id` → `id` if needed. Search UI often maps:
 
@@ -1524,7 +1552,7 @@ Document these so backend changes don’t “fix” the app unexpectedly.
 - [ ] Dual poster/backdrop keys (or reliable single key per pair)
 - [ ] Genres list + content actions
 - [ ] Watchlist content + status/toggle
-- [ ] Search POST `{ query, isTVdevice?, limit? }` → `{ results }`
+- [ ] Search POST `{ query, page?, limit?, types?, isTVdevice? }` → `{ results, total, hasNextPage }`
 - [ ] `updatePlayback` + `presence/end` contract
 - [ ] Media payload includes `videoURL` / episode `videoURL` and optional `captionURLs`
 - [ ] Subtitles endpoint (incl. auto 200/202 behavior)
