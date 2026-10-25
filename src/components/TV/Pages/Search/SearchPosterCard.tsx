@@ -62,7 +62,7 @@ interface SearchPosterCardProps {
   hasTVPreferredFocus?: boolean;
   /** Fired with the item's index; the screen uses it for the preview and load-more. */
   onFocus: (index: number) => void;
-  onPress: (item: SearchPosterItem) => void;
+  onPress: (item: SearchPosterItem, index: number) => void;
 }
 
 const SearchPosterCard = ({
@@ -81,7 +81,10 @@ const SearchPosterCard = ({
     onFocus(index);
   }, [onFocus, index]);
   const handleBlur = useCallback(() => setFocused(false), []);
-  const handlePress = useCallback(() => onPress(item), [onPress, item]);
+  const handlePress = useCallback(
+    () => onPress(item, index),
+    [onPress, item, index],
+  );
 
   const { pre, mid, post } = splitHighlight(item.title, highlight);
   const posterHeight = Math.round(width / POSTER_ASPECT);

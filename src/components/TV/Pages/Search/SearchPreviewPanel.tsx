@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { memo, useCallback, useState } from "react";
+import React, { memo, useEffect, useState } from "react";
 import {
   Platform,
   StyleSheet,
@@ -86,6 +86,12 @@ const PanelButton = ({
 
 interface SearchPreviewPanelProps {
   item: SearchPosterItem;
+  /**
+   * The user selected this title: show Play / Details / My List, with focus
+   * on Play. While false the panel is a passive preview with no focusable
+   * children, so moving up from the grid never lands on it.
+   */
+  actionsOpen: boolean;
   /** Any button in the panel gained focus. */
   onButtonFocus: () => void;
   onPlay: (item: SearchPosterItem) => void;
@@ -93,13 +99,14 @@ interface SearchPreviewPanelProps {
 }
 
 /**
- * The focused title's preview: backdrop, title, year · kind, and
- * Play / Details / My List. Render it with `key={item.id}` so the watchlist
- * state starts fresh for each title; the status is fetched lazily, the first
- * time a button in the panel takes focus.
+ * The focused title's preview: backdrop, title and year · kind, plus
+ * Play / Details / My List once the title is selected. Render it with
+ * `key={item.id}` so the watchlist state starts fresh for each title; the
+ * status is fetched when the actions open.
  */
 const SearchPreviewPanelBase = ({
   item,
+  actionsOpen,
   onButtonFocus,
   onPlay,
   onDetails,
@@ -110,11 +117,11 @@ const SearchPreviewPanelBase = ({
     mediaType: item.mediaType,
     title: item.title,
   });
+  const { fetchStatus } = watchlist;
 
-  const handleButtonFocus = useCallback(() => {
-    onButtonFocus();
-    void watchlist.fetchStatus();
-  }, [onButtonFocus, watchlist]);
+  useEffect(() => {
+    if (actionsOpen) void fetchStatus();
+  }, [actionsOpen, fetchStatus]);
 
   const episodeLabel =
     item.seasonNumber && item.episodeNumber
@@ -164,27 +171,34 @@ const SearchPreviewPanelBase = ({
             {meta}
           </Text>
         </View>
-        <View style={styles.buttons}>
-          <PanelButton
-            label="Play"
-            icon="play"
-            primary
-            onFocus={handleButtonFocus}
-            onPress={() => onPlay(item)}
-          />
-          <PanelButton
-            label="Details"
-            onFocus={handleButtonFocus}
-            onPress={() => onDetails(item)}
-          />
-          <PanelButton
-            label={watchlistLabel}
-            icon={watchlistIcon}
-            disabled={watchlist.isToggling}
-            onFocus={handleButtonFocus}
-            onPress={() => void watchlist.toggle()}
-          />
-        </View>
+        {actionsOpen ? (
+          <View style={styles.buttons}>
+            <PanelButton
+              label="Play"
+              icon="play"
+              primary
+              hasTVPreferredFocus
+              onFocus={onButtonFocus}
+              onPress={() => onPlay(item)}
+            />
+            <PanelButton
+              label="Details"
+              onFocus={onButtonFocus}
+              onPress={() => onDetails(item)}
+            />
+            <PanelButton
+              label={watchlistLabel}
+              icon={watchlistIcon}
+              disabled={watchlist.isToggling}
+              onFocus={onButtonFocus}
+              onPress={() => void watchlist.toggle()}
+            />
+          </View>
+        ) : (
+          <Text style={styles.hint} numberOfLines={1}>
+            Select a title for Play, Details and My List
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -294,6 +308,11 @@ const styles = StyleSheet.create({
     color: Colors.dark.whiteText,
     fontSize: 18,
     fontWeight: "800",
+  },
+  hint: {
+    color: Colors.dark.videoDescriptionText,
+    fontSize: 10,
+    fontWeight: "600",
   },
   meta: {
     color: Colors.dark.videoDescriptionText,

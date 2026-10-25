@@ -3,6 +3,7 @@ import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  BackHandler,
   FlatList,
   type LayoutChangeEvent,
   Platform,
@@ -326,9 +327,22 @@ export default function SearchScreen() {
   const upHeldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trapUpward = holdBumped || upHeld;
 
+  // Select on a poster opens Play / Details / My List for that title. The
+  // actions close as soon as focus goes anywhere else (Down or Left), and
+  // Back closes them and returns focus to the poster they were opened from.
+  const [actionItem, setActionItem] = useState<SearchPosterItem | null>(null);
+  const actionItemRef = useRef<SearchPosterItem | null>(null);
+  actionItemRef.current = actionItem;
+  const actionIndexRef = useRef(0);
+  // A poster to focus programmatically (after Back closes the actions).
+  const [focusCardIndex, setFocusCardIndex] = useState<number | null>(null);
+  const focusCardIndexRef = useRef<number | null>(null);
+  focusCardIndexRef.current = focusCardIndex;
+
   const regionFocus = useCallback((region: FocusRegion) => {
     focusRegionRef.current = region;
     if (focusTargetRef.current) setFocusTarget(null);
+    if (region !== "preview" && actionItemRef.current) setActionItem(null);
   }, []);
   const onKeyboardFocus = useCallback(
     () => regionFocus("keyboard"),
@@ -466,6 +480,7 @@ export default function SearchScreen() {
       regionFocus("grid");
       noteFocusStep();
       focusedGridIndexRef.current = index;
+      if (focusCardIndexRef.current !== null) setFocusCardIndex(null);
       if (previewTimer.current) clearTimeout(previewTimer.current);
       previewTimer.current = setTimeout(
         () => setPreviewIndex(index),
@@ -504,9 +519,35 @@ export default function SearchScreen() {
   }, []);
   useTVEventHandler(handleTVEvent);
 
+  // --- poster actions ---------------------------------------------------------
+  const openPosterActions = useCallback(
+    (item: SearchPosterItem, index: number) => {
+      actionIndexRef.current = index;
+      setActionItem(item);
+    },
+    [],
+  );
+  const closeActions = useCallback((refocusPoster: boolean) => {
+    setActionItem(null);
+    if (refocusPoster) setFocusCardIndex(actionIndexRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!actionItem) return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        closeActions(true);
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, [actionItem, closeActions]);
+
   // --- navigation -------------------------------------------------------------
   const openDetails = useCallback(
     (item: SearchPosterItem) => {
+      setActionItem(null);
       if (item.backdropUrl) {
         showBackdrop(item.backdropUrl, {
           fade: true,
@@ -541,6 +582,7 @@ export default function SearchScreen() {
 
   const play = useCallback(
     (item: SearchPosterItem) => {
+      setActionItem(null);
       if (item.backdropUrl) {
         showBackdrop(item.backdropUrl, {
           fade: true,
@@ -577,11 +619,18 @@ export default function SearchScreen() {
         index={index}
         width={posterWidth}
         highlight={highlight}
+        hasTVPreferredFocus={index === focusCardIndex}
         onFocus={handleItemFocus}
-        onPress={openDetails}
+        onPress={openPosterActions}
       />
     ),
-    [posterWidth, highlight, handleItemFocus, openDetails],
+    [
+      posterWidth,
+      highlight,
+      focusCardIndex,
+      handleItemFocus,
+      openPosterActions,
+    ],
   );
   const keyExtractor = useCallback(
     (item: SearchPosterItem, index: number) => `${item.id}-${index}`,
@@ -589,6 +638,9 @@ export default function SearchScreen() {
   );
 
   const showError = !!results.error && resultItems.length === 0;
+  // The preview follows focus; while actions are open it stays on their title.
+  const panelItem = actionItem ?? previewItem;
+  const panelFocusable = !!actionItem || isEmpty;
 
   return (
     <View style={styles.container}>
@@ -702,8 +754,10 @@ export default function SearchScreen() {
           </Text>
         </View>
 
+        {/* A focus target only while it holds buttons: the open actions, or
+            Clear search when nothing matched. */}
         <TVFocusGuideView
-          autoFocus
+          autoFocus={panelFocusable}
           trapFocusRight
           trapFocusUp={trapUpward}
           style={styles.panelGuide}
@@ -714,10 +768,11 @@ export default function SearchScreen() {
               onButtonFocus={onPanelFocus}
               onClear={clearSearch}
             />
-          ) : previewItem ? (
+          ) : panelItem ? (
             <SearchPreviewPanel
-              key={previewItem.id}
-              item={previewItem}
+              key={panelItem.id}
+              item={panelItem}
+              actionsOpen={actionItem?.id === panelItem.id}
               onButtonFocus={onPanelFocus}
               onPlay={play}
               onDetails={openDetails}
@@ -759,6 +814,7 @@ export default function SearchScreen() {
             <FlatList
               ref={listRef}
               data={gridItems}
+              extraData={focusCardIndex}
               renderItem={renderItem}
               keyExtractor={keyExtractor}
               numColumns={NUM_COLUMNS}
