@@ -241,13 +241,13 @@ const TypeToggleButton = ({
 
   return (
     <TouchableOpacity
+      // The border is always there (transparent when unfocused) so focusing
+      // does not widen the button and push the results title onto two lines.
       style={[
         styles.typeToggleBtn,
         isActive && styles.typeToggleBtnActive,
-        {
-          opacity: focused || isActive ? 1 : 0.4,
-          borderWidth: focused ? 0.82 : 0,
-        },
+        focused && styles.typeToggleBtnFocused,
+        { opacity: focused || isActive ? 1 : 0.4 },
       ]}
       onPress={onPress}
       onFocus={() => setFocused(true)}
@@ -257,6 +257,7 @@ const TypeToggleButton = ({
     >
       <Text
         style={[styles.typeToggleText, isActive && styles.typeToggleTextActive]}
+        numberOfLines={1}
       >
         {label}
       </Text>
@@ -532,8 +533,14 @@ export default function SearchPage() {
   return (
     <View style={styles.container}>
       <View style={styles.contentWrapper}>
-        {/* Left side - Keyboard */}
-        <View style={styles.keyboardContainer}>
+        {/* Left side - Keyboard. autoFocus returns focus to the last key
+            when coming back from the results; nothing lies left or below. */}
+        <TVFocusGuideView
+          autoFocus
+          trapFocusLeft
+          trapFocusDown
+          style={styles.keyboardContainer}
+        >
           {/* Search query display */}
           <View style={styles.queryDisplay}>
             <Text style={styles.queryText} numberOfLines={1}>
@@ -556,14 +563,14 @@ export default function SearchPage() {
               {SPECIAL_KEYS.map(renderSpecialKey)}
             </View>
           </View>
-        </View>
+        </TVFocusGuideView>
 
         {/* Right side - Results */}
         <View style={styles.resultsContainer} onLayout={handleResultsLayout}>
           {/* Header */}
           <View style={styles.resultsHeader}>
             <View style={styles.resultsHeaderLeft}>
-              <Text style={styles.resultsTitle}>
+              <Text style={styles.resultsTitle} numberOfLines={1}>
                 {searchQuery
                   ? `Results for "${searchQuery}"`
                   : "Recently Added"}
@@ -575,8 +582,13 @@ export default function SearchPage() {
               )}
             </View>
 
-            {/* Movies / TV Shows filter, then the grid toggle */}
-            <View style={styles.headerControls}>
+            {/* Movies / TV Shows filter, then the grid toggle. autoFocus
+                returns focus to the last used control; nothing lies right. */}
+            <TVFocusGuideView
+              autoFocus
+              trapFocusRight
+              style={styles.headerControls}
+            >
               <View style={styles.typeToggleRow}>
                 {SEARCH_TYPES.map((kind) => (
                   <TypeToggleButton
@@ -597,7 +609,7 @@ export default function SearchPage() {
                   />
                 ))}
               </View>
-            </View>
+            </TVFocusGuideView>
           </View>
 
           {/* Results grid */}
@@ -785,6 +797,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.dark.outline,
     borderBottomWidth: 1,
     flexDirection: "row",
+    gap: 24,
     justifyContent: "space-between",
     marginBottom: 20,
     paddingBottom: 16,
@@ -809,14 +822,18 @@ const styles = StyleSheet.create({
   typeToggleBtn: {
     alignItems: "center",
     backgroundColor: "#2A2A2A",
-    borderColor: Colors.light.whiteBg,
+    borderColor: "transparent",
     borderRadius: 6,
+    borderWidth: 1,
     height: 34,
     justifyContent: "center",
     paddingHorizontal: 14,
   },
   typeToggleBtnActive: {
     backgroundColor: "#1A1A1A",
+  },
+  typeToggleBtnFocused: {
+    borderColor: Colors.light.whiteBg,
   },
   typeToggleRow: {
     flexDirection: "row",
