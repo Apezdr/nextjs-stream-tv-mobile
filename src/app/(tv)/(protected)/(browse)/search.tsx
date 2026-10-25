@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Platform,
   LayoutChangeEvent,
+  TVFocusGuideView,
 } from "react-native";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
@@ -21,6 +22,7 @@ import { Colors } from "@/src/constants/Colors";
 import { isAwaitingFirstData } from "@/src/data/query/queryState";
 import { contentService } from "@/src/data/services/contentService";
 import { MediaItem } from "@/src/data/types/content.types";
+import { useSmartInfiniteScroll } from "@/src/hooks/useSmartInfiniteScroll";
 import { useSearchPreferencesStore } from "@/src/stores/searchPreferencesStore";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
@@ -46,6 +48,10 @@ const KEYBOARD_ROWS = [
 ];
 
 const SPECIAL_KEYS = ["Space", "Clear", "Backspace"];
+
+// Ask for the next page once focus is this many items from the end (half a
+// page), so a held key does not reach the bottom before the page arrives.
+const LOAD_MORE_LOOKAHEAD = 15;
 
 // Key button component with focus-based opacity
 const KeyButton = ({
@@ -85,10 +91,14 @@ const KeyButton = ({
 // Row item component for list view (1-column mode)
 const SearchRowItem = ({
   item,
+  index,
   onPress,
+  onFocus,
 }: {
   item: ContentItemData;
+  index: number;
   onPress: () => void;
+  onFocus?: (index: number) => void;
 }) => {
   const [focused, setFocused] = useState(false);
 
@@ -110,7 +120,10 @@ const SearchRowItem = ({
         { opacity: focused ? 1 : 0.35, borderWidth: focused ? 1 : 0 },
       ]}
       onPress={onPress}
-      onFocus={() => setFocused(true)}
+      onFocus={() => {
+        setFocused(true);
+        onFocus?.(index);
+      }}
       onBlur={() => setFocused(false)}
       activeOpacity={0.8}
       isTVSelectable={Platform.isTV}
@@ -395,6 +408,26 @@ export default function SearchPage() {
     }));
   }, [searchResults]);
 
+  // Velocity/onEndReached-based loading as a fallback for a held key, which
+  // scrolls faster than discrete focus steps.
+  const smartScroll = useSmartInfiniteScroll({
+    hasNextPage,
+    isFetching: isFetchingNextPage,
+    onLoadMore: loadMore,
+    predictAheadMs: 1000,
+    endReachedThreshold: 2,
+  });
+
+  // Focus-index load-more: the grid moves in discrete focus steps, so the next
+  // page is requested once focus is within LOAD_MORE_LOOKAHEAD items of the
+  // end, whatever the scroll velocity.
+  const handleItemFocus = useCallback(
+    (index: number) => {
+      if (index >= transformedResults.length - LOAD_MORE_LOOKAHEAD) loadMore();
+    },
+    [transformedResults.length, loadMore],
+  );
+
   // Handle content selection
   const handleSelect = useCallback(
     (
@@ -456,11 +489,13 @@ export default function SearchPage() {
 
   // Render item for results grid
   const renderItem = useCallback(
-    ({ item }: { item: ContentItemData }) => {
+    ({ item, index }: { item: ContentItemData; index: number }) => {
       if (numColumns === 1) {
         return (
           <SearchRowItem
             item={item}
+            index={index}
+            onFocus={handleItemFocus}
             onPress={() =>
               handleSelect(
                 item.showId || item.id,
@@ -480,10 +515,12 @@ export default function SearchPage() {
           onSelect={handleSelect}
           size="small"
           customWidth={itemWidth}
+          index={index}
+          onFocus={handleItemFocus}
         />
       );
     },
-    [handleSelect, itemWidth, numColumns],
+    [handleSelect, itemWidth, numColumns, handleItemFocus],
   );
 
   // Key extractor
@@ -591,29 +628,40 @@ export default function SearchPage() {
               </Text>
             </View>
           ) : (
-            <FlatList
-              key={`grid-${numColumns}`}
-              data={transformedResults}
-              renderItem={renderItem}
-              keyExtractor={keyExtractor}
-              numColumns={numColumns}
-              contentContainerStyle={styles.gridContainer}
-              showsVerticalScrollIndicator={false}
-              removeClippedSubviews={Platform.isTV}
-              maxToRenderPerBatch={9}
-              initialNumToRender={12}
-              windowSize={5}
-              onEndReached={loadMore}
-              onEndReachedThreshold={0.5}
-              ListFooterComponent={
-                isFetchingNextPage ? (
-                  <ActivityIndicator
-                    color={Colors.dark.brandPrimary}
-                    style={styles.listFooter}
-                  />
-                ) : null
-              }
-            />
+            // autoFocus returns focus to the last focused result when it
+            // comes back from the keyboard or the header; the traps keep a
+            // press past the last mounted row from landing on the keyboard.
+            <TVFocusGuideView
+              autoFocus
+              trapFocusDown
+              trapFocusRight
+              style={styles.resultsList}
+            >
+              <FlatList
+                key={`grid-${numColumns}`}
+                data={transformedResults}
+                renderItem={renderItem}
+                keyExtractor={keyExtractor}
+                numColumns={numColumns}
+                contentContainerStyle={styles.gridContainer}
+                showsVerticalScrollIndicator={false}
+                // Clipping detaches off-screen rows from the native tree,
+                // which blinds the TV focus engine when navigating back up.
+                removeClippedSubviews={false}
+                maxToRenderPerBatch={9}
+                initialNumToRender={12}
+                windowSize={5}
+                {...smartScroll}
+                ListFooterComponent={
+                  isFetchingNextPage ? (
+                    <ActivityIndicator
+                      color={Colors.dark.brandPrimary}
+                      style={styles.listFooter}
+                    />
+                  ) : null
+                }
+              />
+            </TVFocusGuideView>
           )}
         </View>
       </View>
@@ -744,6 +792,9 @@ const styles = StyleSheet.create({
   resultsHeaderLeft: {
     flex: 1,
     gap: 4,
+  },
+  resultsList: {
+    flex: 1,
   },
   resultsTitle: {
     color: Colors.dark.whiteText,
