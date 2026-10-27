@@ -10,6 +10,10 @@ import {
 } from "@/src/data/services/contentService";
 import { MediaDetailsResponse } from "@/src/data/types/content.types";
 import { isResumePending } from "@/src/utils/resumeGuard";
+import {
+  hasReachedWatchStart,
+  WATCH_START_THRESHOLD_S,
+} from "@/src/utils/watchStart";
 
 const PLAYING_HEARTBEAT_INTERVAL_MS = 30_000;
 const PAUSED_HEARTBEAT_INTERVAL_MS = 180_000;
@@ -196,6 +200,35 @@ export function usePlaybackPresenceTracking(
     [isTransientRegression],
   );
 
+  // The identity (videoURL) that crossed the start threshold this mount, so
+  // a seek back under it keeps writing.
+  const startedRef = useRef<string | null>(null);
+  // A title the viewer has not started gets no position write until it has
+  // played WATCH_START_THRESHOLD_S (see watchStart.ts): the watch screens
+  // auto-play before the first frame, so an accidental open backed out of
+  // while the picture was still loading was already a few seconds in, and
+  // the exit flush put it in Continue Watching on every device. A title the
+  // server already holds a row for keeps updating at any position.
+  const hasStartedWatching = useCallback(
+    (
+      currentTime: number,
+      data: MediaDetailsResponse | null,
+      id: string | null,
+    ): boolean => {
+      if (!id) return false;
+      if (startedRef.current === id) return true;
+      if (hasReachedWatchStart(currentTime, data?.watchHistory)) {
+        startedRef.current = id;
+        return true;
+      }
+      console.log(
+        `[PlaybackPresenceTracking] Holding ${currentTime.toFixed(1)}s write — under the ${WATCH_START_THRESHOLD_S}s start threshold`,
+      );
+      return false;
+    },
+    [],
+  );
+
   // Mint a session id for the current identity if there is none (first
   // mount, a new episode, or playback resuming after endSession()).
   const ensureSession = useCallback((): string | null => {
@@ -243,6 +276,7 @@ export function usePlaybackPresenceTracking(
         const currentTime = player.currentTime;
         if (typeof currentTime === "number" && currentTime > 0) {
           if (!isPositionTrustworthy(player, currentTime)) return;
+          if (!hasStartedWatching(currentTime, videoData, videoURL)) return;
           const mediaMetadata = buildMediaMetadata(videoData, params);
           if (!mediaMetadata) return;
 
@@ -285,6 +319,7 @@ export function usePlaybackPresenceTracking(
       params,
       isPlayerValid,
       isPositionTrustworthy,
+      hasStartedWatching,
       postUpdate,
     ],
   );
@@ -304,6 +339,7 @@ export function usePlaybackPresenceTracking(
 
       try {
         if (!isPositionTrustworthy(player, currentTime)) return;
+        if (!hasStartedWatching(currentTime, videoData, videoURL)) return;
         const mediaMetadata = buildMediaMetadata(videoData, params);
         if (!mediaMetadata) return;
 
@@ -348,6 +384,7 @@ export function usePlaybackPresenceTracking(
       params,
       isSuspended,
       isPositionTrustworthy,
+      hasStartedWatching,
       ensureSession,
       postUpdate,
     ],
@@ -705,7 +742,8 @@ export function usePlaybackPresenceTracking(
             currentTime > 0 &&
             mediaMetadata &&
             !isResumePending(p) &&
-            !isTransientRegression(currentTime, lastUpdateTimeRef.current)
+            !isTransientRegression(currentTime, lastUpdateTimeRef.current) &&
+            hasStartedWatching(currentTime, data, id)
           ) {
             console.log(
               `[PlaybackPresenceTracking] Unmount — final flush at ${currentTime.toFixed(1)}s`,
@@ -744,7 +782,13 @@ export function usePlaybackPresenceTracking(
           );
       }
     };
-  }, [cleanupListeners, cleanupInterval, isPlayerValid, isTransientRegression]);
+  }, [
+    cleanupListeners,
+    cleanupInterval,
+    isPlayerValid,
+    isTransientRegression,
+    hasStartedWatching,
+  ]);
 
   // AppState backstop. Backgrounding always flushes the position (an app
   // kill from the switcher would otherwise lose up to 30s). While paused the
