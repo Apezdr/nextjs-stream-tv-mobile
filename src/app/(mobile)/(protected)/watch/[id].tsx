@@ -719,14 +719,18 @@ export default function MobileWatchPage() {
     pipExitArbiter.onPipStop(appState);
   }, [pipExitArbiter]);
 
-  // Back handler for Android
-  useEffect(() => {
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      handleExit();
-      return true;
-    });
-    return () => sub.remove();
-  }, [handleExit]);
+  // Back handler for Android, only while this screen is on top: a listener
+  // that lives for the whole mount answers Back for any route pushed over
+  // this one (see the TV watch screen and its screensaver).
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        handleExit();
+        return true;
+      });
+      return () => sub.remove();
+    }, [handleExit]),
+  );
 
   // Set system bars to hidden for fullscreen video experience
   useEffect(() => {

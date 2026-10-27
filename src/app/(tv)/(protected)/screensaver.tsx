@@ -1,4 +1,5 @@
 import { useRouter, useFocusEffect, Href } from "expo-router";
+import { useIsFocused } from "expo-router/react-navigation";
 import { useEffect, useCallback, useRef } from "react";
 import { StyleSheet, useTVEventHandler, Animated } from "react-native";
 
@@ -9,9 +10,10 @@ import { useTVAppState, TVAppMode } from "@/src/context/TVAppStateContext";
 
 export default function ScreensaverScreen() {
   const router = useRouter();
-  const { hideScreensaver } = useScreensaver();
+  const { hideScreensaver, isScreensaverActive } = useScreensaver();
   const { currentMode, setMode } = useTVAppState();
   const { resetActivityTimer } = useRemoteActivity();
+  const isFocused = useIsFocused();
 
   // Screen fade-in animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -36,8 +38,13 @@ export default function ScreensaverScreen() {
     }).start();
   }, [setMode, fadeAnim]);
 
-  // Handle exit screensaver
+  // Handle exit screensaver. Leaves at most once: the remote handler fires
+  // on key-down and key-up, and the deactivation effect below runs for the
+  // same exit, so a second call here would pop the screen underneath too.
+  const leftRef = useRef(false);
   const exitScreensaver = useCallback(() => {
+    if (leftRef.current) return;
+    leftRef.current = true;
     console.log("[ScreensaverScreen] Exiting screensaver");
     hideScreensaver();
 
@@ -49,6 +56,26 @@ export default function ScreensaverScreen() {
       router.replace("/(tv)/(protected)/(browse)/" as Href);
     }
   }, [router, hideScreensaver]);
+
+  // The context can deactivate the screensaver without this route going
+  // anywhere: a player behind it reports playing (on Android the remote's
+  // play button is answered by the media session natively, never through
+  // JS), or activity is seen while the mode is not "screensaver".
+  // `hideScreensaver()` only clears a flag; the Screensaver component then
+  // renders null, which left this route's black container on top with no
+  // focusable view on it — so the DPAD never reached JS again and only Back
+  // (the Activity path) worked. Pop the route ourselves — but only after the
+  // context has been seen active from this route: showScreensaver() sets the
+  // flag and pushes the route in one call, and nothing guarantees which
+  // commit lands first, so a first render with the flag still false is the
+  // route mounting, not a deactivation.
+  const wasActiveRef = useRef(false);
+  if (isScreensaverActive) wasActiveRef.current = true;
+  useEffect(() => {
+    if (isScreensaverActive || !isFocused || !wasActiveRef.current) return;
+    console.log("[ScreensaverScreen] Deactivated while on top - leaving");
+    exitScreensaver();
+  }, [isScreensaverActive, isFocused, exitScreensaver]);
 
   // Handle TV remote events for screensaver navigation and exit
   useTVEventHandler((event) => {
@@ -73,9 +100,17 @@ export default function ScreensaverScreen() {
         // Don't exit on left/right, allow button navigation
         break;
       case "select":
-      case "playPause":
         // Let the screensaver component handle button presses
         // Don't exit immediately, let buttons handle their actions
+        break;
+      case "playPause":
+        // Over the watch screen the viewer wants the video back, not the
+        // action buttons. The player behind this route is stripped while its
+        // screen is blurred (useOptimizedVideoPlayer), so the press itself
+        // plays nothing; leaving lets the watch screen restore its position.
+        if (previousModeRef.current === "watch") {
+          exitScreensaver();
+        }
         break;
       case "up":
       case "down":

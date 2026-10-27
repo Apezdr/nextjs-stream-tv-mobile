@@ -109,6 +109,11 @@ export function useOptimizedVideoPlayer(
     }
   }, [player, pinnedSource, markLoadedSource]);
 
+  // Track the saved state when we clean up
+  const savedState = useRef<SavedPlayerState | null>(null);
+  // Latched the first time the screen is focused (see the focus effect).
+  const hasBeenFocusedRef = useRef(false);
+
   // If the caller's `videoURL` changes after the player was created (e.g.
   // params drift catching up after `router.setParams` during episode
   // switching), swap the source via `replaceAsync` on the SAME player.
@@ -118,6 +123,30 @@ export function useOptimizedVideoPlayer(
         reason: !player ? "no-player" : "no-url",
         requested: shortURL(requestedSourceRef.current),
         loaded: shortURL(loadedSourceRef.current),
+      });
+      return;
+    }
+    // Never load behind a blurred screen. cleanup() strips the source on blur
+    // and clears the bookkeeping so the URL can be loaded again later — which
+    // made THIS effect reload it at once, at 0 s, while the screen was still
+    // hidden. The TV watch screen keeps its URL through a blur, so under the
+    // screensaver the player held the title from the start: a play press the
+    // media session answered natively played it from there, and the decoder
+    // the strip was meant to free was back in use. restore() reloads on
+    // focus, from the saved position. A screen that has never been focused is
+    // still mounting (useIsFocused() is false until navigation settles) and
+    // its first load must go through.
+    if (!isFocused && hasBeenFocusedRef.current) {
+      pdbg("DRIFT-SKIP", { reason: "blurred", url: shortURL(videoURL) });
+      return;
+    }
+    // On refocus restore() owns the load when it holds a resume point for
+    // this URL; loading here too would issue a second replace and lose the
+    // seek.
+    if (savedState.current?.url === videoURL) {
+      pdbg("DRIFT-SKIP", {
+        reason: "restore-pending",
+        url: shortURL(videoURL),
       });
       return;
     }
@@ -162,12 +191,10 @@ export function useOptimizedVideoPlayer(
         );
       });
     // `loadedSource` is a dep so that any reset of the marker (a strip, or a
-    // failed load) re-evaluates whether this URL needs reloading. The
-    // requestedSourceRef dedupe above makes the extra runs free.
-  }, [player, videoURL, loadedSource, markLoadedSource]);
-
-  // Track the saved state when we clean up
-  const savedState = useRef<SavedPlayerState | null>(null);
+    // failed load) re-evaluates whether this URL needs reloading, and
+    // `isFocused` so a URL that changed while blurred is loaded on refocus.
+    // The requestedSourceRef dedupe above makes the extra runs free.
+  }, [player, videoURL, loadedSource, markLoadedSource, isFocused]);
 
   // Operation ID to guard against rapid focus flips
   const opIdRef = useRef(0);
@@ -394,6 +421,14 @@ export function useOptimizedVideoPlayer(
         "[useOptimizedVideoPlayer] Error restoring resources:",
         error,
       );
+      // The drift effect defers to a pending restore; a restore that failed
+      // must stop looking pending, or the next focus flip or URL change could
+      // not load this URL either.
+      savedState.current = null;
+      if (requestedSourceRef.current === videoURL) {
+        requestedSourceRef.current = null;
+        markLoadedSource(null);
+      }
     }
   }, [player, videoURL, markLoadedSource]);
 
@@ -467,8 +502,6 @@ export function useOptimizedVideoPlayer(
   // during that window tears down resources before the screen is ever
   // visible.
   const hasRunFocusEffectRef = useRef(false);
-  // Latched the first time the screen is focused (see the cleanup branch).
-  const hasBeenFocusedRef = useRef(false);
   useEffect(() => {
     if (isFocused) hasBeenFocusedRef.current = true;
     pdbg("FOCUS-EFFECT", {

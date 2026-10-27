@@ -1,7 +1,7 @@
 // src/app/(tv)/(protected)/watch/[id].tsx
 import { Image } from "expo-image";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { BufferOptions, VideoPlayer, VideoView } from "expo-video";
 import {
   useEffect,
@@ -879,14 +879,22 @@ export default function WatchPage() {
     setVideoPlayingState,
   ]);
 
-  // Back handler
-  useEffect(() => {
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      handleExit();
-      return true;
-    });
-    return () => sub.remove();
-  }, [handleExit]);
+  // Back handler, only while this screen is on top. The screen stays mounted
+  // under the screensaver route, and a listener that lived for the whole
+  // mount answered Back there too: handleExit flushed the position, ended
+  // the presence session and suspended tracking (nothing re-arms it), then
+  // router.back() popped only the screensaver — playback resumed from the
+  // restored position with no progress written for the rest of the session.
+  // Navigation's own listener pops the screensaver now.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        handleExit();
+        return true;
+      });
+      return () => sub.remove();
+    }, [handleExit]),
+  );
 
   const videoInfo = useMemo(
     () =>
