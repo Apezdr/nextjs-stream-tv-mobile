@@ -1107,6 +1107,11 @@ backdropUrl: item.backdrop
 | Background | `progress` (playing — PiP stays alive) or `final` + `presence/end` (paused) |
 | Unclean unmount | `final` + `presence/end`, fire-and-forget |
 | Resume seek pending | No writes until the seek lands (`isResumePending`) |
+| Not started | No position write of any kind (`progress`, pause, exit `final`, unmount `final`) until the title has played **8 s** of media time (`WATCH_START_THRESHOLD_S`, `src/utils/watchStart.ts`), unless the server already holds a row for it: `watchHistory.isWatched`, or `playbackTime > 0` on servers that predate it. Once crossed in a session, a seek back under it keeps writing. `presence/end` still goes out on exit. |
+
+**Start threshold (client, since 2026-10-27).** Both watch screens auto-play as soon as the player is ready, before the first frame is on screen, so an accidental open backed out of while the picture was still loading was already a few seconds in. The exit `final` wrote that position, the server's floor (2 s) let it through, and a title the viewer never watched landed in Continue Watching on every device. The client now holds its own writes as described in the row above.
+
+**Server rule (recommended, not yet implemented).** Ignore a `progress` or `final` write that would **create** a row when `playbackTime` is below the start threshold; keep applying writes to rows that already exist, so a viewer who seeks back to the opening after forty minutes keeps their row. That makes the rule hold for the web app and for builds that predate the client gate. A way to remove a row from watch history is the agreed follow-up for rows that do get created by mistake.
 
 **Resurrection footgun:** If a final `updatePlayback` includes `sessionId` while a concurrent `presence/end` runs, whichever lands last wins. Client deliberately omits `sessionId` on that final pair.
 
@@ -1554,6 +1559,7 @@ Document these so backend changes don’t “fix” the app unexpectedly.
 - [ ] Watchlist content + status/toggle
 - [ ] Search POST `{ query, page?, limit?, types?, isTVdevice? }` → `{ results, total, hasNextPage }`
 - [ ] `updatePlayback` + `presence/end` contract
+- [ ] `updatePlayback` does not create a watch-history row below the start threshold (§12.1; recommended)
 - [ ] Media payload includes `videoURL` / episode `videoURL` and optional `captionURLs`
 - [ ] Subtitles endpoint (incl. auto 200/202 behavior)
 
