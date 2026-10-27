@@ -1,7 +1,12 @@
 import { useRouter, useFocusEffect, Href } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { useEffect, useCallback, useRef } from "react";
-import { StyleSheet, useTVEventHandler, Animated } from "react-native";
+import {
+  StyleSheet,
+  useTVEventHandler,
+  Animated,
+  Pressable,
+} from "react-native";
 
 import { Screensaver } from "@/src/components/TV/Screensaver";
 import { useRemoteActivity } from "@/src/context/RemoteActivityContext";
@@ -104,13 +109,13 @@ export default function ScreensaverScreen() {
         // Don't exit immediately, let buttons handle their actions
         break;
       case "playPause":
-        // Over the watch screen the viewer wants the video back, not the
-        // action buttons. The player behind this route is stripped while its
-        // screen is blurred (useOptimizedVideoPlayer), so the press itself
-        // plays nothing; leaving lets the watch screen restore its position.
-        if (previousModeRef.current === "watch") {
-          exitScreensaver();
-        }
+        // Play means "back to what I was doing", whatever is underneath. Over
+        // the watch screen the player is stripped while its screen is blurred
+        // (useOptimizedVideoPlayer), so the press itself plays nothing;
+        // leaving lets the watch screen restore its position. Not gated on
+        // the interrupted app mode: the device showed it is not "watch" over
+        // the watch screen.
+        exitScreensaver();
         break;
       case "up":
       case "down":
@@ -168,7 +173,21 @@ export default function ScreensaverScreen() {
 
   return (
     <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-      <Screensaver />
+      {/* Takes focus the moment the route mounts. Android only descends
+          into the view tree with a key event when some view holds focus,
+          and the react-native-screens stack blocks focus on the screen
+          underneath — so until a DPAD press made Android restore focus
+          here, nothing reached useTVEventHandler. DPAD keys get that second
+          chance; media keys do not, and the remote's play button went
+          straight to the player's media session instead. */}
+      <Pressable
+        style={styles.focusSink}
+        focusable
+        hasTVPreferredFocus
+        onFocus={() => console.log("[ScreensaverScreen] Route focused")}
+      >
+        <Screensaver />
+      </Pressable>
     </Animated.View>
   );
 }
@@ -176,6 +195,9 @@ export default function ScreensaverScreen() {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: "#000000",
+    flex: 1,
+  },
+  focusSink: {
     flex: 1,
   },
 });
