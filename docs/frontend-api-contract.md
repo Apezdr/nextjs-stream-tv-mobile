@@ -1053,7 +1053,7 @@ Results are ranked best match first: the whole title (leaving out a leading The/
 
 #### How this client calls it
 
-Both search screens fetch through `contentService.searchPage` with `useInfiniteQuery`, keyed on the debounced query and the `types` filter, always with `limit` 30 and `isTVdevice: true`. Page `n` is requested when page `n-1` said `hasNextPage` and the list nears its end (`onEndReached`, threshold 0.5). The Movies / TV Shows toggles send `types`; the last one left on cannot be turned off. The results header shows `total`. Against a server from before that release the response carries only `results`; the service then reports `total = results.length` and `hasNextPage = false`.
+Both search screens fetch through `contentService.searchPage` with `useInfiniteQuery`, keyed on the debounced query and the `types` filter, always with `limit` 30 and `isTVdevice: true`. Page `n` is requested when page `n-1` said `hasNextPage` and the list nears its end: on mobile through `onEndReached` (threshold 0.5), on TV once focus is within 15 posters of the end, with a velocity fallback. Mobile's Movies / TV Shows toggles send `types` and the last one left on cannot be turned off; TV's All / Movies / TV Shows chips are single-select. TV also keeps the empty-query page (Recently added) as a second query, shown under its no-results panel, and holds the previous results on screen (`keepPreviousData`) while the next query loads. The results header shows `total`. Against a server from before that release the response carries only `results`; the service then reports `total = results.length` and `hasNextPage = false`.
 
 Client maps `_id` → `id` if needed. Search UI often maps:
 
