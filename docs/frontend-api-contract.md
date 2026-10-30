@@ -23,7 +23,7 @@
 4. [Authentication](#4-authentication)
 5. [Browse lists — horizontal-list](#5-browse-lists--horizontal-list)
 6. [Genres](#6-genres)
-7. [Media detail](#7-media-detail)
+7. [Media detail](#7-media-detail) · [7.4 Credits & licenses](#74-credits--licenses--credits-credits-creditsavailability)
 8. [Banner](#8-banner)
 9. [Screensaver](#9-screensaver)
 10. [Watchlist](#10-watchlist)
@@ -775,6 +775,27 @@ When `isTVdevice` is omitted/false:
 Since the 2026-10-24 server release every `/media` response carries at most 24 people in `cast`, and at most 24 in an episode's `guestStars`, main cast first. Each person has only `id`, `name`, `character` and `profile_path`. `castCount` and `guestStarsCount` hold the full totals. `metadata.cast`, `metadata.guest_stars` and `metadata.recurring_cast` are not sent. Read `cast` and `guestStars` at the top level.
 
 This client: the info screens read `cast || metadata.cast`, so the first operand wins and the mobile one still shows its first 10. The mobile episode screen shows a "+N" tile after the guest stars (and after the cast) when the count exceeds the people sent.
+
+### 7.4 Credits & licenses — `credits`, `/credits`, `/credits/availability`
+
+Server contract: `CREDITS_SIDECAR.md` at the root of the `nextjs-stream` repo (§6–7 are the clients' part). Client rules: `src/utils/credits.ts`; queries: `src/data/hooks/queries/useCreditsQueries.ts`. The server side is on that repo's `feat/credits-sidecar`, committed but not deployed as of 2026-10-30; until it is, responses lack `credits` and both endpoints answer 404.
+
+**`credits` on `GET /api/authenticated/media`** (both shapes, §7.1 and §7.2), top level, already resolved for display:
+
+| Request | `credits` holds |
+| --- | --- |
+| `mediaType=movie` | the movie's credits |
+| `mediaType=tv`, with or without `season=N` | the show's credits — a season has none of its own |
+| `mediaType=tv&season=N&episode=M` | the show's credits with the episode's own file applied: some hidden, some replaced, some added |
+| `card=1` | never sent |
+
+Absent when there is nothing to show. The app renders only `schemaVersion: 1` with a non-empty `entries`, ignores fields it does not know, and never merges a show's and an episode's credits itself. Types: `Credits`, `CreditsEntry`, `CreditsAsset`, `CreditsKind` in `content.types.ts`. Every entry field but `id`, `scope` and `assets` is optional, and an absent one is left out of the view, never filled in. `scope` is `title`, `show` (inherited by an episode from its show; shown as "Series credit"), `episode` or `library`. Asset kinds: `film`, `episode`, `trailer`, `poster`, `backdrop`, `logo`, `thumbnail`, `artwork`, `music`, `audio`, `subtitles`, `other`. `evidenceId` is internal and never shown.
+
+**`GET /api/authenticated/credits/availability`** → `{ available: boolean, library: boolean, titles: number }`. Shows or hides the **Credits & licenses** menu item (TV Settings, mobile Profile). Client rules: hidden before the first answer and whenever `available` is false; any error (non-2xx, including the 404 of a server without the feature, or no response) keeps the last answer — an error is not "no credits"; asked again when the app returns to the foreground and when the menu screen gains focus. The server already applies every rule: it counts only credits that can be shown, keeps the last valid credits through a failed sync, counts a show whose episodes have credits, and leaves out titles the user may not see (a limited-access user gets `titles: 0`).
+
+**`GET /api/authenticated/credits`** → `{ library: Credits | null, titles: CreditedTitle[] }`, `titles` sorted by `title`. `library` is the library's own credits (`scope: "library"`, shared artwork such as the poster collage), rendered with the same rules as a title's; `null` means no section. `titles` is an index to navigate, not more credits: `{ type: "movie", id, title, originalTitle }` or `{ type: "tv", id, title, originalTitle, hasCredits, episodes: [{ seasonNumber, episodeNumber, title | null }] }`. A show with `hasCredits: false` is a label whose `episodes` are the links; episodes are listed either way. A 500 keeps whatever the page showed, with a retry, never an empty "no credits" state.
+
+**Where it shows.** TV: a `Credits` tile after `Trailer` on the movie and show screens opens `media-info/credits`; the `Credits` object travels through `creditsViewStore`, so the view makes no request. The Settings row opens `(protected)/credits`, whose rows re-request the title (`isTVdevice=true`; `season` + `episode` for an episode). URLs are shown as plain text without the scheme — no dependable browser on Fire TV. Mobile: a `CreditsSection` below the synopsis on media-info and episode-info; the Profile row opens `(protected)/credits`, whose rows deep-link to those screens with `scrollTo=credits`. Rendering on all three clients matches the web's `CreditsPanel`: groups Video / Artwork / Music & audio / Subtitles / Other, rows By · Attribution · Copyright · License · Source · Derived from · Changes · Earlier changes · Not covered, a collapsed "Notices and conditions (N)", text verbatim with line breaks, never clamped or parsed as markup, and a link only for an http(s) URL.
 
 ---
 
