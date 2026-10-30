@@ -27,6 +27,10 @@ export const API_ENDPOINTS = {
     WATCHLIST: "/api/authenticated/watchlist",
     WATCHLIST_CONTENT: "/api/authenticated/watchlist-content",
     SEARCH: "/api/authenticated/search",
+    // Credits & licenses (CREDITS_SIDECAR.md §7). Both answer 404 on a server
+    // without the feature; the app treats that like any other error.
+    CREDITS: "/api/authenticated/credits",
+    CREDITS_AVAILABILITY: "/api/authenticated/credits/availability",
     CALENDAR: (endpoint: "sonarr" | "radarr") =>
       `/api/authenticated/calendar/${endpoint}`,
   },

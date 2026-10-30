@@ -1,4 +1,5 @@
-import { useCallback, useRef } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import React, { useCallback, useRef } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -29,6 +30,10 @@ interface TVActionRowProps {
   trailerUrl?: string;
   onFocus?: () => void;
   onBlur?: () => void;
+  /** Opens the Credits & licenses view; the tile shows only when set. */
+  onCredits?: () => void;
+  /** The Credits tile's node, so the page can hand focus back to it. */
+  creditsTileRef?: React.Ref<View>;
 }
 
 export default function TVActionRow({
@@ -36,9 +41,12 @@ export default function TVActionRow({
   trailerUrl,
   onFocus,
   onBlur,
+  onCredits,
+  creditsTileRef,
 }: TVActionRowProps) {
   const watchlistScale = useRef(new Animated.Value(1)).current;
   const trailerScale = useRef(new Animated.Value(1)).current;
+  const creditsScale = useRef(new Animated.Value(1)).current;
 
   const handleWatchlistFocus = useCallback(() => {
     onFocus?.();
@@ -77,6 +85,24 @@ export default function TVActionRow({
       friction: 8,
     }).start();
   }, [trailerScale]);
+
+  const handleCreditsFocus = useCallback(() => {
+    Animated.spring(creditsScale, {
+      toValue: 1.05,
+      useNativeDriver: true,
+      tension: 120,
+      friction: 8,
+    }).start();
+  }, [creditsScale]);
+
+  const handleCreditsBlur = useCallback(() => {
+    Animated.spring(creditsScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 120,
+      friction: 8,
+    }).start();
+  }, [creditsScale]);
 
   const handleOpenTrailer = useCallback(async () => {
     if (!trailerUrl) return;
@@ -143,6 +169,30 @@ export default function TVActionRow({
           >
             <YouTubeIcon width={32} height={22} />
             <Text style={styles.actionTileLabel}>Trailer</Text>
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {/* Credits & licenses: one press away, without crowding the hero */}
+      {!!onCredits && (
+        <Animated.View style={{ transform: [{ scale: creditsScale }] }}>
+          <Pressable
+            ref={creditsTileRef}
+            focusable
+            style={({ focused }) => [
+              styles.actionTile,
+              focused && styles.actionTileFocused,
+            ]}
+            onFocus={handleCreditsFocus}
+            onBlur={handleCreditsBlur}
+            onPress={onCredits}
+          >
+            <Ionicons
+              name="document-text-outline"
+              size={22}
+              color={Colors.dark.whiteText}
+            />
+            <Text style={styles.actionTileLabel}>Credits</Text>
           </Pressable>
         </Animated.View>
       )}

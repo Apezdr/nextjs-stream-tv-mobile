@@ -124,6 +124,19 @@ export const queryKeys = {
     episode?: number;
   }) => [...queryKeys.content(), "chapters", params] as const,
 
+  // Credits & licenses: the menu-item gate and the page's catalog
+  creditsAvailability: () =>
+    [...queryKeys.content(), "credits", "availability"] as const,
+  creditsCatalog: () => [...queryKeys.content(), "credits", "catalog"] as const,
+  // One title's credits, fetched fresh for the TV credits view when it was
+  // opened from the credits page rather than handed from a media-info screen
+  titleCredits: (params: {
+    mediaType: string;
+    mediaId: string;
+    season?: number;
+    episode?: number;
+  }) => [...queryKeys.content(), "credits", "title", params] as const,
+
   // Calendar queries
   calendar: (endpoint: "sonarr" | "radarr") =>
     [...queryKeys.content(), "calendar", endpoint] as const,

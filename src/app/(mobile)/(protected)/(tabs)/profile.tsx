@@ -12,9 +12,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MOBILE_TAB_CONFIG } from "@/src/constants/MobileNavConstants";
+import { useCreditsAvailability } from "@/src/data/hooks/queries/useCreditsQueries";
 import { useAuth } from "@/src/providers/AuthProvider";
 import { useQualityPreferencesStore } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 import { globalDefaultOptions } from "@/src/utils/qualityTiers";
 
 export default function ProfilePage() {
@@ -42,6 +44,12 @@ export default function ProfilePage() {
     () => globalDefaultOptions(getPlatformClass()),
     [],
   );
+
+  // Credits & licenses (CREDITS_SIDECAR.md §7): the row shows only while the
+  // availability answer says so — not before the first answer, and a failed
+  // answer keeps the previous one. The hook asks again when this tab is
+  // focused and when the app returns to the foreground.
+  const { available: creditsAvailable } = useCreditsAvailability();
 
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -135,6 +143,26 @@ export default function ProfilePage() {
           />
         </View>
       </View>
+
+      {creditsAvailable && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>About this library</Text>
+          <TouchableOpacity
+            style={styles.optionRow}
+            onPress={() => navigationHelper.navigateToCreditsPage()}
+            accessibilityRole="button"
+          >
+            <View style={styles.optionText}>
+              <Text style={styles.optionLabel}>Credits & licenses</Text>
+              <Text style={styles.optionDescription}>
+                Who made the video, artwork and audio in this library, and the
+                licenses they came with.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#8C8C8C" />
+          </TouchableOpacity>
+        </View>
+      )}
 
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <Text style={styles.logoutText}>Logout</Text>

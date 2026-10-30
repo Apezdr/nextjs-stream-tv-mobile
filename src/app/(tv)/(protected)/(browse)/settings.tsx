@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useMemo } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useRef } from "react";
 import {
   View,
   StyleSheet,
@@ -9,8 +10,10 @@ import {
   TVFocusGuideView,
 } from "react-native";
 
+import { useCreditsAvailability } from "@/src/data/hooks/queries/useCreditsQueries";
 import { useQualityPreferencesStore } from "@/src/stores/qualityPreferencesStore";
 import { getPlatformClass } from "@/src/utils/deviceInfo";
+import { navigationHelper } from "@/src/utils/navigationHelper";
 import { globalDefaultOptions } from "@/src/utils/qualityTiers";
 
 export default function SettingsPage() {
@@ -28,6 +31,31 @@ export default function SettingsPage() {
   const qualityOptions = useMemo(
     () => globalDefaultOptions(getPlatformClass()),
     [],
+  );
+
+  // Credits & licenses (CREDITS_SIDECAR.md §7): the row shows only while the
+  // availability answer says so — not before the first answer, and a failed
+  // answer keeps the previous one. The hook asks again each time this screen
+  // gains focus.
+  const { available: creditsAvailable } = useCreditsAvailability();
+  const creditsRowRef = useRef<View>(null);
+  const restoreCreditsFocusRef = useRef(false);
+
+  const openCredits = useCallback(() => {
+    restoreCreditsFocusRef.current = true;
+    navigationHelper.navigateToCreditsPage();
+  }, []);
+
+  // Back from the credits page lands focus on the row that opened it.
+  useFocusEffect(
+    useCallback(() => {
+      if (!restoreCreditsFocusRef.current) return;
+      restoreCreditsFocusRef.current = false;
+      const timer = setTimeout(() => {
+        creditsRowRef.current?.requestTVFocus();
+      }, 50);
+      return () => clearTimeout(timer);
+    }, []),
   );
 
   return (
@@ -104,6 +132,33 @@ export default function SettingsPage() {
           </Pressable>
         </TVFocusGuideView>
       </View>
+
+      {creditsAvailable && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Credits & licenses</Text>
+          <TVFocusGuideView autoFocus>
+            <Pressable
+              ref={creditsRowRef}
+              style={({ focused }) => [
+                styles.optionRow,
+                focused && styles.optionRowFocused,
+              ]}
+              onPress={openCredits}
+              focusable
+              isTVSelectable
+            >
+              <View style={styles.optionText}>
+                <Text style={styles.optionLabel}>Credits & licenses</Text>
+                <Text style={styles.optionDescription}>
+                  Who made the video, artwork and audio in this library, and the
+                  licenses they came with.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
+            </Pressable>
+          </TVFocusGuideView>
+        </View>
+      )}
     </ScrollView>
   );
 }

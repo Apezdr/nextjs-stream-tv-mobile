@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import YoutubeSvg from "@/src/assets/third-party/youtube.svg";
 import OptimizedImage from "@/src/components/common/OptimizedImage";
 import { MobileActionSheet } from "@/src/components/Mobile/ActionSheet";
+import CreditsSection from "@/src/components/Mobile/Credits/CreditsSection";
 import WatchProgressBar from "@/src/components/TV/MediaInfo/WatchProgressBar";
 import { Colors } from "@/src/constants/Colors";
 import {
@@ -30,6 +31,7 @@ import {
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useDimensions } from "@/src/hooks/useDimensions";
 import { useBackdropStore } from "@/src/stores/backdropStore";
+import { hasCredits } from "@/src/utils/credits";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 import {
   hasResumableProgress,
@@ -66,6 +68,9 @@ export default function MobileMediaInfoPage() {
     id: string;
     type: "movie" | "tv";
     season?: string;
+    // "credits": opened from the Credits & licenses page; scroll to that
+    // section once it has laid out.
+    scrollTo?: string;
   }>();
 
   // Get dynamic dimensions
@@ -91,6 +96,11 @@ export default function MobileMediaInfoPage() {
   // Debounce refresh to prevent excessive API calls
   const lastRefreshRef = useRef<number>(0);
   const REFRESH_DEBOUNCE_MS = 5000;
+
+  // The page's ScrollView and the credits section inside it, for scrollTo
+  const contentScrollRef = useRef<ScrollView>(null);
+  const creditsSectionRef = useRef<View>(null);
+  const scrolledToCreditsRef = useRef(false);
 
   // Ref for season picker ScrollView and button positions
   const seasonScrollViewRef = useRef<ScrollView>(null);
@@ -239,6 +249,23 @@ export default function MobileMediaInfoPage() {
   ]);
 
   const { generateConfig } = useActionSheetConfig();
+
+  // Opened from the credits page: once the credits section has laid out,
+  // scroll it into view — once, so a later re-layout doesn't yank the page.
+  const handleCreditsLayout = useCallback(() => {
+    if (params.scrollTo !== "credits" || scrolledToCreditsRef.current) return;
+    const scroll = contentScrollRef.current;
+    const section = creditsSectionRef.current;
+    if (!scroll || !section) return;
+    scrolledToCreditsRef.current = true;
+    setTimeout(() => {
+      section.measureLayout(
+        scroll.getInnerViewNode(),
+        (_x, y) => scroll.scrollTo({ y: Math.max(0, y - 12), animated: true }),
+        () => {},
+      );
+    }, 150);
+  }, [params.scrollTo]);
 
   // Handle season button layout
   const handleSeasonButtonLayout = useCallback((season: number, event: any) => {
@@ -650,7 +677,11 @@ export default function MobileMediaInfoPage() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={contentScrollRef}
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Hero section with backdrop */}
         <View style={[styles.heroSection, { height: screenHeight * 0.4 }]}>
           <ImageBackground
@@ -889,6 +920,14 @@ export default function MobileMediaInfoPage() {
               <Text style={styles.overviewText}>
                 {mediaInfo.metadata.overview}
               </Text>
+            </View>
+          )}
+
+          {/* Credits & licenses (CREDITS_SIDECAR.md §6): below the synopsis,
+              as on the web. Nothing renders when the title has none. */}
+          {hasCredits(mediaInfo.credits) && (
+            <View ref={creditsSectionRef} onLayout={handleCreditsLayout}>
+              <CreditsSection credits={mediaInfo.credits} />
             </View>
           )}
 

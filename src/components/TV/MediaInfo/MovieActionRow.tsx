@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -37,6 +38,10 @@ interface MovieActionRowProps {
   trailerUrl?: string;
   onWatchlistFocus: () => void;
   onWatchlistBlur: () => void;
+  /** Opens the Credits & licenses view; the tile shows only when set. */
+  onCredits?: () => void;
+  /** The Credits tile's node, so the page can hand focus back to it. */
+  creditsTileRef?: React.Ref<View>;
 }
 
 export default function MovieActionRow({
@@ -45,6 +50,8 @@ export default function MovieActionRow({
   trailerUrl,
   onWatchlistFocus,
   onWatchlistBlur,
+  onCredits,
+  creditsTileRef,
 }: MovieActionRowProps) {
   const [isPlayFocused, setIsPlayFocused] = useState(false);
   const playScale = useRef(new Animated.Value(1)).current;
@@ -58,6 +65,11 @@ export default function MovieActionRow({
   const trailerWidth = useRef(new Animated.Value(COLLAPSED_WIDTH)).current;
   const trailerTextOpacity = useRef(new Animated.Value(0)).current;
   const trailerAnimId = useRef(0);
+
+  // Credits animation
+  const creditsWidth = useRef(new Animated.Value(COLLAPSED_WIDTH)).current;
+  const creditsTextOpacity = useRef(new Animated.Value(0)).current;
+  const creditsAnimId = useRef(0);
 
   const handlePlayFocus = useCallback(() => {
     setIsPlayFocused(true);
@@ -144,6 +156,38 @@ export default function MovieActionRow({
       }).start();
     });
   }, [trailerWidth, trailerTextOpacity]);
+
+  const handleCreditsFocus = useCallback(() => {
+    const id = ++creditsAnimId.current;
+    Animated.timing(creditsWidth, {
+      toValue: EXPANDED_WIDTH,
+      duration: 180,
+      useNativeDriver: false,
+    }).start(() => {
+      if (creditsAnimId.current !== id) return;
+      Animated.timing(creditsTextOpacity, {
+        toValue: 1,
+        duration: 120,
+        useNativeDriver: true,
+      }).start();
+    });
+  }, [creditsWidth, creditsTextOpacity]);
+
+  const handleCreditsBlur = useCallback(() => {
+    const id = ++creditsAnimId.current;
+    Animated.timing(creditsTextOpacity, {
+      toValue: 0,
+      duration: 100,
+      useNativeDriver: true,
+    }).start(() => {
+      if (creditsAnimId.current !== id) return;
+      Animated.timing(creditsWidth, {
+        toValue: COLLAPSED_WIDTH,
+        duration: 150,
+        useNativeDriver: false,
+      }).start();
+    });
+  }, [creditsWidth, creditsTextOpacity]);
 
   const handleOpenTrailer = useCallback(async () => {
     if (!trailerUrl) return;
@@ -253,6 +297,40 @@ export default function MovieActionRow({
             >
               <Text style={styles.secondaryLabel} numberOfLines={1}>
                 Trailer
+              </Text>
+            </Animated.View>
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {/* Credits & licenses: one press away, without crowding the hero */}
+      {!!onCredits && (
+        <Animated.View
+          style={[styles.secondaryAnimatedWrapper, { width: creditsWidth }]}
+        >
+          <Pressable
+            ref={creditsTileRef}
+            focusable
+            style={({ focused }) => [
+              styles.secondaryButton,
+              focused && styles.secondaryButtonFocused,
+            ]}
+            onFocus={handleCreditsFocus}
+            onBlur={handleCreditsBlur}
+            onPress={onCredits}
+          >
+            <View style={styles.iconWrapper}>
+              <Ionicons
+                name="document-text-outline"
+                size={22}
+                color={Colors.dark.whiteText}
+              />
+            </View>
+            <Animated.View
+              style={[styles.labelWrapper, { opacity: creditsTextOpacity }]}
+            >
+              <Text style={styles.secondaryLabel} numberOfLines={1}>
+                Credits
               </Text>
             </Animated.View>
           </Pressable>

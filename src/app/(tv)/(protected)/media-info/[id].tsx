@@ -19,6 +19,8 @@ import {
 import { useBackdropManager } from "@/src/hooks/useBackdrop";
 import { useWatchlistToggle } from "@/src/hooks/useWatchlistToggle";
 import { useBackdropStore } from "@/src/stores/backdropStore";
+import { useCreditsViewStore } from "@/src/stores/creditsViewStore";
+import { hasCredits, titleCreditsKey } from "@/src/utils/credits";
 import { navigationHelper } from "@/src/utils/navigationHelper";
 
 export default function MediaInfoPage() {
@@ -298,6 +300,42 @@ export default function MediaInfoPage() {
   const handleWatchlistFocus = useCallback(() => {}, []);
   const handleWatchlistBlur = useCallback(() => {}, []);
 
+  // --- Credits & licenses (CREDITS_SIDECAR.md §6) ---
+  // The response already carries the title's credits, so the view gets them
+  // through creditsViewStore and makes no request of its own. A season has
+  // no credits of its own: a show's key ignores the season.
+  const creditsTileRef = useRef<View>(null);
+  const restoreCreditsFocusRef = useRef(false);
+
+  const handleOpenCredits = useCallback(() => {
+    if (!mediaInfo || !hasCredits(mediaInfo.credits)) return;
+    useCreditsViewStore.getState().hand({
+      key: titleCreditsKey({ type: params.type, id: params.id }),
+      title: mediaInfo.title,
+      credits: mediaInfo.credits,
+    });
+    restoreCreditsFocusRef.current = true;
+    navigationHelper.navigateToTitleCredits({
+      type: params.type,
+      id: params.id,
+      title: mediaInfo.title,
+    });
+  }, [mediaInfo, params.type, params.id]);
+
+  // Back from the credits view lands focus on the Credits tile it left from.
+  // This screen stayed mounted beneath the view, so the tile's node is there;
+  // one frame lets the native side make it focusable again.
+  useFocusEffect(
+    useCallback(() => {
+      if (!restoreCreditsFocusRef.current) return;
+      restoreCreditsFocusRef.current = false;
+      const timer = setTimeout(() => {
+        creditsTileRef.current?.requestTVFocus();
+      }, 50);
+      return () => clearTimeout(timer);
+    }, []),
+  );
+
   const handleOverviewTruncationChange = useCallback(
     (_isTruncated: boolean) => {},
     [],
@@ -367,6 +405,8 @@ export default function MediaInfoPage() {
           onWatchlistFocus={handleWatchlistFocus}
           onWatchlistBlur={handleWatchlistBlur}
           onOverviewTruncationChange={handleOverviewTruncationChange}
+          onCredits={handleOpenCredits}
+          creditsTileRef={creditsTileRef}
         />
       )}
 
@@ -380,6 +420,8 @@ export default function MediaInfoPage() {
           onWatchlistFocus={handleWatchlistFocus}
           onWatchlistBlur={handleWatchlistBlur}
           onOverviewTruncationChange={handleOverviewTruncationChange}
+          onCredits={handleOpenCredits}
+          creditsTileRef={creditsTileRef}
         />
       )}
     </View>

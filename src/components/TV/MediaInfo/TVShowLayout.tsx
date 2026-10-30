@@ -1,3 +1,4 @@
+import React from "react";
 import {
   Animated,
   StyleSheet,
@@ -18,6 +19,7 @@ import {
   TVDeviceMediaResponse,
 } from "@/src/data/types/content.types";
 import { WatchlistToggleResult } from "@/src/hooks/useWatchlistToggle";
+import { hasCredits } from "@/src/utils/credits";
 
 interface MergedDisplayFields {
   seasonOverview?: string;
@@ -38,6 +40,9 @@ interface TVShowLayoutProps {
   onWatchlistFocus: () => void;
   onWatchlistBlur: () => void;
   onOverviewTruncationChange: (isTruncated: boolean) => void;
+  /** Opens the Credits & licenses view. Shown only when the show has any. */
+  onCredits?: () => void;
+  creditsTileRef?: React.Ref<View>;
 }
 
 export default function TVShowLayout({
@@ -54,6 +59,8 @@ export default function TVShowLayout({
   onWatchlistFocus,
   onWatchlistBlur,
   onOverviewTruncationChange,
+  onCredits,
+  creditsTileRef,
 }: TVShowLayoutProps) {
   const hasSeasonOverview = !!mergedDisplayFields.seasonOverview;
   const hasShowOverview = !!mergedDisplayFields.showOverview;
@@ -120,6 +127,8 @@ export default function TVShowLayout({
           trailerUrl={trailerUrl}
           onFocus={onWatchlistFocus}
           onBlur={onWatchlistBlur}
+          onCredits={hasCredits(mediaInfo.credits) ? onCredits : undefined}
+          creditsTileRef={creditsTileRef}
         />
 
         {/* Overview Section */}

@@ -139,6 +139,90 @@ export interface TVDeviceNavigation {
   };
 }
 
+/**
+ * Credits & licenses, resolved by the server for display (CREDITS_SIDECAR.md
+ * §6). A show's credits already have the episode's own file applied when the
+ * request names an episode, so the app never merges them itself.
+ */
+export type CreditsKind =
+  | "film"
+  | "episode"
+  | "trailer"
+  | "poster"
+  | "backdrop"
+  | "logo"
+  | "thumbnail"
+  | "artwork"
+  | "music"
+  | "audio"
+  | "subtitles"
+  | "other";
+
+export interface CreditsAsset {
+  id: string;
+  kind: CreditsKind;
+  path?: string;
+  label?: string;
+  derivedFrom?: { libraryPath: string; note?: string }[];
+}
+
+export interface CreditsEntry {
+  id: string; // unique within its scope only
+  // `show` = inherited by an episode from its show; `library` = the
+  // library's own credits (shared artwork such as the poster collage).
+  scope: "title" | "show" | "episode" | "library";
+  assets: CreditsAsset[];
+  kind?: CreditsKind; // grouping; when absent, use assets[0].kind
+  work?: string;
+  author?: string;
+  authorUrl?: string;
+  attributionText?: string;
+  copyrightNotice?: string;
+  license?: string;
+  licenseUrl?: string;
+  sourceUrl?: string;
+  notices?: string[];
+  historicalNotices?: string[];
+  modification?: string;
+  previousModifications?: string[];
+  exclusions?: string[];
+  evidenceId?: string; // internal reference; never shown
+  note?: string;
+}
+
+export interface Credits {
+  schemaVersion: 1;
+  entries: CreditsEntry[];
+}
+
+/** GET /api/authenticated/credits/availability */
+export interface CreditsAvailability {
+  available: boolean; // show the menu item
+  library: boolean; // the library has credits
+  titles: number; // credited titles this user may see
+}
+
+export type CreditedTitle =
+  | { type: "movie"; id: string; title: string; originalTitle: string }
+  | {
+      type: "tv";
+      id: string;
+      title: string;
+      originalTitle: string;
+      hasCredits: boolean; // the show has credits of its own
+      episodes: {
+        seasonNumber: number;
+        episodeNumber: number;
+        title: string | null;
+      }[];
+    };
+
+/** GET /api/authenticated/credits */
+export interface CreditsCatalog {
+  library: Credits | null;
+  titles: CreditedTitle[];
+}
+
 export interface TVDeviceMediaResponse {
   id: string;
   title: string;
@@ -157,6 +241,7 @@ export interface TVDeviceMediaResponse {
   airDate?: string; // Air date for TV shows
   duration?: number; // Duration in MILLISECONDS (movies and episodes alike)
   watchHistory?: WatchHistory; // Optional watch history data
+  credits?: Credits; // Credits & licenses; absent when there are none
 }
 
 /** The transcoder feature that makes `?range=pq|sdr` masters available. */
@@ -233,6 +318,7 @@ export interface MediaDetailsResponse {
     },
   ];
   castCount?: number; // everyone in the cast; `cast` holds the first 24
+  credits?: Credits; // Credits & licenses; absent when there are none
   // Additional fields that might be returned by the API
   [key: string]: unknown;
 }
@@ -573,6 +659,9 @@ export interface EpisodeSpecificResponse {
   hdr?: string;
   duration?: number;
   watchHistory?: WatchHistory;
+  // The show's credits with this episode's own file applied; absent when
+  // there are none.
+  credits?: Credits;
   episode: {
     episodeNumber: number;
     title: string;

@@ -32,6 +32,8 @@ import {
   WatchlistStatusResponse,
   MediaItem,
   SearchPage,
+  CreditsAvailability,
+  CreditsCatalog,
 } from "@/src/data/types/content.types";
 import {
   DirectPlayInfo,
@@ -361,6 +363,30 @@ export const contentService = {
 
     return enhancedApiClient.get(
       `${API_ENDPOINTS.CONTENT.CHAPTER}${queryParams}`,
+    );
+  },
+
+  /**
+   * Whether there are any credits to show (CREDITS_SIDECAR.md §7). Cheap:
+   * the server already applies every rule, so the app never downloads the
+   * catalog or scans titles to decide. A 404 is a server without the feature
+   * and is a normal outcome here: no transport retry, no health report.
+   */
+  getCreditsAvailability: async (): Promise<CreditsAvailability> => {
+    return enhancedApiClient.get<CreditsAvailability>(
+      API_ENDPOINTS.CONTENT.CREDITS_AVAILABILITY,
+      { expectedStatuses: [404] },
+    );
+  },
+
+  /**
+   * The credits page: the library's own credits plus the list of credited
+   * titles this user may see. Titles are an index to navigate, not credits.
+   */
+  getCreditsCatalog: async (): Promise<CreditsCatalog> => {
+    return enhancedApiClient.get<CreditsCatalog>(
+      API_ENDPOINTS.CONTENT.CREDITS,
+      { expectedStatuses: [404] },
     );
   },
 

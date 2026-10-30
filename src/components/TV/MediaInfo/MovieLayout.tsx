@@ -1,3 +1,4 @@
+import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import OptimizedImage from "@/src/components/common/OptimizedImage";
@@ -7,6 +8,7 @@ import WatchProgressBar from "@/src/components/TV/MediaInfo/WatchProgressBar";
 import { Colors } from "@/src/constants/Colors";
 import { TVDeviceMediaResponse } from "@/src/data/types/content.types";
 import { WatchlistToggleResult } from "@/src/hooks/useWatchlistToggle";
+import { hasCredits } from "@/src/utils/credits";
 
 function formatTimeFromMs(ms?: number | null): string {
   if (!ms) return "0:00";
@@ -92,6 +94,9 @@ interface MovieLayoutProps {
   onWatchlistFocus: () => void;
   onWatchlistBlur: () => void;
   onOverviewTruncationChange: (isTruncated: boolean) => void;
+  /** Opens the Credits & licenses view. Shown only when the title has any. */
+  onCredits?: () => void;
+  creditsTileRef?: React.Ref<View>;
 }
 
 export default function MovieLayout({
@@ -103,6 +108,8 @@ export default function MovieLayout({
   onWatchlistFocus,
   onWatchlistBlur,
   onOverviewTruncationChange,
+  onCredits,
+  creditsTileRef,
 }: MovieLayoutProps) {
   const resolution = formatResolution((mediaInfo as any).dimensions);
   const hdr = formatHDR((mediaInfo as any).hdr);
@@ -208,6 +215,8 @@ export default function MovieLayout({
           trailerUrl={mediaInfo.metadata.trailer_url}
           onWatchlistFocus={onWatchlistFocus}
           onWatchlistBlur={onWatchlistBlur}
+          onCredits={hasCredits(mediaInfo.credits) ? onCredits : undefined}
+          creditsTileRef={creditsTileRef}
         />
       </View>
     </View>
