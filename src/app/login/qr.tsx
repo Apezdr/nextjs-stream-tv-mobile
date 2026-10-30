@@ -83,6 +83,21 @@ export default function QRScreen() {
   // Track if we've already started the exit animation
   const exitStarted = useRef(false);
 
+  // "Go back to set new site name". After a sign-out (or a revoked session)
+  // login/index replaces itself with this screen because the server is still
+  // known, so the login stack holds only `qr` and a plain back() has nothing
+  // to pop; cancelQR() then clears the device code and the hook requests a
+  // new one, which looked like the page refreshing. Pop when there is history
+  // (first run: enter → qr), otherwise go to the host-entry screen outright.
+  const goBackToEnter = useCallback(() => {
+    cancelQR();
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/login/enter");
+    }
+  }, [cancelQR, router]);
+
   // Reset opacity and section animations when screen comes into focus
   useFocusEffect(
     useCallback(() => {
@@ -172,7 +187,7 @@ export default function QRScreen() {
 
             <FocusableButton
               title="Go back to set new site name"
-              onPress={() => router.back()}
+              onPress={goBackToEnter}
               style={styles.backButton}
               textStyle={styles.backButtonText}
               focusedStyle={styles.backButtonFocused}
@@ -207,7 +222,7 @@ export default function QRScreen() {
 
               <FocusableButton
                 title="Go back to set new site name"
-                onPress={() => router.back()}
+                onPress={goBackToEnter}
                 style={styles.backButton}
                 textStyle={styles.backButtonText}
                 focusedStyle={styles.backButtonFocused}
@@ -251,10 +266,7 @@ export default function QRScreen() {
 
               <FocusableButton
                 title="Go back to set new site name"
-                onPress={() => {
-                  cancelQR();
-                  router.back();
-                }}
+                onPress={goBackToEnter}
                 style={styles.backButton}
                 textStyle={styles.backButtonText}
                 focusedStyle={styles.backButtonFocused}
@@ -306,10 +318,7 @@ export default function QRScreen() {
 
             <FocusableButton
               title="Go back to set new site name"
-              onPress={() => {
-                cancelQR();
-                router.back();
-              }}
+              onPress={goBackToEnter}
               style={[
                 styles.backButton,
                 { marginTop: "auto", marginBottom: 0 },
