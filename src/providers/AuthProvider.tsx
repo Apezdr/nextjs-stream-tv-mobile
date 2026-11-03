@@ -187,6 +187,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
   );
   const authPollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const authTimeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped by stopAuthPolling. A poll loop captures the value when it starts
+  // and goes quiet once it differs, so a response that lands after the loop
+  // was stopped (or after a newer loop replaced it) can't touch the newer
+  // loop's timers or raise an alert.
+  const authPollGeneration = useRef(0);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const betterAuthClient = useRef<BetterAuthClient | null>(null);
 
@@ -413,6 +418,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const stopAuthPolling = () => {
     if (DEBUG_AUTH) console.log("[Auth] Stopping all auth polling");
+    authPollGeneration.current += 1;
     if (authPollInterval.current) {
       clearInterval(authPollInterval.current);
       authPollInterval.current = null;
@@ -693,6 +699,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
       code: "expired" | "access_denied" | "server_down",
     ) => void,
   ): Promise<void> {
+    // Only one loop may run. A second sign-in attempt (tapping the provider
+    // button again after coming back from the browser) used to start a second
+    // loop beside the first; both stored their timers in the same refs, so the
+    // first loop's five-minute timeout was orphaned and fired "The sign-in
+    // request timed out" minutes after the sign-in had already succeeded.
+    stopAuthPolling();
+    const generation = authPollGeneration.current;
+    const superseded = () => authPollGeneration.current !== generation;
+
     let pollInterval = AUTH_POLL_INTERVAL;
     // Bound each poll request and treat persistent network failures as a
     // terminal server_down instead of silently retrying until AUTH_TIMEOUT.
@@ -710,7 +725,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const MAX_CONSECUTIVE_RATE_LIMITS = 3;
 
     const doPoll = async () => {
-      if (!server) return;
+      if (!server || superseded()) return;
 
       try {
         if (DEBUG_AUTH) console.log("[Auth] Polling device token...");
@@ -747,6 +762,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
         consecutiveNetworkFailures = 0;
 
         const rawText = await response.text();
+        // Stopped or replaced while the request was in flight: drop the answer.
+        if (superseded()) return;
         let body: Record<string, unknown> = {};
         try {
           body = JSON.parse(rawText) as Record<string, unknown>;
@@ -881,6 +898,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           onTerminalError?.("server_down");
         }
       } catch (error: unknown) {
+        if (superseded()) return;
         if (DEBUG_AUTH) console.error("[Auth] Error during token poll:", error);
         // The fetch itself failed (network/abort). After a few consecutive
         // failures, treat the server as unreachable rather than retrying
@@ -902,6 +920,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
 
     const scheduleNextPoll = () => {
+      if (superseded()) return;
       // Guard: don't reschedule if the overall timeout has already fired
       if (!authTimeoutTimer.current && authPollInterval.current === null)
         return;
@@ -913,6 +932,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     // Set the overall timeout first so scheduleNextPoll's guard works correctly
     authTimeoutTimer.current = setTimeout(() => {
+      if (superseded()) return;
       if (DEBUG_AUTH)
         console.log(
           `[Auth] Authentication timed out after ${AUTH_TIMEOUT / 1000}s`,

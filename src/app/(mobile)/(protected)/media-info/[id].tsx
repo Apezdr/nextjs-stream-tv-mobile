@@ -994,8 +994,11 @@ export default function MobileMediaInfoPage() {
                 >
                   {mergedDisplayFields.displayCast
                     ?.slice(0, 10)
-                    .map((actor: any) => (
-                      <View key={actor.id} style={styles.castMember}>
+                    .map((actor: any, index: number) => (
+                      <View
+                        key={`cast-${actor.id ?? actor.name}-${index}`}
+                        style={styles.castMember}
+                      >
                         <View style={styles.castImageContainer}>
                           {actor.profile_path &&
                           actor.profile_path.trim() !== "" &&

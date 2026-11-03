@@ -520,8 +520,11 @@ export default function EpisodeInfoPage() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.castList}
               >
-                {episode?.guestStars.map((actor) => (
-                  <View key={actor.id} style={styles.castMember}>
+                {episode?.guestStars.map((actor, index) => (
+                  <View
+                    key={`guest-${actor.id ?? actor.name}-${index}`}
+                    style={styles.castMember}
+                  >
                     <View style={styles.castImageContainer}>
                       {actor.profile_path &&
                       actor.profile_path.trim() !== "" &&
@@ -585,8 +588,11 @@ export default function EpisodeInfoPage() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.castList}
               >
-                {episode?.cast.map((actor) => (
-                  <View key={actor.id} style={styles.castMember}>
+                {episode?.cast.map((actor, index) => (
+                  <View
+                    key={`cast-${actor.id ?? actor.name}-${index}`}
+                    style={styles.castMember}
+                  >
                     <View style={styles.castImageContainer}>
                       {actor.profile_path &&
                       actor.profile_path.trim() !== "" &&
