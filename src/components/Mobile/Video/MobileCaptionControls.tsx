@@ -64,6 +64,11 @@ interface MobileCaptionControlsProps {
   selectedSubtitleBackground?: SubtitleBackgroundOption;
   onSubtitleBackgroundChange?: (background: SubtitleBackgroundOption) => void;
   onShowControls?: () => void; // Mobile-specific: show controls when user interacts
+  // Optional controlled visibility of the language sheet, so chrome elsewhere
+  // (the watch page's details panel) can open the same picker. Left
+  // undefined, the sheet keeps its own state as before.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 // Predefined accessibility-focused subtitle styles
@@ -164,8 +169,19 @@ const MobileCaptionControls = memo(
     selectedSubtitleBackground,
     onSubtitleBackgroundChange,
     onShowControls,
+    open,
+    onOpenChange,
   }: MobileCaptionControlsProps) => {
-    const [showMoreLanguages, setShowMoreLanguages] = useState(false);
+    const [showMoreLanguagesInternal, setShowMoreLanguagesInternal] =
+      useState(false);
+    const showMoreLanguages = open ?? showMoreLanguagesInternal;
+    const setShowMoreLanguages = useCallback(
+      (next: boolean) => {
+        setShowMoreLanguagesInternal(next);
+        onOpenChange?.(next);
+      },
+      [onOpenChange],
+    );
     const [showStyleSettings, setShowStyleSettings] = useState(false);
 
     const handleCaptionLanguageSelect = useCallback(
@@ -174,7 +190,7 @@ const MobileCaptionControls = memo(
         setShowMoreLanguages(false);
         onShowControls?.();
       },
-      [onCaptionLanguageChange, onShowControls],
+      [onCaptionLanguageChange, onShowControls, setShowMoreLanguages],
     );
 
     const handleStyleSelect = useCallback(
@@ -197,13 +213,13 @@ const MobileCaptionControls = memo(
       setShowMoreLanguages(!showMoreLanguages);
       setShowStyleSettings(false);
       onShowControls?.();
-    }, [showMoreLanguages, onShowControls]);
+    }, [showMoreLanguages, onShowControls, setShowMoreLanguages]);
 
     const toggleStyleSettings = useCallback(() => {
       setShowStyleSettings(!showStyleSettings);
       setShowMoreLanguages(false);
       onShowControls?.();
-    }, [showStyleSettings, onShowControls]);
+    }, [showStyleSettings, onShowControls, setShowMoreLanguages]);
 
     const availableLanguages = captionURLs ? Object.keys(captionURLs) : [];
 
@@ -638,8 +654,8 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     alignItems: "center",
-    justifyContent: "center",
     flexGrow: 1,
+    justifyContent: "center",
   },
 
   captionButton: {

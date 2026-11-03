@@ -49,6 +49,21 @@ describe("getMobileControlsLayout", () => {
     expect(landscape.bottomPadding).toBe(48);
   });
 
+  it("gives the docked strip a few points of padding and ignores insets", () => {
+    const insets = { top: 60, bottom: 48, left: 0, right: 0 };
+    const docked = getMobileControlsLayout(false, insets, true);
+    const portrait = getMobileControlsLayout(false, insets);
+    expect(docked.topPadding).toBe(8);
+    expect(docked.bottomPadding).toBe(6);
+    expect(docked.titleLines).toBe(0);
+    expect(docked.descriptionLines).toBe(0);
+    expect(docked.playIconSize).toBeLessThan(portrait.playIconSize);
+    expect(docked.skipIconSize).toBeLessThan(portrait.skipIconSize);
+    expect(docked.centerMinHeight).toBe(
+      docked.playIconSize + 2 * docked.playButtonPadding,
+    );
+  });
+
   it("keeps the base padding when the inset is smaller", () => {
     const insets = { top: 24, bottom: 0, left: 0, right: 0 };
     expect(getMobileControlsLayout(false, insets).topPadding).toBe(50);
