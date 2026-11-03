@@ -11,6 +11,7 @@ import {
   rangeNegotiationFailure,
   resolveVideoRange,
   setSourcePolicy,
+  setNowPlayingMetadata,
   videoSourceFor,
 } from "@/src/utils/videoRange";
 
@@ -324,5 +325,42 @@ describe("Dolby Vision preference", () => {
     setSourcePolicy(PQ, null);
     expect(hasDolbyVisionPreference(PQ)).toBe(false);
     expect(hasDolbyVisionPreference(null)).toBe(false);
+  });
+});
+
+describe("now-playing metadata", () => {
+  const URL = "https://cinema.example.com/api/jit/abc/master.m3u8?direct=1";
+
+  afterEach(() => setNowPlayingMetadata(null));
+
+  it("attaches nothing until a title is registered", () => {
+    expect(videoSourceFor(URL).metadata).toBeUndefined();
+  });
+
+  it("attaches the registered title to every source built while it is set", () => {
+    setNowPlayingMetadata({
+      title: "The Signal",
+      artist: "The Quiet Orbit · S02E05",
+      artwork: "https://cinema.example.com/backdrop.jpg",
+    });
+    expect(videoSourceFor(URL).metadata).toEqual({
+      title: "The Signal",
+      artist: "The Quiet Orbit · S02E05",
+      artwork: "https://cinema.example.com/backdrop.jpg",
+    });
+    expect(videoSourceFor(`${URL}&range=sdr`).metadata?.title).toBe(
+      "The Signal",
+    );
+  });
+
+  it("omits the optional lines when they are absent", () => {
+    setNowPlayingMetadata({ title: "Sintel" });
+    expect(videoSourceFor(URL).metadata).toEqual({ title: "Sintel" });
+  });
+
+  it("stops attaching once cleared", () => {
+    setNowPlayingMetadata({ title: "Sintel" });
+    setNowPlayingMetadata(null);
+    expect(videoSourceFor(URL).metadata).toBeUndefined();
   });
 });

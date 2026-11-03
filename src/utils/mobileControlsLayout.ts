@@ -15,6 +15,12 @@
  * Safe-area insets win over the base paddings wherever they are larger
  * (punch-hole cutouts are reported as insets on the side they sit on; the
  * hidden system bars report zero).
+ *
+ * The docked chrome is the portrait watch page's: the video is a 16:9 strip
+ * that already sits inside the safe area, the title and the option pills
+ * live in the details panel beneath it, so only the small centre buttons
+ * and the seek bar remain and the paddings are a few points. Insets do not
+ * apply there.
  */
 export interface EdgeInsetsLike {
   top: number;
@@ -65,10 +71,37 @@ const LANDSCAPE = {
   skipIconSize: 26,
 } as const;
 
+const DOCKED = {
+  basePaddingTop: 8,
+  basePaddingBottom: 6,
+  sectionGap: 6,
+  titleLines: 0,
+  descriptionLines: 0,
+  logoHeight: 0,
+  playIconSize: 36,
+  playButtonPadding: 10,
+  skipIconSize: 22,
+} as const;
+
 export function getMobileControlsLayout(
   isLandscape: boolean,
   insets: EdgeInsetsLike,
+  docked = false,
 ): MobileControlsLayout {
+  if (docked) {
+    return {
+      topPadding: DOCKED.basePaddingTop,
+      bottomPadding: DOCKED.basePaddingBottom,
+      sectionGap: DOCKED.sectionGap,
+      titleLines: DOCKED.titleLines,
+      descriptionLines: DOCKED.descriptionLines,
+      logoHeight: DOCKED.logoHeight,
+      playIconSize: DOCKED.playIconSize,
+      playButtonPadding: DOCKED.playButtonPadding,
+      skipIconSize: DOCKED.skipIconSize,
+      centerMinHeight: DOCKED.playIconSize + 2 * DOCKED.playButtonPadding,
+    };
+  }
   const m = isLandscape ? LANDSCAPE : PORTRAIT;
   return {
     topPadding: Math.max(insets.top, m.basePaddingTop),

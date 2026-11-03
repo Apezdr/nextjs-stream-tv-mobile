@@ -69,6 +69,84 @@ index 65f16a5..025e142 100644
        Property("audioTrack")
          .get { ref: VideoPlayer ->
            ref.audioTracks.currentAudioTrack
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
+index 58c8b10..8f13050 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
+@@ -324,10 +324,25 @@ open class VideoView(context: Context, appContext: AppContext, useTextureView: B
+     super.onTracksChanged(player, tracks)
+   }
+ 
++  /**
++   * Recompute the PiP window shape from the picture actually decoding. Called
++   * by the player on every video size change: a source reload (tier or
++   * audio switch) reports 0x0 again until its first frame, and that first
++   * frame does not always reach this view.
++   */
++  fun refreshPipAspectRatio() {
++    pipParams = pipParams.copy(aspectRatio = calculateCurrentPipAspectRatio())
++  }
++
+   override fun onRenderedFirstFrame(player: VideoPlayer) {
+     if (player.currentVideoView == this) {
+       shouldHideSurfaceView = false
+       applySurfaceViewVisibility()
++      // The aspect ratio computed in onVideoSourceLoaded ran before any frame
++      // was decoded, when the player's videoSize was still 0x0 and the ratio
++      // invalid (Android then falls back to its default 16:9 window, which
++      // letterboxes a wider picture). The size is known by the first frame.
++      pipParams = pipParams.copy(aspectRatio = calculateCurrentPipAspectRatio())
+       onFirstFrameRender(Unit)
+     }
+   }
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/playbackService/ExpoVideoPlaybackService.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/playbackService/ExpoVideoPlaybackService.kt
+index 54c0ad0..5143a3b 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/playbackService/ExpoVideoPlaybackService.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/playbackService/ExpoVideoPlaybackService.kt
+@@ -2,6 +2,7 @@ package expo.modules.video.playbackService
+ 
+ import android.app.NotificationChannel
+ import android.app.NotificationManager
++import android.app.PendingIntent
+ import android.app.Service
+ import android.content.Context
+ import android.content.Intent
+@@ -83,6 +84,7 @@ class ExpoVideoPlaybackService : MediaSessionService() {
+         .setId("ExpoVideoPlaybackService_${player.hashCode()}")
+         .setCallback(VideoMediaSessionCallback())
+         .setCustomLayout(ImmutableList.of(seekBackwardButton, seekForwardButton))
++        .apply { launchAppIntent()?.let { setSessionActivity(it) } }
+         .build()
+ 
+       // Replace the basic media session with a session connected to our playback service.
+@@ -172,6 +174,19 @@ class ExpoVideoPlaybackService : MediaSessionService() {
+   }
+ 
+   @MainThread
++  /**
++   * Brings the app back to the front when the now-playing notification (or
++   * the system's media controls built from the session) is tapped. The
++   * launcher intent reaches the existing task; the app's main activity is
++   * singleTask, so nothing is recreated.
++   */
++  private fun launchAppIntent(): PendingIntent? {
++    val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return null
++    intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
++    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
++    return PendingIntent.getActivity(this, 0, intent, flags)
++  }
++
+   private fun createNotification(session: MediaSession, startInForegroundRequired: Boolean = false) {
+     if (session.player.currentMediaItem == null) {
+       return
+@@ -188,6 +203,7 @@ class ExpoVideoPlaybackService : MediaSessionService() {
+       .setSmallIcon(androidx.media3.session.R.drawable.media3_icon_circular_play)
+       .setContentTitle(contentTitle)
+       .setStyle(MediaStyleNotificationHelper.MediaStyle(session))
++      .apply { launchAppIntent()?.let { setContentIntent(it) } }
+       .build()
+ 
+     val notificationId = session.player.hashCode()
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/DisplayHdr.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/DisplayHdr.kt
 new file mode 100644
 index 0000000..56fd838
@@ -593,7 +671,7 @@ index 0000000..09e55b1
 +  }
 +}
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-index 8bae522..b9d7d7f 100644
+index 8bae522..c058930 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 @@ -2,6 +2,7 @@ package expo.modules.video.player
@@ -672,7 +750,19 @@ index 8bae522..b9d7d7f 100644
    var seekTolerance: SeekTolerance = SeekTolerance()
      set(value) {
        field = value
-@@ -252,6 +277,7 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -237,6 +262,11 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+       this@VideoPlayer.playing = isPlaying
+     }
+ 
++    override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
++      // The PiP window takes the decoded picture's shape (see VideoView).
++      currentVideoView?.refreshPipAspectRatio()
++    }
++
+     override fun onTracksChanged(tracks: Tracks) {
+       val oldSubtitleTracks = ArrayList(subtitles.availableSubtitleTracks)
+       val oldAudioTracks = ArrayList(audioTracks.availableAudioTracks)
+@@ -252,6 +282,7 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
        val newCurrentAudioTrack = audioTracks.currentAudioTrack
        val hlsManifest = player.currentManifest as? HlsManifest
        availableVideoTracks = tracks.toVideoTracks(hlsManifest)
@@ -680,7 +770,7 @@ index 8bae522..b9d7d7f 100644
        refreshPlaybackInfo()
  
        if (isLoadingNewSource) {
-@@ -319,7 +345,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -319,7 +350,16 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
      }
  
      override fun onVolumeChanged(volume: Float) {
@@ -698,7 +788,7 @@ index 8bae522..b9d7d7f 100644
          this@VideoPlayer.volume = volume
        }
      }
-@@ -342,12 +377,70 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -342,12 +382,70 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
    }
  
    private val analyticsListener = object : AnalyticsListener {
@@ -770,7 +860,7 @@ index 8bae522..b9d7d7f 100644
    init {
      player.addListener(playerListener)
      player.addAnalyticsListener(analyticsListener)
-@@ -412,24 +505,48 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -412,24 +510,48 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
  
    fun prepare() {
      availableVideoTracks = listOf()
@@ -820,7 +910,7 @@ index 8bae522..b9d7d7f 100644
    private fun applyPitchCorrection(playbackParameters: PlaybackParameters): PlaybackParameters {
      val speed = playbackParameters.speed
      val pitch = if (preservesPitch) 1f else speed
-@@ -572,27 +689,36 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
+@@ -572,27 +694,36 @@ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSou
  // Extension functions
  
  @OptIn(UnstableApi::class)
@@ -1130,6 +1220,38 @@ index b0bfb49..7b36d25 100644
  ) : Record, Serializable {
    private fun toMediaId(): String {
      return "uri:${this.uri}" +
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/utils/PictureInPictureUtils.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/utils/PictureInPictureUtils.kt
+index cdfea8e..657d5ce 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/utils/PictureInPictureUtils.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/utils/PictureInPictureUtils.kt
+@@ -38,7 +38,11 @@ internal fun calculateRectHint(playerView: PlayerView): Rect {
+ }
+ 
+ internal fun calculatePiPAspectRatio(videoSize: VideoSize, viewWidth: Int, viewHeight: Int, contentFit: ContentFit): Rational {
+-  var aspectRatio = if (contentFit == ContentFit.CONTAIN) {
++  // Before the first frame the player reports a 0x0 video size; a 0/0
++  // Rational is NaN and would be rejected by setAspectRatio, leaving the
++  // window at Android's default shape. Use the view's shape until then.
++  val videoSizeKnown = videoSize.width > 0 && videoSize.height > 0
++  var aspectRatio = if (contentFit == ContentFit.CONTAIN && videoSizeKnown) {
+     Rational(videoSize.width, videoSize.height)
+   } else {
+     Rational(viewWidth, viewHeight)
+@@ -77,8 +81,12 @@ internal fun runWithPiPMisconfigurationSoftHandling(shouldThrow: Boolean = false
+ }
+ 
+ internal fun applyPiPParams(activity: Activity, autoEnterPiP: Boolean, aspectRatio: Rational? = null) {
+-  // If the aspect ratio exceeds the limits, the app will crash
+-  val safeAspectRatio = aspectRatio?.takeIf { it.toFloat() in 0.41841..2.39 }
++  // If the aspect ratio exceeds the limits, the app will crash. Compare as
++  // floats: `Rational(239, 100).toFloat()` is 2.39f, which widens to a double
++  // just above 2.39, so a Double range rejected the very value the clamp
++  // above produces for every picture wider than 2.39:1 — the ratio was
++  // dropped and Android fell back to its default 16:9 window.
++  val safeAspectRatio = aspectRatio?.takeIf { it.toFloat() in 0.41841f..2.39f }
+ 
+   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isPictureInPictureSupported(activity)) {
+     val paramsBuilder = PictureInPictureParams.Builder()
 diff --git a/node_modules/expo-video/build/VideoPlayer.types.d.ts b/node_modules/expo-video/build/VideoPlayer.types.d.ts
 index 8acf5e5..271cd0b 100644
 --- a/node_modules/expo-video/build/VideoPlayer.types.d.ts

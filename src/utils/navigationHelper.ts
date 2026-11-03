@@ -1,6 +1,8 @@
 import { router, type Href } from "expo-router";
 import { Platform } from "react-native";
 
+import { useMobilePlayerStore } from "@/src/stores/mobilePlayerStore";
+
 /**
  * Platform-aware navigation helper (single source of truth).
  *
@@ -15,7 +17,6 @@ type TVWatchRoute = "/(tv)/(protected)/watch/[id]";
 type TVMediaInfoRoute = "/(tv)/(protected)/media-info/[id]";
 type TVBrowseRoute = `/(tv)/(protected)/(browse)/${string}`;
 type TVGenreRoute = "/(tv)/(protected)/(browse)/genre/[type]/[name]";
-type MobileWatchRoute = "/(mobile)/(protected)/watch/[id]";
 type MobileMediaInfoRoute = "/(mobile)/(protected)/media-info/[id]";
 type MobileEpisodeInfoRoute =
   "/(mobile)/(protected)/episode-info/[showId]/[season]/[episode]";
@@ -46,6 +47,17 @@ interface NavigationParams {
   [key: string]: any;
 }
 
+/** Route params arrive as numbers or strings; the player wants numbers. */
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string" && value !== "") {
+    const parsed = parseInt(value, 10);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  return undefined;
+}
+
 // Simple navigation logging
 const logNavigation = (
   action: string,
@@ -63,9 +75,11 @@ const logNavigation = (
 
 export const navigationHelper = {
   /**
-   * Navigate to watch screen.
-   * TV: push with dangerouslySingular to prevent duplicates.
-   * Mobile: navigate (replace-style) to prevent video screen accumulation.
+   * Start watching.
+   * TV: push the watch screen with dangerouslySingular to prevent duplicates.
+   * Mobile: no route — playback opens in the player host above the
+   * navigator (see mobilePlayerStore), so the current screen stays where it
+   * is underneath and the user can minimize back to it.
    */
   navigateToWatch: (params: NavigationParams) => {
     if (Platform.isTV) {
@@ -73,9 +87,16 @@ export const navigationHelper = {
       logNavigation("WATCH", route, params, "push");
       router.push({ pathname: route, params }, { dangerouslySingular: true });
     } else {
-      const route: MobileWatchRoute = "/(mobile)/(protected)/watch/[id]";
-      logNavigation("WATCH", route, params, "navigate");
-      router.navigate({ pathname: route, params });
+      logNavigation("WATCH", "mobile player host", params, "navigate");
+      useMobilePlayerStore.getState().open({
+        id: params.id,
+        type: params.type === "tv" ? "tv" : "movie",
+        season: toNumber(params.season),
+        episode: toNumber(params.episode),
+        backdrop: params.backdrop,
+        backdropBlurhash: params.backdropBlurhash,
+        restart: params.restart === "true",
+      });
     }
   },
 

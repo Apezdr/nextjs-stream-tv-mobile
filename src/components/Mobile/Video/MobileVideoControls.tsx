@@ -2,7 +2,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { useEvent } from "expo";
 import { Image } from "expo-image";
 import { VideoPlayer } from "expo-video";
-import { memo, useEffect, useRef, useState, useCallback, useMemo } from "react";
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  useImperativeHandle,
+  type Ref,
+} from "react";
 import {
   StyleSheet,
   View,
@@ -80,6 +89,35 @@ interface MobileVideoControlsProps {
   isQualitySwitching?: boolean;
   hasQualityDescended?: boolean;
   qualityBadge?: string | null;
+  // "immersive" is the full chrome over a video that has the whole screen
+  // (landscape, portrait fullscreen). "docked" is the compact chrome over the
+  // 16:9 strip of the portrait watch page: no title block and no option
+  // pills, since the details panel beneath carries those — the pickers stay
+  // mounted (and openable through the handle) but draw nothing.
+  variant?: "immersive" | "docked";
+  // Keep the component mounted, with its caption and style selections, but
+  // draw nothing and take no touches: the in-app mini player.
+  hidden?: boolean;
+  isFullscreen?: boolean;
+  // Renders the fullscreen toggle at the end of the time row when set.
+  onToggleFullscreen?: () => void;
+  // Which option sheets have anything to offer, so chrome elsewhere (the
+  // details panel) can show matching actions.
+  onOptionAvailabilityChange?: (availability: OptionAvailability) => void;
+  ref?: Ref<MobileVideoControlsHandle>;
+}
+
+export interface OptionAvailability {
+  captions: boolean;
+  audio: boolean;
+  quality: boolean;
+}
+
+/** Opens the option sheets from outside the chrome (the details panel). */
+export interface MobileVideoControlsHandle {
+  openCaptionPicker: () => void;
+  openAudioPicker: () => void;
+  openQualityPicker: () => void;
 }
 
 const formatTime = (seconds: number): string => {
@@ -111,6 +149,12 @@ const MobileVideoControls = memo(
     isQualitySwitching = false,
     hasQualityDescended = false,
     qualityBadge = null,
+    variant = "immersive",
+    hidden = false,
+    isFullscreen = false,
+    onToggleFullscreen,
+    onOptionAvailabilityChange,
+    ref,
   }: MobileVideoControlsProps) => {
     // Get dynamic window dimensions that will update with orientation changes
     const { window } = useDimensions();
@@ -119,9 +163,10 @@ const MobileVideoControls = memo(
     // Landscape gets a tighter chrome: see getMobileControlsLayout for why
     // the portrait paddings left the play glyph with no height to draw in.
     const isLandscape = window.width > window.height;
+    const isDocked = variant === "docked";
     const layout = useMemo(
-      () => getMobileControlsLayout(isLandscape, insets),
-      [isLandscape, insets],
+      () => getMobileControlsLayout(isLandscape, insets, isDocked),
+      [isLandscape, insets, isDocked],
     );
 
     // Use expo-video's useEvent hook for player state
@@ -228,6 +273,26 @@ const MobileVideoControls = memo(
     useEffect(() => {
       if (!canOpenQualityPicker) setQualityPickerOpen(false);
     }, [canOpenQualityPicker]);
+    // The caption and audio sheets are controlled here for the same reason:
+    // the details panel opens them through the handle below.
+    const [captionPickerOpen, setCaptionPickerOpen] = useState(false);
+    const [audioPickerOpen, setAudioPickerOpen] = useState(false);
+    const hasCaptions =
+      !!showCaptionControls &&
+      !!videoInfo?.captionURLs &&
+      Object.keys(videoInfo.captionURLs).length > 0;
+    useEffect(() => {
+      onOptionAvailabilityChange?.({
+        captions: hasCaptions,
+        audio: audioButtonVisible,
+        quality: canOpenQualityPicker,
+      });
+    }, [
+      onOptionAvailabilityChange,
+      hasCaptions,
+      audioButtonVisible,
+      canOpenQualityPicker,
+    ]);
 
     // Subtitle preferences (persisted)
     const subtitlesEnabled = useSubtitlePreferencesStore(
@@ -418,6 +483,21 @@ const MobileVideoControls = memo(
       // the modal goes away, instead of vanishing under the user's finger.
       showControls();
     }, [showControls]);
+    const openCaptionPicker = useCallback(() => {
+      if (!hasCaptions) return;
+      setCaptionPickerOpen(true);
+      showControls();
+    }, [hasCaptions, showControls]);
+    const openAudioPicker = useCallback(() => {
+      if (!audioButtonVisible) return;
+      setAudioPickerOpen(true);
+      showControls();
+    }, [audioButtonVisible, showControls]);
+    useImperativeHandle(
+      ref,
+      () => ({ openCaptionPicker, openAudioPicker, openQualityPicker }),
+      [openCaptionPicker, openAudioPicker, openQualityPicker],
+    );
 
     // Watchdog: while the controls are visible, the video is playing, and the
     // user isn't dragging the seek bar, a hide is always pending. Replaces an
@@ -753,7 +833,10 @@ const MobileVideoControls = memo(
       duration > 0 ? (seekTime / duration) * 100 : 0;
 
     return (
-      <View style={styles.container}>
+      <View
+        style={[styles.container, hidden && styles.hidden]}
+        pointerEvents={hidden ? "none" : "auto"}
+      >
         {/* Subtitle Player - positioned above controls */}
         {showCaptionControls && (
           <SubtitlePlayer
@@ -762,6 +845,8 @@ const MobileVideoControls = memo(
             selectedCaptionLanguage={selectedCaptionLanguage}
             selectedSubtitleStyle={selectedSubtitleStyle}
             selectedSubtitleBackground={selectedSubtitleBackground}
+            // The docked strip is roughly a third of the screen's height.
+            scale={isDocked ? 0.55 : 1}
           />
         )}
 
@@ -794,30 +879,39 @@ const MobileVideoControls = memo(
             ]}
             pointerEvents="box-none"
           >
+            {/* Collapse. What that means for the presentation (bring the
+                details back, or minimize) is the session's call. */}
             <TouchableOpacity
               style={styles.topButton}
               onPress={() => {
                 showControls();
                 onExitWatchMode?.();
               }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isFullscreen ? "Exit fullscreen" : "Minimize player"
+              }
             >
-              <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
-              <Text style={styles.topButtonText}>Back</Text>
+              <Ionicons name="chevron-down" size={26} color="#FFFFFF" />
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.topButton}
-              onPress={() => {
-                showControls();
-                onInfoPress?.();
-              }}
-            >
-              <Ionicons
-                name="information-circle-outline"
-                size={24}
-                color="#FFFFFF"
-              />
-            </TouchableOpacity>
+            {!isDocked && onInfoPress ? (
+              <TouchableOpacity
+                style={styles.topButton}
+                onPress={() => {
+                  showControls();
+                  onInfoPress();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Title details"
+              >
+                <Ionicons
+                  name="information-circle-outline"
+                  size={24}
+                  color="#FFFFFF"
+                />
+              </TouchableOpacity>
+            ) : null}
           </Animated.View>
 
           {/* Center controls with skip buttons */}
@@ -885,15 +979,17 @@ const MobileVideoControls = memo(
             ]}
             pointerEvents="box-none"
           >
-            {/* Video title */}
+            {/* Video title. The docked strip has no room for it; the
+                details panel names the title instead. */}
             <Animated.View
               style={[
                 styles.titleSection,
                 { opacity: titleOpacity, marginBottom: layout.sectionGap },
+                isDocked && styles.collapsed,
               ]}
-              pointerEvents="box-none"
+              pointerEvents={isDocked ? "none" : "box-none"}
             >
-              {showLogo && (
+              {!isDocked && showLogo && (
                 <Image
                   source={{ uri: logoURL }}
                   style={[
@@ -912,12 +1008,12 @@ const MobileVideoControls = memo(
                   accessibilityLabel={videoInfo?.showTitle || videoInfo?.title}
                 />
               )}
-              {showTitleFallback && (
+              {!isDocked && showTitleFallback && (
                 <Text style={styles.showTitle} numberOfLines={1}>
                   {videoInfo?.showTitle}
                 </Text>
               )}
-              {showTextTitle && (
+              {!isDocked && showTextTitle && (
                 <Text
                   style={styles.videoTitle}
                   numberOfLines={layout.titleLines}
@@ -927,7 +1023,7 @@ const MobileVideoControls = memo(
               )}
               {/* Delivery-tier badge from direct.json — facts only, never
                   derived from client probing. */}
-              {qualityBadge && (
+              {!isDocked && qualityBadge && (
                 <Pressable
                   onPress={openQualityPicker}
                   disabled={!canOpenQualityPicker}
@@ -947,7 +1043,7 @@ const MobileVideoControls = memo(
                   <Text style={styles.qualityBadgeText}>{qualityBadge}</Text>
                 </Pressable>
               )}
-              {description ? (
+              {!isDocked && description ? (
                 <View style={styles.descriptionBlock}>
                   {/* Invisible, unclamped twin: reports how many lines the
                       full text needs at this width (see isDescriptionTruncated). */}
@@ -992,8 +1088,31 @@ const MobileVideoControls = memo(
               <View style={styles.timeRow}>
                 <Text style={styles.timeText}>
                   {formatTime(isSeeking ? seekTime : currentTime)}
+                  <Text style={styles.timeTextMuted}>
+                    {" / "}
+                    {formatTime(duration)}
+                  </Text>
                 </Text>
-                <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                {onToggleFullscreen ? (
+                  <TouchableOpacity
+                    style={styles.fullscreenButton}
+                    onPress={() => {
+                      showControls();
+                      onToggleFullscreen();
+                    }}
+                    hitSlop={10}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
+                    }
+                  >
+                    <Ionicons
+                      name={isFullscreen ? "contract" : "expand"}
+                      size={22}
+                      color="#FFFFFF"
+                    />
+                  </TouchableOpacity>
+                ) : null}
               </View>
 
               <GestureDetector gesture={seekGesture}>
@@ -1044,7 +1163,13 @@ const MobileVideoControls = memo(
                 </View>
               </GestureDetector>
             </View>
-            <View style={styles.bottomButtonRow}>
+            {/* The option pills. Docked, the row is collapsed to nothing but
+                stays mounted: the pickers' sheets open from the details
+                panel through the handle, and their state lives here. */}
+            <View
+              style={[styles.bottomButtonRow, isDocked && styles.collapsed]}
+              pointerEvents={isDocked ? "none" : "auto"}
+            >
               {/* Caption Controls - positioned below seek bar */}
               {showCaptionControls && (
                 <MobileCaptionControls
@@ -1056,6 +1181,8 @@ const MobileVideoControls = memo(
                   selectedSubtitleBackground={selectedSubtitleBackground}
                   onSubtitleBackgroundChange={setSelectedSubtitleBackground}
                   onShowControls={showControls}
+                  open={captionPickerOpen}
+                  onOpenChange={setCaptionPickerOpen}
                 />
               )}
               {/* Audio selector - HLS/DASH sources with a language or format
@@ -1071,6 +1198,8 @@ const MobileVideoControls = memo(
                   canSelectAuto={supportsAutomaticSelection}
                   onSelectAuto={selectAutomatic}
                   onShowControls={showControls}
+                  open={audioPickerOpen}
+                  onOpenChange={setAudioPickerOpen}
                 />
               )}
               {/* Quality tier selector - delivery-tiers contract */}
@@ -1167,6 +1296,16 @@ const styles = StyleSheet.create({
     flex: 1,
     position: "relative",
   },
+  // Mounted but out of the layout: see the docked variant.
+  collapsed: {
+    height: 0,
+    marginBottom: 0,
+    opacity: 0,
+    overflow: "hidden",
+  },
+  hidden: {
+    opacity: 0,
+  },
   tapOverlay: {
     bottom: 0,
     left: 0,
@@ -1208,12 +1347,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     zIndex: 4,
   },
-  topButtonText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-
   // Center controls
   centerControls: {
     alignItems: "center",
@@ -1342,14 +1475,24 @@ const styles = StyleSheet.create({
 
   // Seek controls
   timeRow: {
+    alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 8,
+    minHeight: 24,
   },
   timeText: {
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "500",
+  },
+  timeTextMuted: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontWeight: "400",
+  },
+  fullscreenButton: {
+    padding: 2,
+    zIndex: 4,
   },
   qualityBadge: {
     alignSelf: "flex-start",

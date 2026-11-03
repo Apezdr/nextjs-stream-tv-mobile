@@ -36,6 +36,11 @@ interface MobileAudioControlsProps {
   canSelectAuto?: boolean;
   onSelectAuto?: () => void;
   onShowControls?: () => void; // Mobile-specific: show controls when user interacts
+  // Optional controlled visibility of the sheet, so chrome elsewhere (the
+  // watch page's details panel) can open the same picker. Left undefined,
+  // the sheet keeps its own state as before.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 // A single button mirroring the captions "More" pattern: audio icon +
@@ -51,8 +56,18 @@ const MobileAudioControls = memo(
     canSelectAuto = false,
     onSelectAuto,
     onShowControls,
+    open,
+    onOpenChange,
   }: MobileAudioControlsProps) => {
-    const [showLanguages, setShowLanguages] = useState(false);
+    const [showLanguagesInternal, setShowLanguagesInternal] = useState(false);
+    const showLanguages = open ?? showLanguagesInternal;
+    const setShowLanguages = useCallback(
+      (next: boolean) => {
+        setShowLanguagesInternal(next);
+        onOpenChange?.(next);
+      },
+      [onOpenChange],
+    );
 
     // Get dynamic dimensions that will update with orientation changes
     const { window } = useDimensions();
@@ -61,7 +76,7 @@ const MobileAudioControls = memo(
     const openLanguages = useCallback(() => {
       setShowLanguages(true);
       onShowControls?.();
-    }, [onShowControls]);
+    }, [onShowControls, setShowLanguages]);
 
     // One row per distinct language — codec/channel renditions of the same
     // language collapse into a single option.
@@ -108,7 +123,7 @@ const MobileAudioControls = memo(
         setShowLanguages(false);
         onShowControls?.();
       },
-      [isOptionSelected, onAudioTrackChange, onShowControls],
+      [isOptionSelected, onAudioTrackChange, onShowControls, setShowLanguages],
     );
 
     const handleFormatSelect = useCallback(
@@ -119,7 +134,12 @@ const MobileAudioControls = memo(
         setShowLanguages(false);
         onShowControls?.();
       },
-      [selectedFormatGroupId, onAudioTrackChange, onShowControls],
+      [
+        selectedFormatGroupId,
+        onAudioTrackChange,
+        onShowControls,
+        setShowLanguages,
+      ],
     );
 
     const handleAutoSelect = useCallback(() => {

@@ -3,6 +3,7 @@ import { Redirect, Stack } from "expo-router";
 import { StyleSheet, View } from "react-native";
 
 import { OfflineNotice } from "@/src/components/Mobile/OfflineNotice";
+import MobilePlayerHost from "@/src/components/Mobile/Player/MobilePlayerHost";
 import { useAuth } from "@/src/providers/AuthProvider";
 
 export default function MobileLayout() {
@@ -35,6 +36,10 @@ export default function MobileLayout() {
       >
         <Stack.Screen name="(protected)" />
       </Stack>
+      {/* Playback lives above the navigator so it survives browsing: the
+          watch page, the mini player and portrait fullscreen are all this
+          host (see mobilePlayerStore). */}
+      <MobilePlayerHost />
       <OfflineNotice />
     </View>
   );

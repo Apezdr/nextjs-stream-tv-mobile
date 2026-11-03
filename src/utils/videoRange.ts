@@ -140,6 +140,31 @@ export type AppVideoSource = VideoSourceObject & {
   preferredVideoMimeTypes?: string[];
 };
 
+/** What the system's now-playing notification shows for the current title. */
+export interface NowPlayingMetadata {
+  title: string;
+  /** Secondary line under the title (the show for an episode). */
+  artist?: string;
+  /** Artwork URL. */
+  artwork?: string;
+}
+
+// The title currently playing, attached to every source built while it is
+// set: the mobile session sets it when its content loads and clears it on
+// unmount, so tier switches and retries (which rebuild the source) carry
+// the same metadata. One session plays at a time; TV never sets it.
+let nowPlayingMetadata: NowPlayingMetadata | null = null;
+
+export function setNowPlayingMetadata(
+  metadata: NowPlayingMetadata | null,
+): void {
+  nowPlayingMetadata = metadata;
+}
+
+export function getNowPlayingMetadata(): NowPlayingMetadata | null {
+  return nowPlayingMetadata;
+}
+
 export interface SourcePolicy {
   preferredVideoMimeTypes?: string[];
 }
@@ -188,6 +213,15 @@ export function videoSourceFor(url: string): AppVideoSource {
   const policy = sourcePolicyFor(url);
   if (policy?.preferredVideoMimeTypes?.length) {
     source.preferredVideoMimeTypes = [...policy.preferredVideoMimeTypes];
+  }
+  if (nowPlayingMetadata) {
+    source.metadata = {
+      title: nowPlayingMetadata.title,
+      ...(nowPlayingMetadata.artist && { artist: nowPlayingMetadata.artist }),
+      ...(nowPlayingMetadata.artwork && {
+        artwork: nowPlayingMetadata.artwork,
+      }),
+    };
   }
   return source;
 }
