@@ -27,7 +27,7 @@
       [
         "expo-video",
         {
-          "supportsBackgroundPlayback": false,
+          "supportsBackgroundPlayback": true,
           "supportsPictureInPicture": true,
           "enableHardwareAcceleration": true
         }
