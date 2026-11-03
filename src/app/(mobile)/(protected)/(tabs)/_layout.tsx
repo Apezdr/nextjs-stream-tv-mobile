@@ -1,6 +1,7 @@
 // app/(mobile)/(protected)/(tabs)/_layout.tsx
 import { Tabs } from "expo-router";
 
+import { TabScreenBlurTarget } from "@/src/components/Mobile/TabScreenBlurTarget";
 import OptimizedTabBar from "@/src/components/OptimizedTabBar";
 import { TabBarIcon } from "@/src/components/TabBarIcon";
 import {
@@ -13,6 +14,10 @@ export default function TabsLayout() {
   return (
     <Tabs
       tabBar={(props) => <OptimizedTabBar {...props} />}
+      // Every screen's content is the tab bar's blur target (Android).
+      screenLayout={({ children }) => (
+        <TabScreenBlurTarget>{children}</TabScreenBlurTarget>
+      )}
       screenOptions={{
         animation: "none",
         headerShown: false,

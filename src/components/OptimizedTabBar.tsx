@@ -16,6 +16,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useTabBlurTarget } from "@/src/components/Mobile/TabScreenBlurTarget";
 import { TabBarIcon } from "@/src/components/TabBarIcon";
 import {
   MOBILE_NAVIGATION_ROUTES,
@@ -131,12 +132,16 @@ export default function OptimizedTabBar({
   navigation,
 }: BottomTabBarProps) {
   const { bottom } = useSafeAreaInsets();
+  // The focused tab screen's content, which the Android blur reads from
+  // (see TabScreenBlurTarget). Without it the blur falls back to none.
+  const blurTarget = useTabBlurTarget();
 
   return (
     <BlurView
       intensity={50}
       tint="dark"
-      experimentalBlurMethod="dimezisBlurView"
+      blurMethod="dimezisBlurView"
+      blurTarget={blurTarget ?? undefined}
       style={[styles.outerContainer, { paddingBottom: Math.max(bottom, 12) }]}
     >
       <View style={styles.tabBar}>
