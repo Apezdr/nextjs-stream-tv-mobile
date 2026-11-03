@@ -1,9 +1,11 @@
 // src/components/Video/SubtitlePlayer.tsx
-import { memo, useMemo } from "react";
-import { StyleSheet } from "react-native";
-import Subtitles from "react-native-subtitles";
+import { memo, useEffect, useMemo, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 
 import { SubtitleStyle, SubtitleBackgroundOption } from "./CaptionControls";
+
+import { loadCaptionCues } from "@/src/data/services/captionService";
+import { CaptionCue, cueAt } from "@/src/utils/captionCues";
 
 interface CaptionTrack {
   srcLang: string;
@@ -18,8 +20,20 @@ interface SubtitlePlayerProps {
   selectedCaptionLanguage?: string | null;
   selectedSubtitleStyle?: SubtitleStyle;
   selectedSubtitleBackground?: SubtitleBackgroundOption;
+  /**
+   * Multiplier on the caption's size, padding and bottom offset. The
+   * caption styles were sized for a video that has the whole screen; over
+   * the portrait watch page's 16:9 strip they cover half the picture.
+   */
+  scale?: number;
 }
 
+/**
+ * Draws the caption cue for the player's current time over the video.
+ * Loads the selected language's file once through the authenticated client
+ * (see captionService) and looks the cue up per time tick; the cues are
+ * kept across ticks, so a re-render never refetches.
+ */
 const SubtitlePlayer = memo(
   ({
     currentTime,
@@ -27,51 +41,97 @@ const SubtitlePlayer = memo(
     selectedCaptionLanguage,
     selectedSubtitleStyle,
     selectedSubtitleBackground,
+    scale = 1,
   }: SubtitlePlayerProps) => {
     const subtitleUrl =
       selectedCaptionLanguage && captionURLs?.[selectedCaptionLanguage]?.url
         ? captionURLs[selectedCaptionLanguage].url
         : null;
 
-    // These two objects MUST keep a stable identity across ticks. This
-    // component re-renders once per second (currentTime), and the vendored
-    // react-native-subtitles is not memoized: its parse effect is keyed on
-    // `selectedsubtitle`, so a fresh object literal here made it re-fetch the
-    // entire caption file over HTTP and re-parse every cue once per second for
-    // the whole of playback.
-    const selectedsubtitle = useMemo(
-      () => (subtitleUrl ? { file: subtitleUrl } : null),
-      [subtitleUrl],
-    );
+    const [cues, setCues] = useState<CaptionCue[]>([]);
+    useEffect(() => {
+      setCues([]);
+      if (!subtitleUrl) return;
+      let cancelled = false;
+      loadCaptionCues(subtitleUrl).then((loaded) => {
+        if (!cancelled && loaded) setCues(loaded);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [subtitleUrl]);
+
+    const cue = useMemo(() => cueAt(cues, currentTime), [cues, currentTime]);
 
     // Use selected style and apply the selected background to textStyle.backgroundColor
-    const textStyle = useMemo(
-      () => ({
-        ...styles.subtitleText,
-        ...(selectedSubtitleStyle ? selectedSubtitleStyle.textStyle : null),
-        backgroundColor:
-          selectedSubtitleBackground?.backgroundColor || "transparent",
-      }),
-      [selectedSubtitleStyle, selectedSubtitleBackground],
-    );
+    const textStyle = useMemo(() => {
+      const chosen = selectedSubtitleStyle?.textStyle;
+      const baseSize =
+        typeof chosen?.fontSize === "number"
+          ? chosen.fontSize
+          : styles.subtitleText.fontSize;
+      return [
+        styles.subtitleText,
+        chosen ?? null,
+        {
+          fontSize: Math.round(baseSize * scale),
+          lineHeight: undefined,
+          padding: Math.round(styles.subtitleText.padding * scale),
+          backgroundColor:
+            selectedSubtitleBackground?.backgroundColor || "transparent",
+        },
+      ];
+    }, [selectedSubtitleStyle, selectedSubtitleBackground, scale]);
+    const edge = Math.round(styles.subtitleContainer.bottom * scale);
+    // Honour the cue's position (ASS {\an8} / VTT line:): top-anchored cues
+    // sit at the top edge, middle ones centre on the picture.
+    const containerStyle = useMemo(() => {
+      if (cue?.position === "top") {
+        return [styles.subtitleContainer, { top: edge, bottom: undefined }];
+      }
+      if (cue?.position === "middle") {
+        return [
+          styles.subtitleContainer,
+          { top: 0, bottom: 0, justifyContent: "center" as const },
+        ];
+      }
+      return [styles.subtitleContainer, { bottom: edge }];
+    }, [cue?.position, edge]);
 
-    // Only render subtitles if we have a selected language and URL
-    if (!selectedsubtitle) {
-      return null;
-    }
+    if (!subtitleUrl || !cue) return null;
 
+    // Styled runs nest inside the cue's Text so the caption style sheet's
+    // size, weight, colour and background apply to the whole cue, and each
+    // run only adds its italic / bold / underline / colour.
     return (
-      <Subtitles
-        currentTime={currentTime}
-        selectedsubtitle={selectedsubtitle}
-        containerStyle={styles.subtitleContainer}
-        textStyle={textStyle}
-      />
+      <View style={containerStyle} pointerEvents="none">
+        <Text style={textStyle} testID="subtitle-text">
+          {cue.runs.map((run, index) => (
+            <Text
+              key={`${index}-${run.text.length}`}
+              style={[
+                run.italic && styles.italic,
+                run.bold && styles.bold,
+                run.underline && styles.underline,
+                run.color ? { color: run.color } : null,
+              ]}
+            >
+              {run.text}
+            </Text>
+          ))}
+        </Text>
+      </View>
     );
   },
 );
 
 const styles = StyleSheet.create({
+  bold: {
+    fontWeight: "bold",
+  },
+  italic: {
+    fontStyle: "italic",
+  },
   subtitleContainer: {
     alignItems: "center",
     backgroundColor: "transparent",
@@ -80,13 +140,22 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 0,
   },
-
+  // The base the library used to draw with; the caption style sheet's own
+  // size and weight (CaptionControls) layer on top.
   subtitleText: {
+    alignSelf: "center",
     backgroundColor: "transparent",
     color: "#FFFFFF",
+    fontSize: 25,
     fontWeight: "bold",
+    padding: 25,
+    textAlign: "center",
+    textShadowColor: "#000",
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 6,
+  },
+  underline: {
+    textDecorationLine: "underline",
   },
 });
 
